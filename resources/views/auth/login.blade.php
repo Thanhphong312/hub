@@ -2,10 +2,17 @@
 @section('title', 'Login - BullStart')
 
 @section('content')
-<div class="min-h-screen flex items-center justify-center px-4">
-    <div class="w-[420px] max-w-full">
-        <h1 class="text-center text-2xl font-bold text-neutral-800 mb-1">BULLSTART</h1>
-        <p class="text-center text-sm text-neutral-500 mb-6">Sign in to view orders via QR</p>
+<div class="min-h-screen flex items-center justify-center px-4 relative overflow-hidden">
+    {{-- Background glow accents --}}
+    <div class="absolute top-[-150px] left-1/2 -translate-x-1/2 w-[500px] h-[500px] bg-orange-400/15 rounded-full blur-3xl pointer-events-none"></div>
+    <div class="absolute bottom-[-80px] right-[-80px] w-[250px] h-[250px] bg-orange-300/10 rounded-full blur-3xl pointer-events-none"></div>
+
+    <div class="w-[420px] max-w-full relative z-10">
+        <div class="flex flex-col items-center mb-6">
+            <img src="{{ asset('logo.png') }}" alt="BullStart" class="h-24 mb-3 drop-shadow-[0_4px_20px_rgba(234,88,12,0.15)]" />
+            <h1 class="text-center text-2xl font-bold text-neutral-800 tracking-wide">BULLSTART</h1>
+            <p class="text-center text-sm text-neutral-500 mt-1">Sign in to view orders via QR</p>
+        </div>
 
         <div class="bg-white rounded-2xl border border-orange-100 p-8 shadow-xl shadow-orange-900/5">
             @if ($errors->any())
