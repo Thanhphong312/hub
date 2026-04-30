@@ -28,6 +28,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/change-password', [AuthController::class, 'changePassword']);
     Route::put('/profile', [AuthController::class, 'updateProfile']);
+    Route::get('/me/api-key', [AuthController::class, 'myApiKey']);
+    Route::post('/me/regenerate-api-key', [AuthController::class, 'regenerateMyApiKey']);
 
     // Dashboard
     Route::get('/dashboard', [DashboardController::class, 'index']);

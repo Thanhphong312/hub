@@ -88,4 +88,16 @@ class AuthController extends Controller
         $user->update($request->only('name', 'email'));
         return response()->json(['message' => 'Profile updated', 'user' => $user->fresh()]);
     }
+
+    public function myApiKey(Request $request)
+    {
+        return response()->json(['api_key' => $request->user()->api_key]);
+    }
+
+    public function regenerateMyApiKey(Request $request)
+    {
+        $user = $request->user();
+        $user->update(['api_key' => 'bsk_' . \Illuminate\Support\Str::random(32)]);
+        return response()->json(['message' => 'API key regenerated', 'api_key' => $user->fresh()->api_key]);
+    }
 }
