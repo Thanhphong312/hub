@@ -108,7 +108,7 @@ class GangsheetController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-            'file' => 'required|file|max:51200', // up to 50MB
+            'file' => 'required|file|max:204800', // up to 200MB
             'filename' => 'required|string',
             'line_id' => 'nullable|string|max:16',
             'first_system_id' => 'nullable|string',
@@ -122,38 +122,53 @@ class GangsheetController extends Controller
         $orderIds = $this->decodeIds($request->input('order_ids'));
         $metaIds  = $this->decodeIds($request->input('meta_ids'));
 
-        // Upload to B2 under gangsheet/<YYYY-MM-DD>/<filename>
         $folder = 'gangsheet/' . now()->format('Y-m-d');
         $path = $folder . '/' . $request->filename;
         $file = $request->file('file');
 
-        Storage::disk('b2')->put($path, file_get_contents($file->getPathname()), 'public');
+        // Mirror the converter upload path that's already known to work on B2.
+        try {
+            Storage::disk('b2')->put($path, file_get_contents($file->getPathname()), 'public');
+        } catch (\Throwable $e) {
+            \Log::error('[gangsheet] B2 upload failed: ' . $e->getMessage(), ['filename' => $request->filename]);
+            return response()->json([
+                'message' => 'Failed to upload gang sheet to storage: ' . $e->getMessage(),
+            ], 500);
+        }
+
         $base = rtrim(config('filesystems.disks.b2.url') ?? '', '/');
         $url = $base . '/' . ltrim($path, '/');
 
-        $gangsheet = DB::transaction(function () use ($request, $orderIds, $metaIds, $url) {
-            $gs = Gangsheet::create([
-                'created_by_user_id' => $request->user()?->id,
-                'filename' => $request->filename,
-                'file_url' => $url,
-                'line_id' => $request->line_id,
-                'first_system_id' => $request->first_system_id,
-                'last_system_id' => $request->last_system_id,
-                'orders_count' => (int) $request->orders_count,
-                'metas_count' => (int) $request->metas_count,
-                'order_ids' => $orderIds,
-                'meta_ids' => $metaIds,
-            ]);
+        try {
+            $gangsheet = DB::transaction(function () use ($request, $orderIds, $metaIds, $url) {
+                $gs = Gangsheet::create([
+                    'created_by_user_id' => $request->user()?->id,
+                    'filename' => $request->filename,
+                    'file_url' => $url,
+                    'line_id' => $request->line_id,
+                    'first_system_id' => $request->first_system_id,
+                    'last_system_id' => $request->last_system_id,
+                    'orders_count' => (int) $request->orders_count,
+                    'metas_count' => (int) $request->metas_count,
+                    'order_ids' => $orderIds,
+                    'meta_ids' => $metaIds,
+                ]);
 
-            if (!empty($metaIds)) {
-                OrderItemMeta::whereIn('id', $metaIds)->update(['production' => true]);
-            }
-            if (!empty($orderIds)) {
-                Order::whereIn('id', $orderIds)->update(['production' => true]);
-            }
+                if (!empty($metaIds)) {
+                    OrderItemMeta::whereIn('id', $metaIds)->update(['production' => true]);
+                }
+                if (!empty($orderIds)) {
+                    Order::whereIn('id', $orderIds)->update(['production' => true]);
+                }
 
-            return $gs;
-        });
+                return $gs;
+            });
+        } catch (\Throwable $e) {
+            \Log::error('[gangsheet] DB save failed: ' . $e->getMessage(), ['filename' => $request->filename]);
+            return response()->json([
+                'message' => 'Failed to record gang sheet in database: ' . $e->getMessage(),
+            ], 500);
+        }
 
         return response()->json([
             'message' => 'Gangsheet saved',
