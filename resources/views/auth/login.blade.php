@@ -10,7 +10,6 @@
     <div class="w-[420px] max-w-full relative z-10">
         <div class="flex flex-col items-center mb-6">
             <img src="{{ asset('logo.png') }}" alt="BullStart" class="h-24 mb-3 drop-shadow-[0_4px_20px_rgba(234,88,12,0.15)]" />
-            <h1 class="text-center text-2xl font-bold text-neutral-800 tracking-wide">BULLSTART</h1>
             <p class="text-center text-sm text-neutral-500 mt-1">Sign in to view orders via QR</p>
         </div>
 
