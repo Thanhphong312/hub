@@ -32,16 +32,24 @@ class ConversionController extends Controller
             return response()->json(['message' => 'Convert mode is not enabled for this account'], 403);
         }
 
+        $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
+
         // Iterate at the order level so we can compute the accessory summary
         // (combining all items of the same order) once per order.
-        $orders = Order::with([
+        $query = Order::with([
                 'items.metas',
                 'items.accessoryPrice',
             ])
-            ->where('user_id', $user->id)
             ->whereHas('items.metas', fn ($q) => $q->whereIn('key', self::SOURCE_KEYS))
-            ->orderBy('id', 'asc')
-            ->get();
+            ->orderBy('id', 'asc');
+
+        // Sellers can only convert their own orders. Admin/support can convert
+        // anyone's so they can recover stuck conversions for other accounts.
+        if (!$isStaff) {
+            $query->where('user_id', $user->id);
+        }
+
+        $orders = $query->get();
 
         $result = [];
         foreach ($orders as $order) {
@@ -135,7 +143,8 @@ class ConversionController extends Controller
         if (!$user->convert) {
             return response()->json(['message' => 'Convert mode is not enabled for this account'], 403);
         }
-        if ($item->order->user_id !== $user->id) {
+        $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
+        if (!$isStaff && $item->order->user_id !== $user->id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
