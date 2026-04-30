@@ -26,9 +26,16 @@ class WebAuthController extends Controller
             ])->onlyInput('email');
         }
 
-        if (Auth::user()->status !== 1) {
+        $user = Auth::user();
+
+        if ($user->status !== 1) {
             Auth::logout();
             return back()->withErrors(['email' => 'Account is inactive.']);
+        }
+
+        if (!$user->role || !in_array($user->role->slug, ['admin', 'support'])) {
+            Auth::logout();
+            return back()->withErrors(['email' => 'You are not authorized to access this portal.']);
         }
 
         $request->session()->regenerate();

@@ -21,6 +21,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role' => \App\Http\Middleware\CheckRole::class,
             'api_key' => \App\Http\Middleware\CheckApiKey::class,
+            'web.portal' => \App\Http\Middleware\EnsureWebPortalAccess::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
