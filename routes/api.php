@@ -87,6 +87,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(CheckRole::class . ':admin,support')->group(function () {
         Route::get('/gangsheets/pending-orders', [GangsheetController::class, 'pendingOrders']);
         Route::post('/gangsheets/lookup-orders', [GangsheetController::class, 'lookupOrders']);
+        Route::get('/gangsheets/storage-credentials', [GangsheetController::class, 'storageCredentials']);
         Route::get('/gangsheets', [GangsheetController::class, 'index']);
         Route::post('/gangsheets', [GangsheetController::class, 'store']);
         Route::get('/gangsheets/{gangsheet}', [GangsheetController::class, 'show']);

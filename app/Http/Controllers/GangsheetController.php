@@ -105,11 +105,35 @@ class GangsheetController extends Controller
         ]);
     }
 
+    /**
+     * Hand the desktop app the B2 credentials so it can upload the gangsheet
+     * PDF directly. Hub never touches the file. Restricted to admin/support
+     * routes — the route group already enforces that.
+     */
+    public function storageCredentials(Request $request)
+    {
+        $cfg = config('filesystems.disks.b2');
+        return response()->json([
+            'access_key_id' => $cfg['key'] ?? null,
+            'secret_access_key' => $cfg['secret'] ?? null,
+            'region' => $cfg['region'] ?? 'us-west-004',
+            'endpoint' => $cfg['endpoint'] ?? null,
+            'bucket' => $cfg['bucket'] ?? null,
+            'public_url_base' => rtrim($cfg['url'] ?? '', '/'),
+            'folder' => 'gangsheet/' . now()->format('Y-m-d'),
+        ]);
+    }
+
+    /**
+     * Record a gang sheet that the desktop app has already uploaded directly
+     * to B2 (via the presigned URL above). No file upload here — the request
+     * body is plain JSON metadata.
+     */
     public function store(Request $request)
     {
         $request->validate([
-            'file' => 'required|file|max:204800', // up to 200MB
             'filename' => 'required|string',
+            'file_url' => 'required|url',
             'line_id' => 'nullable|string|max:16',
             'first_system_id' => 'nullable|string',
             'last_system_id' => 'nullable|string',
@@ -122,29 +146,12 @@ class GangsheetController extends Controller
         $orderIds = $this->decodeIds($request->input('order_ids'));
         $metaIds  = $this->decodeIds($request->input('meta_ids'));
 
-        $folder = 'gangsheet/' . now()->format('Y-m-d');
-        $path = $folder . '/' . $request->filename;
-        $file = $request->file('file');
-
-        // Mirror the converter upload path that's already known to work on B2.
         try {
-            Storage::disk('b2')->put($path, file_get_contents($file->getPathname()), 'public');
-        } catch (\Throwable $e) {
-            \Log::error('[gangsheet] B2 upload failed: ' . $e->getMessage(), ['filename' => $request->filename]);
-            return response()->json([
-                'message' => 'Failed to upload gang sheet to storage: ' . $e->getMessage(),
-            ], 500);
-        }
-
-        $base = rtrim(config('filesystems.disks.b2.url') ?? '', '/');
-        $url = $base . '/' . ltrim($path, '/');
-
-        try {
-            $gangsheet = DB::transaction(function () use ($request, $orderIds, $metaIds, $url) {
+            $gangsheet = DB::transaction(function () use ($request, $orderIds, $metaIds) {
                 $gs = Gangsheet::create([
                     'created_by_user_id' => $request->user()?->id,
                     'filename' => $request->filename,
-                    'file_url' => $url,
+                    'file_url' => $request->file_url,
                     'line_id' => $request->line_id,
                     'first_system_id' => $request->first_system_id,
                     'last_system_id' => $request->last_system_id,
