@@ -20,7 +20,7 @@ class OrderController extends Controller
     {
         $hideQr = $this->shouldHideQrMetas($request->user());
         $metasRel = $hideQr
-            ? ['items.metas' => fn ($q) => $q->where('key', 'not like', '%\\_qr')]
+            ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
         $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'address', 'user']));
@@ -84,7 +84,7 @@ class OrderController extends Controller
     {
         $hideQr = $this->shouldHideQrMetas($request->user());
         $metasRel = $hideQr
-            ? ['items.metas' => fn ($q) => $q->where('key', 'not like', '%\\_qr')]
+            ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
         $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'address', 'user']));
@@ -246,6 +246,49 @@ class OrderController extends Controller
     }
 
     /**
+     * Same as reconvert(), but for multiple orders at once. Body: order_ids[].
+     * Non-staff users can only target their own orders; orders they don't own
+     * are silently skipped and reported in the response.
+     */
+    public function bulkReconvert(Request $request)
+    {
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        $user = $request->user();
+        if (!$user) abort(401);
+        $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
+
+        $query = Order::whereIn('id', $request->order_ids);
+        if (!$isStaff) {
+            $query->where('user_id', $user->id);
+        }
+        $orders = $query->get();
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'No accessible orders to reconvert', 'count' => 0, 'deleted' => 0], 403);
+        }
+
+        $totalDeleted = 0;
+        foreach ($orders as $order) {
+            $itemIds = $order->items()->pluck('id');
+            $deleted = OrderItemMeta::whereIn('order_item_id', $itemIds)
+                ->where('key', 'regexp', '_qr(_[0-9]+)?$')
+                ->delete();
+            $totalDeleted += $deleted;
+            $order->update(['production' => false]);
+        }
+
+        return response()->json([
+            'message' => "Reconvert queued for {$orders->count()} order(s); removed {$totalDeleted} _qr meta(s).",
+            'count' => $orders->count(),
+            'deleted' => $totalDeleted,
+            'skipped' => count($request->order_ids) - $orders->count(),
+        ]);
+    }
+
+    /**
      * Wipe all *_qr metas of this order so the converter cron rebuilds them
      * the next time it polls. Also resets the order's production flag so it
      * can be re-ganged. Allowed for the order's owner, admin, or support.
@@ -263,7 +306,7 @@ class OrderController extends Controller
 
         $itemIds = $order->items()->pluck('id');
         $deleted = OrderItemMeta::whereIn('order_item_id', $itemIds)
-            ->where('key', 'like', '%\\_qr')
+            ->where('key', 'regexp', '_qr(_[0-9]+)?$')
             ->delete();
 
         $order->update(['production' => false]);

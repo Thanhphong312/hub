@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Storage;
 
 class GangsheetController extends Controller
 {
-    private const QR_KEYS = ['front_qr', 'back_qr', 'left_qr', 'right_qr', 'neck_qr', 'special_qr'];
+    private const QR_KEY_REGEX = '_qr(_[0-9]+)?$';
 
     public function index(Request $request)
     {
@@ -56,11 +56,11 @@ class GangsheetController extends Controller
     public function pendingOrders(Request $request)
     {
         $query = Order::with([
-            'items.metas' => fn ($q) => $q->whereIn('key', self::QR_KEYS),
+            'items.metas' => fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX),
             'items.productVariant.product:id,name,line_id',
         ])
             ->where('production', false)
-            ->whereHas('items.metas', fn ($q) => $q->whereIn('key', self::QR_KEYS)->where('production', false))
+            ->whereHas('items.metas', fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX)->where('production', false))
             ->orderBy('id', 'asc');
 
         if ($request->filled('line_id')) {
@@ -88,7 +88,7 @@ class GangsheetController extends Controller
         $ids = array_values(array_unique(array_map('trim', $request->system_ids)));
 
         $orders = Order::with([
-            'items.metas' => fn ($q) => $q->whereIn('key', self::QR_KEYS),
+            'items.metas' => fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX),
             'items.productVariant.product:id,name,line_id',
         ])
             ->whereIn('system_id', $ids)
