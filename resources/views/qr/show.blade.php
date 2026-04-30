@@ -138,35 +138,57 @@
                     </div>
                 </div>
 
-                {{-- Mockups + source design metas --}}
-                @if ($isImageish($item->mockup_front) || $isImageish($item->mockup_back) || $sourceMetas->isNotEmpty())
+                {{-- Mockups + source design metas — split into two side-by-side panels --}}
+                @php
+                    $hasMockup = $isImageish($item->mockup_front) || $isImageish($item->mockup_back);
+                    $hasDesign = $sourceMetas->isNotEmpty();
+                @endphp
+                @if ($hasMockup || $hasDesign)
                     <div class="p-4 border-b border-neutral-100">
-                        <h3 class="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">Mockups & designs</h3>
-                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                            @if ($isImageish($item->mockup_front))
-                                <a href="{{ $item->mockup_front }}" target="_blank" rel="noreferrer" class="block group">
-                                    <div class="aspect-square bg-neutral-50 border border-neutral-200 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
-                                        <img src="{{ $driveThumb($item->mockup_front) }}" alt="mockup front" class="w-full h-full object-cover" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $item->mockup_front }}</div>'" />
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <h3 class="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">Mockups</h3>
+                                @if ($hasMockup)
+                                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                                        @if ($isImageish($item->mockup_front))
+                                            <a href="{{ $item->mockup_front }}" target="_blank" rel="noreferrer" class="block group">
+                                                <div class="aspect-square bg-neutral-50 border border-neutral-200 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
+                                                    <img src="{{ $driveThumb($item->mockup_front) }}" alt="mockup front" class="w-full h-full object-cover" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $item->mockup_front }}</div>'" />
+                                                </div>
+                                                <div class="mt-1 text-[11px] text-neutral-600 font-medium">Mockup front</div>
+                                            </a>
+                                        @endif
+                                        @if ($isImageish($item->mockup_back))
+                                            <a href="{{ $item->mockup_back }}" target="_blank" rel="noreferrer" class="block group">
+                                                <div class="aspect-square bg-neutral-50 border border-neutral-200 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
+                                                    <img src="{{ $driveThumb($item->mockup_back) }}" alt="mockup back" class="w-full h-full object-cover" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $item->mockup_back }}</div>'" />
+                                                </div>
+                                                <div class="mt-1 text-[11px] text-neutral-600 font-medium">Mockup back</div>
+                                            </a>
+                                        @endif
                                     </div>
-                                    <div class="mt-1 text-[11px] text-neutral-600 font-medium">Mockup front</div>
-                                </a>
-                            @endif
-                            @if ($isImageish($item->mockup_back))
-                                <a href="{{ $item->mockup_back }}" target="_blank" rel="noreferrer" class="block group">
-                                    <div class="aspect-square bg-neutral-50 border border-neutral-200 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
-                                        <img src="{{ $driveThumb($item->mockup_back) }}" alt="mockup back" class="w-full h-full object-cover" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $item->mockup_back }}</div>'" />
+                                @else
+                                    <p class="text-xs text-neutral-400">No mockup uploaded.</p>
+                                @endif
+                            </div>
+
+                            <div class="md:border-l md:border-neutral-100 md:pl-6">
+                                <h3 class="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">Designs</h3>
+                                @if ($hasDesign)
+                                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                                        @foreach ($sourceMetas as $key => $meta)
+                                            <a href="{{ $meta->value }}" target="_blank" rel="noreferrer" class="block group">
+                                                <div class="aspect-square bg-neutral-50 border border-neutral-200 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
+                                                    <img src="{{ $driveThumb($meta->value) }}" alt="{{ $key }}" class="w-full h-full object-cover" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $meta->value }}</div>'" />
+                                                </div>
+                                                <div class="mt-1 text-[11px] text-neutral-600 font-medium capitalize">{{ $key }}</div>
+                                            </a>
+                                        @endforeach
                                     </div>
-                                    <div class="mt-1 text-[11px] text-neutral-600 font-medium">Mockup back</div>
-                                </a>
-                            @endif
-                            @foreach ($sourceMetas as $key => $meta)
-                                <a href="{{ $meta->value }}" target="_blank" rel="noreferrer" class="block group">
-                                    <div class="aspect-square bg-neutral-50 border border-neutral-200 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
-                                        <img src="{{ $driveThumb($meta->value) }}" alt="{{ $key }}" class="w-full h-full object-cover" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $meta->value }}</div>'" />
-                                    </div>
-                                    <div class="mt-1 text-[11px] text-neutral-600 font-medium capitalize">{{ $key }}</div>
-                                </a>
-                            @endforeach
+                                @else
+                                    <p class="text-xs text-neutral-400">No design metas.</p>
+                                @endif
+                            </div>
                         </div>
                     </div>
                 @endif
