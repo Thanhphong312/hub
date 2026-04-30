@@ -23,6 +23,64 @@
     $sourceKeys = ['front', 'back', 'left', 'right', 'neck', 'special'];
 @endphp
 
+<div class="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-neutral-200 px-6 py-3">
+    <div class="max-w-6xl mx-auto flex items-center gap-3">
+        <label for="systemIdInput" class="text-xs font-semibold text-neutral-600 uppercase tracking-wider whitespace-nowrap">Scan / Type</label>
+        <input
+            type="text"
+            id="systemIdInput"
+            value="{{ $order->system_id }}"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            spellcheck="false"
+            class="flex-1 px-3 py-2 bg-[#faf8f6] border border-neutral-200 rounded-lg text-neutral-800 text-sm font-mono focus:outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
+            placeholder="e.g. GC123"
+        />
+        <span id="systemIdStatus" class="text-xs text-neutral-400 w-24 text-right"></span>
+    </div>
+</div>
+
+<script>
+(function () {
+    const input = document.getElementById('systemIdInput');
+    const statusEl = document.getElementById('systemIdStatus');
+    const currentId = @json($order->system_id);
+    let timer = null;
+
+    function go(raw) {
+        const id = (raw || '').trim();
+        if (!id) return;
+        if (id === currentId) {
+            statusEl.textContent = '';
+            return;
+        }
+        statusEl.textContent = 'Loading…';
+        window.location.href = '/qr/' + encodeURIComponent(id);
+    }
+
+    input.addEventListener('input', () => {
+        clearTimeout(timer);
+        const v = input.value;
+        statusEl.textContent = v.trim() && v.trim() !== currentId ? 'Waiting…' : '';
+        timer = setTimeout(() => go(v), 350);
+    });
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            clearTimeout(timer);
+            go(input.value);
+        }
+    });
+
+    input.addEventListener('focus', () => input.select());
+
+    // Select all on load so barcode scanners overwrite cleanly.
+    setTimeout(() => { input.focus(); input.select(); }, 50);
+})();
+</script>
+
 <div class="max-w-6xl mx-auto p-6">
     <div class="flex justify-between items-start mb-6">
         <div>
