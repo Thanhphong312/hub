@@ -332,6 +332,36 @@ class OrderController extends Controller
         });
     }
 
+    public function bulkSetProduction(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || !$user->hasRole('admin')) {
+            return response()->json(['message' => 'Only admin can bulk set production'], 403);
+        }
+
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        return DB::transaction(function () use ($request) {
+            $orders = Order::whereIn('id', $request->order_ids)->get();
+            $itemIds = OrderItem::whereIn('order_id', $orders->pluck('id'))->pluck('id');
+
+            $metasMarked = OrderItemMeta::whereIn('order_item_id', $itemIds)
+                ->where('production', false)
+                ->update(['production' => true]);
+
+            Order::whereIn('id', $orders->pluck('id'))->update(['production' => true]);
+
+            return response()->json([
+                'message' => "Marked production: {$orders->count()} order(s), {$metasMarked} meta(s) updated",
+                'count' => $orders->count(),
+                'metas_marked' => $metasMarked,
+            ]);
+        });
+    }
+
     public function bulkDestroy(Request $request)
     {
         $user = $request->user();

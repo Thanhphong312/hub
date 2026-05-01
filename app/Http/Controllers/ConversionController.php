@@ -150,7 +150,10 @@ class ConversionController extends Controller
 
         $request->validate([
             'key' => ['required', 'string', 'regex:/^(front|back|left|right|neck|special)_qr(_\d+)?$/'],
-            'image' => 'required|file|max:20480',
+            // ~100 MB ceiling so 3030×2130 / 3130×2130 RGBA PNGs at 300 DPI fit
+            // even when the source design has heavy detail. PHP global caps
+            // (upload_max_filesize / post_max_size in php.ini) are also at 100M.
+            'image' => 'required|file|max:102400',
         ]);
 
         $newKey = $request->key;
