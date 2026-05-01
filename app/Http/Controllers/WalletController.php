@@ -42,6 +42,7 @@ class WalletController extends Controller
         $request->validate([
             'user_id' => 'required|exists:users,id',
             'amount' => 'required|numeric|min:0.01',
+            'method' => 'required|in:' . implode(',', WalletTransaction::METHODS),
             'note' => 'nullable|string',
         ]);
 
@@ -52,6 +53,7 @@ class WalletController extends Controller
             WalletTransaction::create([
                 'user_id' => $user->id,
                 'type' => 'deposit',
+                'method' => $request->method,
                 'amount' => $request->amount,
                 'balance_after' => $user->fresh()->wallet,
                 'note' => $request->note ?? 'Deposit',
