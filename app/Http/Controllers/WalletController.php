@@ -40,34 +40,92 @@ class WalletController extends Controller
     public function deposit(Request $request)
     {
         $request->validate([
-            'user_id' => 'required|exists:users,id',
+            'user_id' => 'sometimes|exists:users,id',
             'amount' => 'required|numeric|min:0.01',
             'method' => 'required|in:' . implode(',', WalletTransaction::METHODS),
             'transaction_id' => 'required|string|unique:wallet_transactions,transaction_id',
             'note' => 'nullable|string',
         ]);
 
-        return DB::transaction(function () use ($request) {
-            $user = User::findOrFail($request->user_id);
-            $balanceBefore = (float) $user->wallet;
-            $user->increment('wallet', $request->amount);
+        // Sellers can only deposit into their own wallet; admin can target any user.
+        $authUser = $request->user();
+        $targetUserId = $authUser->hasRole('seller')
+            ? $authUser->id
+            : ($request->user_id ?? $authUser->id);
 
-            WalletTransaction::create([
-                'user_id' => $user->id,
-                'type' => 'deposit',
-                'method' => $request->method,
-                'transaction_id' => $request->transaction_id,
-                'amount' => $request->amount,
+        $tx = WalletTransaction::create([
+            'user_id' => $targetUserId,
+            'type' => 'deposit',
+            'status' => WalletTransaction::STATUS_PENDING,
+            'method' => $request->method,
+            'transaction_id' => $request->transaction_id,
+            'amount' => $request->amount,
+            'note' => $request->note ?? 'Deposit',
+        ]);
+
+        return response()->json([
+            'message' => 'Deposit submitted (pending approval)',
+            'transaction' => $tx,
+        ]);
+    }
+
+    public function approveDeposit(Request $request, WalletTransaction $transaction)
+    {
+        if ($transaction->type !== 'deposit') {
+            return response()->json(['message' => 'Only deposits can be approved'], 400);
+        }
+        if ($transaction->status !== WalletTransaction::STATUS_PENDING) {
+            return response()->json(['message' => 'Transaction is not pending'], 400);
+        }
+
+        return DB::transaction(function () use ($transaction) {
+            $user = User::findOrFail($transaction->user_id);
+            $balanceBefore = (float) $user->wallet;
+            $user->increment('wallet', $transaction->amount);
+
+            $transaction->update([
+                'status' => WalletTransaction::STATUS_APPROVED,
                 'balance_before' => $balanceBefore,
                 'balance_after' => $user->fresh()->wallet,
-                'note' => $request->note ?? 'Deposit',
             ]);
 
             return response()->json([
-                'message' => 'Deposit successful',
+                'message' => 'Deposit approved',
+                'transaction' => $transaction->fresh(),
                 'wallet' => $user->fresh()->wallet,
             ]);
         });
+    }
+
+    public function updateDeposit(Request $request, WalletTransaction $transaction)
+    {
+        if ($transaction->type !== 'deposit') {
+            return response()->json(['message' => 'Only deposit transactions are editable'], 400);
+        }
+        if ($transaction->status !== WalletTransaction::STATUS_PENDING) {
+            return response()->json(['message' => 'Approved transactions cannot be edited'], 403);
+        }
+
+        $authUser = $request->user();
+        $isOwner = $transaction->user_id === $authUser->id;
+        $isAdmin = $authUser->hasRole('admin');
+        if (!$isOwner && !$isAdmin) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $request->validate([
+            'amount' => 'sometimes|numeric|min:0.01',
+            'method' => 'sometimes|in:' . implode(',', WalletTransaction::METHODS),
+            'transaction_id' => 'sometimes|string|unique:wallet_transactions,transaction_id,' . $transaction->id,
+            'note' => 'nullable|string',
+        ]);
+
+        $transaction->update($request->only(['amount', 'method', 'transaction_id', 'note']));
+
+        return response()->json([
+            'message' => 'Deposit updated',
+            'transaction' => $transaction->fresh(),
+        ]);
     }
 
     public function refund(Request $request)
@@ -95,6 +153,7 @@ class WalletController extends Controller
                 'order_id' => $order->id,
                 'order_system_id' => $order->system_id,
                 'type' => 'refund',
+                'status' => WalletTransaction::STATUS_APPROVED,
                 'amount' => $request->amount,
                 'balance_before' => $balanceBefore,
                 'balance_after' => $user->fresh()->wallet,
@@ -112,11 +171,16 @@ class WalletController extends Controller
     public function balance(Request $request)
     {
         $user = $request->user();
+        $approved = fn($q) => $q->where('user_id', $user->id)->where('status', WalletTransaction::STATUS_APPROVED);
         return response()->json([
             'wallet' => $user->wallet,
-            'total_deposited' => WalletTransaction::where('user_id', $user->id)->where('type', 'deposit')->sum('amount'),
-            'total_paid' => abs(WalletTransaction::where('user_id', $user->id)->where('type', 'paid')->sum('amount')),
-            'total_refunded' => WalletTransaction::where('user_id', $user->id)->where('type', 'refund')->sum('amount'),
+            'total_deposited' => $approved(WalletTransaction::where('type', 'deposit'))->sum('amount'),
+            'total_paid' => abs($approved(WalletTransaction::where('type', 'paid'))->sum('amount')),
+            'total_refunded' => $approved(WalletTransaction::where('type', 'refund'))->sum('amount'),
+            'pending_deposits' => WalletTransaction::where('user_id', $user->id)
+                ->where('type', 'deposit')
+                ->where('status', WalletTransaction::STATUS_PENDING)
+                ->sum('amount'),
         ]);
     }
 }
