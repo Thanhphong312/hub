@@ -479,6 +479,38 @@ class OrderController extends Controller
         });
     }
 
+    public function unpaidSummary(Request $request)
+    {
+        $user = $request->user();
+        $targetUserId = $user->hasRole('seller')
+            ? $user->id
+            : ((int) ($request->user_id ?? $user->id));
+
+        $payer = $targetUserId === $user->id ? $user : \App\Models\User::find($targetUserId);
+        if (!$payer) {
+            return response()->json(['message' => 'User not found'], 404);
+        }
+
+        $unpaid = Order::where('user_id', $targetUserId)
+            ->whereColumn('paid_cost', '<', 'total_cost')
+            ->get(['id', 'total_cost', 'paid_cost']);
+
+        $count = $unpaid->count();
+        $totalUnpaid = (float) $unpaid->sum(fn($o) => max(0, $o->total_cost - $o->paid_cost));
+        $wallet = (float) $payer->wallet;
+        $short = max(0, $totalUnpaid - $wallet);
+
+        return response()->json([
+            'user_id' => $targetUserId,
+            'user_name' => $payer->name,
+            'user_email' => $payer->email,
+            'count' => $count,
+            'total_unpaid' => $totalUnpaid,
+            'wallet' => $wallet,
+            'short' => $short,
+        ]);
+    }
+
     public function payAllUnpaid(Request $request)
     {
         $user = $request->user();
