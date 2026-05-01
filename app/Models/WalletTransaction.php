@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class WalletTransaction extends Model
 {
-    protected $fillable = ['user_id', 'order_id', 'type', 'method', 'amount', 'balance_after', 'note'];
+    protected $fillable = ['user_id', 'order_id', 'order_system_id', 'type', 'method', 'transaction_id', 'amount', 'balance_before', 'balance_after', 'note'];
 
     const METHOD_PAYPAL = 'paypal';
     const METHOD_PINGPONG = 'pingpong';

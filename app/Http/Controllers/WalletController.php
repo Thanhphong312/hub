@@ -12,7 +12,7 @@ class WalletController extends Controller
     public function transactions(Request $request)
     {
         $user = $request->user();
-        $query = WalletTransaction::with(['order:id,ref_id,total_cost', 'user:id,name,email']);
+        $query = WalletTransaction::with(['order:id,system_id,ref_id,total_cost', 'user:id,name,email']);
 
         if ($user->hasRole('seller')) {
             $query->where('user_id', $user->id);
@@ -43,18 +43,22 @@ class WalletController extends Controller
             'user_id' => 'required|exists:users,id',
             'amount' => 'required|numeric|min:0.01',
             'method' => 'required|in:' . implode(',', WalletTransaction::METHODS),
+            'transaction_id' => 'required|string|unique:wallet_transactions,transaction_id',
             'note' => 'nullable|string',
         ]);
 
         return DB::transaction(function () use ($request) {
             $user = User::findOrFail($request->user_id);
+            $balanceBefore = (float) $user->wallet;
             $user->increment('wallet', $request->amount);
 
             WalletTransaction::create([
                 'user_id' => $user->id,
                 'type' => 'deposit',
                 'method' => $request->method,
+                'transaction_id' => $request->transaction_id,
                 'amount' => $request->amount,
+                'balance_before' => $balanceBefore,
                 'balance_after' => $user->fresh()->wallet,
                 'note' => $request->note ?? 'Deposit',
             ]);
@@ -82,16 +86,19 @@ class WalletController extends Controller
         }
 
         return DB::transaction(function () use ($user, $order, $request) {
+            $balanceBefore = (float) $user->wallet;
             $user->increment('wallet', $request->amount);
             $order->decrement('paid_cost', $request->amount);
 
             WalletTransaction::create([
                 'user_id' => $user->id,
                 'order_id' => $order->id,
+                'order_system_id' => $order->system_id,
                 'type' => 'refund',
                 'amount' => $request->amount,
+                'balance_before' => $balanceBefore,
                 'balance_after' => $user->fresh()->wallet,
-                'note' => $request->note ?? "Refund order #{$order->ref_id}",
+                'note' => $request->note ?? "Refund order #{$order->system_id}",
             ]);
 
             return response()->json([

@@ -455,14 +455,17 @@ class OrderController extends Controller
         }
 
         return DB::transaction(function () use ($user, $order, $amountToPay) {
+            $balanceBefore = (float) $user->wallet;
             $user->decrement('wallet', $amountToPay);
             $order->update(['paid_cost' => $order->total_cost]);
 
             WalletTransaction::create([
                 'user_id' => $user->id,
                 'order_id' => $order->id,
+                'order_system_id' => $order->system_id,
                 'type' => 'paid',
                 'amount' => -$amountToPay,
+                'balance_before' => $balanceBefore,
                 'balance_after' => $user->fresh()->wallet,
                 'note' => "Paid order #{$order->system_id}",
             ]);
@@ -508,14 +511,17 @@ class OrderController extends Controller
                 $amountToPay = $order->total_cost - $order->paid_cost;
                 if ($amountToPay <= 0) continue;
 
+                $balanceBefore = (float) $user->wallet;
                 $user->decrement('wallet', $amountToPay);
                 $order->update(['paid_cost' => $order->total_cost]);
 
                 WalletTransaction::create([
                     'user_id' => $user->id,
                     'order_id' => $order->id,
+                    'order_system_id' => $order->system_id,
                     'type' => 'paid',
                     'amount' => -$amountToPay,
+                    'balance_before' => $balanceBefore,
                     'balance_after' => $user->fresh()->wallet,
                     'note' => "Paid order #{$order->system_id}",
                 ]);
