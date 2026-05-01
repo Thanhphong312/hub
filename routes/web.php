@@ -22,4 +22,5 @@ Route::middleware(['auth', 'web.portal'])->group(function () {
     });
     Route::post('/logout', [WebAuthController::class, 'logout'])->name('logout');
     Route::get('/qr/{systemId}', [QrController::class, 'show'])->name('qr.show');
+    Route::post('/qr/{systemId}/status', [QrController::class, 'updateStatus'])->name('qr.update-status');
 });

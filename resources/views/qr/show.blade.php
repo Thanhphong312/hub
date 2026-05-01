@@ -82,18 +82,50 @@
 </script>
 
 <div class="max-w-6xl mx-auto p-6">
+    @if (session('status_message'))
+        <div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">
+            {{ session('status_message') }}
+        </div>
+    @endif
+
     <div class="flex justify-between items-start mb-6">
         <div>
             <h1 class="text-2xl font-bold text-neutral-800">Order {{ $order->system_id }}</h1>
             @if ($order->ref_id)
                 <p class="text-xs text-neutral-500 mt-1">Ref: <span class="font-mono">{{ $order->ref_id }}</span></p>
             @endif
-            <div class="mt-2 flex flex-wrap gap-2 text-xs">
+            <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
                 <span class="px-2 py-0.5 bg-orange-100 text-orange-700 rounded font-medium">{{ $statusMap[$order->status] ?? $order->status }}</span>
                 <span class="px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded">{{ $order->ship_type }}</span>
                 @if ($order->production)
                     <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded font-medium">Production</span>
                 @endif
+
+                <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="inline">
+                    @csrf
+                    <input type="hidden" name="status" value="shipped" />
+                    <button type="submit"
+                        @if ($order->status === \App\Models\Order::STATUS_SHIPPED) disabled @endif
+                        class="px-2 py-0.5 rounded font-medium border transition
+                               {{ $order->status === \App\Models\Order::STATUS_SHIPPED
+                                  ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
+                                  : 'bg-white text-green-700 border-green-300 hover:bg-green-50' }}">
+                        Mark Shipped
+                    </button>
+                </form>
+
+                <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="inline">
+                    @csrf
+                    <input type="hidden" name="status" value="onhold" />
+                    <button type="submit"
+                        @if ($order->status === \App\Models\Order::STATUS_ONHOLD) disabled @endif
+                        class="px-2 py-0.5 rounded font-medium border transition
+                               {{ $order->status === \App\Models\Order::STATUS_ONHOLD
+                                  ? 'bg-yellow-100 text-yellow-700 border-yellow-200 cursor-not-allowed opacity-60'
+                                  : 'bg-white text-yellow-700 border-yellow-300 hover:bg-yellow-50' }}">
+                        Mark On Hold
+                    </button>
+                </form>
             </div>
         </div>
         <form method="POST" action="{{ url('/logout') }}">

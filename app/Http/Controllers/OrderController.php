@@ -245,6 +245,26 @@ class OrderController extends Controller
         return response()->json(['message' => 'Order deleted']);
     }
 
+    public function bulkDestroy(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || !$user->hasRole('admin')) {
+            return response()->json(['message' => 'Only admin can delete orders'], 403);
+        }
+
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        $deleted = Order::whereIn('id', $request->order_ids)->delete();
+
+        return response()->json([
+            'message' => "Deleted {$deleted} order(s)",
+            'count' => $deleted,
+        ]);
+    }
+
     /**
      * Same as reconvert(), but for multiple orders at once. Body: order_ids[].
      * Non-staff users can only target their own orders; orders they don't own
@@ -490,7 +510,9 @@ class OrderController extends Controller
 
                 $shipType = $hasLabel ? 'tiktok_ship' : 'seller_ship';
 
-                // Resolve accessory price: prefer accessory_code (filtered by user tier), fallback to accessory_item_id
+                // Resolve accessory price: prefer accessory_code (filtered by user tier), fallback to accessory_item_id.
+                // If the line specified an accessory but it could not be resolved, skip the entire row — do NOT create
+                // an order with a missing/invalid accessory.
                 $accessoryItemId = null;
                 $accessoryUnitPrice = 0;
                 if (!empty($data['accessory_code'])) {
@@ -501,7 +523,8 @@ class OrderController extends Controller
                         $accessoryItemId = $accPrice->id;
                         $accessoryUnitPrice = (float)$accPrice->price;
                     } else {
-                        $errors[] = "Line {$lineNum}: accessory_code '{$data['accessory_code']}' not found for your tier (skipped)";
+                        $errors[] = "Line {$lineNum}: accessory_code '{$data['accessory_code']}' not found for your tier (order not created)";
+                        continue;
                     }
                 } elseif (!empty($data['accessory_item_id'])) {
                     $accPrice = AccessoryPrice::find((int)$data['accessory_item_id']);
@@ -509,7 +532,8 @@ class OrderController extends Controller
                         $accessoryItemId = $accPrice->id;
                         $accessoryUnitPrice = (float)$accPrice->price;
                     } else {
-                        $errors[] = "Line {$lineNum}: accessory_item_id not valid for your tier (skipped)";
+                        $errors[] = "Line {$lineNum}: accessory_item_id not valid for your tier (order not created)";
+                        continue;
                     }
                 }
 

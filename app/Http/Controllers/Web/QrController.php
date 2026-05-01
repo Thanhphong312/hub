@@ -35,4 +35,25 @@ class QrController extends Controller
             'user' => $user,
         ]);
     }
+
+    public function updateStatus(Request $request, string $systemId)
+    {
+        $request->validate(['status' => 'required|in:shipped,onhold']);
+
+        $order = Order::where('system_id', $systemId)->first();
+        if (!$order) {
+            throw new NotFoundHttpException('Order not found');
+        }
+
+        $statusValue = $request->status === 'shipped' ? Order::STATUS_SHIPPED : Order::STATUS_ONHOLD;
+        $data = ['status' => $statusValue];
+        if ($statusValue === Order::STATUS_SHIPPED) {
+            $data['completed_time'] = now();
+        }
+
+        $order->update($data);
+
+        return redirect()->route('qr.show', ['systemId' => $systemId])
+            ->with('status_message', 'Order marked as ' . $request->status . '.');
+    }
 }
