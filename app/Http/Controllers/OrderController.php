@@ -302,6 +302,36 @@ class OrderController extends Controller
         return response()->json(['message' => 'Order deleted']);
     }
 
+    public function bulkReProduction(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || !$user->hasRole('admin')) {
+            return response()->json(['message' => 'Only admin can bulk re-production'], 403);
+        }
+
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        return DB::transaction(function () use ($request) {
+            $orders = Order::whereIn('id', $request->order_ids)->get();
+            $itemIds = OrderItem::whereIn('order_id', $orders->pluck('id'))->pluck('id');
+
+            $metasReset = OrderItemMeta::whereIn('order_item_id', $itemIds)
+                ->where('production', true)
+                ->update(['production' => false]);
+
+            Order::whereIn('id', $orders->pluck('id'))->update(['production' => false]);
+
+            return response()->json([
+                'message' => "Re-production: {$orders->count()} order(s), {$metasReset} meta(s) reset",
+                'count' => $orders->count(),
+                'metas_reset' => $metasReset,
+            ]);
+        });
+    }
+
     public function bulkDestroy(Request $request)
     {
         $user = $request->user();
