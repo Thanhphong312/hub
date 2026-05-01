@@ -42,6 +42,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/import-csv', [OrderController::class, 'importCsv']);
     Route::post('/orders/bulk-status', [OrderController::class, 'bulkUpdateStatus']);
     Route::post('/orders/bulk-pay', [OrderController::class, 'bulkPay']);
+    Route::post('/orders/pay-all-unpaid', [OrderController::class, 'payAllUnpaid']);
     Route::post('/orders/bulk-reconvert', [OrderController::class, 'bulkReconvert']);
     Route::post('/orders/bulk-delete', [OrderController::class, 'bulkDestroy']);
     Route::get('/orders/{order}', [OrderController::class, 'show']);

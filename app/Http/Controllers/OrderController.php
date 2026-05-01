@@ -479,6 +479,68 @@ class OrderController extends Controller
         });
     }
 
+    public function payAllUnpaid(Request $request)
+    {
+        $user = $request->user();
+
+        // Sellers pay their own; admin/support can target a specific user via ?user_id.
+        $targetUserId = $user->hasRole('seller')
+            ? $user->id
+            : ((int) ($request->user_id ?? $user->id));
+
+        $orders = Order::where('user_id', $targetUserId)
+            ->whereColumn('paid_cost', '<', 'total_cost')
+            ->get();
+
+        $totalToPay = $orders->sum(fn($o) => max(0, $o->total_cost - $o->paid_cost));
+
+        if ($orders->isEmpty() || $totalToPay <= 0) {
+            return response()->json(['message' => 'No unpaid orders to pay', 'count' => 0], 400);
+        }
+
+        $payer = $targetUserId === $user->id ? $user : \App\Models\User::findOrFail($targetUserId);
+        if ($payer->wallet < $totalToPay) {
+            return response()->json([
+                'message' => 'Insufficient wallet balance',
+                'required' => $totalToPay,
+                'wallet' => (float) $payer->wallet,
+                'unpaid_count' => $orders->count(),
+            ], 400);
+        }
+
+        return DB::transaction(function () use ($payer, $orders, $totalToPay) {
+            $paidCount = 0;
+            foreach ($orders as $order) {
+                $amountToPay = $order->total_cost - $order->paid_cost;
+                if ($amountToPay <= 0) continue;
+
+                $balanceBefore = (float) $payer->wallet;
+                $payer->decrement('wallet', $amountToPay);
+                $order->update(['paid_cost' => $order->total_cost]);
+
+                WalletTransaction::create([
+                    'user_id' => $payer->id,
+                    'order_id' => $order->id,
+                    'order_system_id' => $order->system_id,
+                    'type' => 'paid',
+                    'status' => WalletTransaction::STATUS_APPROVED,
+                    'amount' => -$amountToPay,
+                    'balance_before' => $balanceBefore,
+                    'balance_after' => $payer->fresh()->wallet,
+                    'note' => "Paid order #{$order->system_id}",
+                ]);
+                $paidCount++;
+            }
+
+            return response()->json([
+                'message' => "Paid {$paidCount} order(s)",
+                'count' => $paidCount,
+                'total_paid' => $totalToPay,
+                'wallet' => $payer->fresh()->wallet,
+            ]);
+        });
+    }
+
     public function bulkPay(Request $request)
     {
         $request->validate([
