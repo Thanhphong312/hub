@@ -3,7 +3,7 @@
 
 @section('content')
 @php
-    $statusMap = [0 => 'new_order', 1 => 'processing', 2 => 'wrongsize', 3 => 'fixed', 4 => 'reprint', 5 => 'onhold', 6 => 'shipped'];
+    $statusMap = [0 => 'new_order', 1 => 'processing', 2 => 'wrongsize', 3 => 'fixed', 4 => 'reprint', 5 => 'onhold', 6 => 'shipped', 7 => 'cancelled'];
 
     // Convert any URL into something we can <img src=> at. Drive share links
     // get rewritten to Drive's public thumbnail endpoint; everything else is

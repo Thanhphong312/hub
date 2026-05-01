@@ -27,6 +27,7 @@ class Order extends Model
     const STATUS_REPRINT = 4;
     const STATUS_ONHOLD = 5;
     const STATUS_SHIPPED = 6;
+    const STATUS_CANCELLED = 7;
 
     const STATUS_MAP = [
         0 => 'new_order',
@@ -36,6 +37,7 @@ class Order extends Model
         4 => 'reprint',
         5 => 'onhold',
         6 => 'shipped',
+        7 => 'cancelled',
     ];
 
     public function user()

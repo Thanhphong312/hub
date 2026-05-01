@@ -99,6 +99,34 @@ class OrderController extends Controller
         return !in_array($user->role->slug, ['admin', 'support']);
     }
 
+    /**
+     * Pick a ref_id that doesn't yet exist for this user, given a base ref_id
+     * and an in-progress map of ref_ids already assigned in the current batch.
+     * Appends `_r_1`, `_r_2`, … until a free slot is found.
+     */
+    private function generateUniqueRefId($userId, ?string $baseRefId, array &$assignedInBatch, ?int $excludeOrderId = null): ?string
+    {
+        if ($baseRefId === null || $baseRefId === '') return null;
+
+        $existsForUser = function (string $candidate) use ($userId, $excludeOrderId) {
+            $q = Order::where('user_id', $userId)->where('ref_id', $candidate);
+            if ($excludeOrderId) $q->where('id', '!=', $excludeOrderId);
+            return $q->exists();
+        };
+
+        if (!isset($assignedInBatch[$baseRefId]) && !$existsForUser($baseRefId)) {
+            return $baseRefId;
+        }
+        $n = 1;
+        while (true) {
+            $candidate = $baseRefId . '_r_' . $n;
+            if (!isset($assignedInBatch[$candidate]) && !$existsForUser($candidate)) {
+                return $candidate;
+            }
+            $n++;
+        }
+    }
+
     public function store(Request $request)
     {
         $hasLabel = !empty($request->shipping_label);
@@ -127,12 +155,35 @@ class OrderController extends Controller
             'address.country' => $hasLabel ? 'nullable|string' : 'required|string',
         ]);
 
-        return DB::transaction(function () use ($request, $hasLabel) {
+        $userId = $request->user()->id;
+        $rawRefId = $request->ref_id ? trim($request->ref_id) : null;
+        $force = $request->boolean('force');
+        $rename = $request->boolean('rename');
+
+        if ($rawRefId && !$force) {
+            $exists = Order::where('user_id', $userId)->where('ref_id', $rawRefId)->exists();
+            if ($exists) {
+                return response()->json([
+                    'message' => 'Duplicate ref_id',
+                    'duplicates' => [$rawRefId],
+                ], 409);
+            }
+        }
+
+        $assignedInBatch = [];
+        $finalRefId = $rawRefId;
+        if ($rawRefId && $force) {
+            $finalRefId = $rename
+                ? $this->generateUniqueRefId($userId, $rawRefId, $assignedInBatch)
+                : $rawRefId; // user explicitly chose to keep duplicate
+        }
+
+        return DB::transaction(function () use ($request, $hasLabel, $finalRefId) {
             $firstVariantId = (int) ($request->items[0]['product_variant_id'] ?? 0) ?: null;
             $order = Order::create([
                 'user_id' => $request->user()->id,
                 'system_id' => $this->generateSystemId(), // temporary, updated after we have order.id
-                'ref_id' => $request->ref_id ?: null,
+                'ref_id' => $finalRefId,
                 'status' => Order::STATUS_NEW_ORDER,
                 'ship_type' => $hasLabel ? 'tiktok_ship' : 'seller_ship',
                 'shipping_label' => $hasLabel ? $request->shipping_label : null,
@@ -210,8 +261,14 @@ class OrderController extends Controller
             'tracking_id' => 'nullable|string',
             'shipping_cost' => 'nullable|numeric|min:0',
             'print_cost' => 'nullable|numeric|min:0',
-            'status' => 'nullable|integer|in:0,1,2,3,4,5,6',
+            'status' => 'nullable|integer|in:0,1,2,3,4,5,6,7',
         ]);
+
+        $user = $request->user();
+        if ($user && $user->hasRole('seller') && $request->filled('status')
+            && !in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
+            return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
+        }
 
         $data = $request->only('shipping_label', 'tracking_id', 'shipping_cost', 'print_cost', 'status');
 
@@ -339,7 +396,13 @@ class OrderController extends Controller
 
     public function updateStatus(Request $request, Order $order)
     {
-        $request->validate(['status' => 'required|integer|in:0,1,2,3,4,5,6']);
+        $request->validate(['status' => 'required|integer|in:0,1,2,3,4,5,6,7']);
+
+        $user = $request->user();
+        if ($user && $user->hasRole('seller')
+            && !in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
+            return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
+        }
 
         $data = ['status' => $request->status];
         if ($request->status == Order::STATUS_SHIPPED) {
@@ -355,8 +418,14 @@ class OrderController extends Controller
         $request->validate([
             'order_ids' => 'required|array|min:1',
             'order_ids.*' => 'exists:orders,id',
-            'status' => 'required|integer|in:0,1,2,3,4,5,6',
+            'status' => 'required|integer|in:0,1,2,3,4,5,6,7',
         ]);
+
+        $user = $request->user();
+        if ($user && $user->hasRole('seller')
+            && !in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
+            return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
+        }
 
         $data = ['status' => $request->status];
         if ($request->status == Order::STATUS_SHIPPED) {
@@ -472,8 +541,40 @@ class OrderController extends Controller
         $user = $request->user();
         $created = [];
         $errors = [];
+        $force = $request->boolean('force');
+        $rename = $request->boolean('rename');
 
-        return DB::transaction(function () use ($rows, $header, $user, &$created, &$errors) {
+        // Pre-scan for duplicate ref_ids (against DB or within the file itself)
+        $refIdIdx = array_search('ref_id', $header, true);
+        if ($refIdIdx !== false) {
+            $csvRefIds = [];
+            foreach ($rows as $row) {
+                if (!is_array($row) || count($row) <= $refIdIdx) continue;
+                $r = trim((string) ($row[$refIdIdx] ?? ''));
+                if ($r !== '') $csvRefIds[] = $r;
+            }
+            if (!empty($csvRefIds)) {
+                $dbDup = Order::where('user_id', $user->id)
+                    ->whereIn('ref_id', array_values(array_unique($csvRefIds)))
+                    ->pluck('ref_id')
+                    ->unique()
+                    ->values()
+                    ->all();
+                $counts = array_count_values($csvRefIds);
+                $inCsvDup = array_keys(array_filter($counts, fn($c) => $c > 1));
+                $allDup = array_values(array_unique(array_merge($dbDup, $inCsvDup)));
+                if (!empty($allDup) && !$force) {
+                    return response()->json([
+                        'message' => 'Duplicate ref_id detected',
+                        'duplicates' => $allDup,
+                    ], 409);
+                }
+            }
+        }
+
+        $assignedInBatch = [];
+
+        return DB::transaction(function () use ($rows, $header, $user, $force, $rename, &$assignedInBatch, &$created, &$errors) {
             foreach ($rows as $index => $row) {
                 $lineNum = $index + 2;
                 if (count($row) !== count($header)) {
@@ -537,10 +638,19 @@ class OrderController extends Controller
                     }
                 }
 
+                $rawRef = !empty($data['ref_id']) ? trim($data['ref_id']) : null;
+                $finalRef = $rawRef;
+                if ($rawRef !== null && $force && $rename) {
+                    $finalRef = $this->generateUniqueRefId($user->id, $rawRef, $assignedInBatch);
+                }
+                if ($finalRef !== null) {
+                    $assignedInBatch[$finalRef] = true;
+                }
+
                 $order = Order::create([
                     'user_id' => $user->id,
                     'system_id' => $this->generateSystemId(), // temporary
-                    'ref_id' => !empty($data['ref_id']) ? $data['ref_id'] : null,
+                    'ref_id' => $finalRef,
                     'status' => Order::STATUS_NEW_ORDER,
                     'ship_type' => $shipType,
                     'shipping_label' => $hasLabel ? $data['shipping_label'] : null,
@@ -721,12 +831,23 @@ class OrderController extends Controller
             'address.country' => $hasLabel ? 'nullable|string' : 'required|string',
         ]);
 
-        return DB::transaction(function () use ($request, $user, $hasLabel) {
+        $rawRefId = $request->ref_id ? trim($request->ref_id) : null;
+        if ($rawRefId) {
+            $exists = Order::where('user_id', $user->id)->where('ref_id', $rawRefId)->exists();
+            if ($exists) {
+                return response()->json([
+                    'message' => 'Duplicate ref_id',
+                    'duplicates' => [$rawRefId],
+                ], 409);
+            }
+        }
+
+        return DB::transaction(function () use ($request, $user, $hasLabel, $rawRefId) {
             $firstVariantId = (int) ($request->items[0]['product_variant_id'] ?? 0) ?: null;
             $order = Order::create([
                 'user_id' => $user->id,
                 'system_id' => $this->generateSystemId(), // temporary, updated after we have order.id
-                'ref_id' => $request->ref_id ?: null,
+                'ref_id' => $rawRefId,
                 'status' => Order::STATUS_NEW_ORDER,
                 'ship_type' => $hasLabel ? 'tiktok_ship' : 'seller_ship',
                 'shipping_label' => $hasLabel ? $request->shipping_label : null,
