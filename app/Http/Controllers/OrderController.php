@@ -165,7 +165,7 @@ class OrderController extends Controller
             if ($exists) {
                 return response()->json([
                     'message' => 'Duplicate ref_id',
-                    'duplicates' => [$rawRefId],
+                    'duplicates' => [(string) $rawRefId],
                 ], 409);
             }
         }
@@ -706,7 +706,9 @@ class OrderController extends Controller
         $force = $request->boolean('force');
         $rename = $request->boolean('rename');
 
-        // Pre-scan for duplicate ref_ids (against DB or within the file itself)
+        // Pre-scan for duplicate ref_ids against DB only. Multiple rows in the
+        // file sharing the same ref_id are now grouped into a single order
+        // (see processing pass below) — they are NOT duplicates.
         $refIdIdx = array_search('ref_id', $header, true);
         if ($refIdIdx !== false) {
             $csvRefIds = [];
@@ -722,13 +724,14 @@ class OrderController extends Controller
                     ->unique()
                     ->values()
                     ->all();
-                $counts = array_count_values($csvRefIds);
-                $inCsvDup = array_keys(array_filter($counts, fn($c) => $c > 1));
-                $allDup = array_values(array_unique(array_merge($dbDup, $inCsvDup)));
-                if (!empty($allDup) && !$force) {
+                if (!empty($dbDup) && !$force) {
+                    // Force string serialization. PHP auto-casts numeric strings to
+                    // int when they become array keys, and json_encode then emits
+                    // them unquoted — which loses precision in JavaScript for
+                    // 18-digit ref_ids (Number max safe is 16 digits).
                     return response()->json([
                         'message' => 'Duplicate ref_id detected',
-                        'duplicates' => $allDup,
+                        'duplicates' => array_map('strval', $dbDup),
                     ], 409);
                 }
             }
@@ -737,6 +740,11 @@ class OrderController extends Controller
         $assignedInBatch = [];
 
         return DB::transaction(function () use ($rows, $header, $user, $force, $rename, &$assignedInBatch, &$created, &$errors) {
+            // ref_id (after rename) → Order model already created in this batch.
+            // Rows sharing a ref_id append items to the same order instead of
+            // creating a new one.
+            $batchOrders = [];
+
             foreach ($rows as $index => $row) {
                 $lineNum = $index + 2;
                 if (count($row) !== count($header)) {
@@ -766,16 +774,18 @@ class OrderController extends Controller
                 $hasLabel = !empty($data['shipping_label']);
                 $hasAddress = !empty($data['first_name']) && !empty($data['address_1']) && !empty($data['city']) && !empty($data['zipcode']) && !empty($data['country']);
 
-                if (!$hasLabel && !$hasAddress) {
+                $rawRef = !empty($data['ref_id']) ? trim($data['ref_id']) : null;
+                $existingOrder = $rawRef !== null && isset($batchOrders[$rawRef]) ? $batchOrders[$rawRef] : null;
+
+                // Address/shipping is only required for the FIRST row in a group.
+                // Follow-up rows attach to the same order regardless of their
+                // address/label cells.
+                if (!$existingOrder && !$hasLabel && !$hasAddress) {
                     $errors[] = "Line {$lineNum}: must provide either shipping_label or full address (first_name, address_1, city, zipcode, country)";
                     continue;
                 }
 
-                $shipType = $hasLabel ? 'tiktok_ship' : 'seller_ship';
-
-                // Resolve accessory price: prefer accessory_code (filtered by user tier), fallback to accessory_item_id.
-                // If the line specified an accessory but it could not be resolved, skip the entire row — do NOT create
-                // an order with a missing/invalid accessory.
+                // Resolve accessory price (skip row entirely if invalid).
                 $accessoryItemId = null;
                 $accessoryUnitPrice = 0;
                 if (!empty($data['accessory_code'])) {
@@ -786,7 +796,7 @@ class OrderController extends Controller
                         $accessoryItemId = $accPrice->id;
                         $accessoryUnitPrice = (float)$accPrice->price;
                     } else {
-                        $errors[] = "Line {$lineNum}: accessory_code '{$data['accessory_code']}' not found for your tier (order not created)";
+                        $errors[] = "Line {$lineNum}: accessory_code '{$data['accessory_code']}' not found for your tier (row skipped)";
                         continue;
                     }
                 } elseif (!empty($data['accessory_item_id'])) {
@@ -795,42 +805,52 @@ class OrderController extends Controller
                         $accessoryItemId = $accPrice->id;
                         $accessoryUnitPrice = (float)$accPrice->price;
                     } else {
-                        $errors[] = "Line {$lineNum}: accessory_item_id not valid for your tier (order not created)";
+                        $errors[] = "Line {$lineNum}: accessory_item_id not valid for your tier (row skipped)";
                         continue;
                     }
                 }
 
-                $rawRef = !empty($data['ref_id']) ? trim($data['ref_id']) : null;
-                $finalRef = $rawRef;
-                if ($rawRef !== null && $force && $rename) {
-                    $finalRef = $this->generateUniqueRefId($user->id, $rawRef, $assignedInBatch);
-                }
-                if ($finalRef !== null) {
-                    $assignedInBatch[$finalRef] = true;
-                }
+                if ($existingOrder) {
+                    // Row joins an existing order in this batch — append item only.
+                    $order = $existingOrder;
+                } else {
+                    // First row for this ref_id (or row without ref_id) → create new order.
+                    $finalRef = $rawRef;
+                    if ($rawRef !== null && $force && $rename) {
+                        $finalRef = $this->generateUniqueRefId($user->id, $rawRef, $assignedInBatch);
+                    }
+                    if ($finalRef !== null) {
+                        $assignedInBatch[$finalRef] = true;
+                    }
 
-                $order = Order::create([
-                    'user_id' => $user->id,
-                    'system_id' => $this->generateSystemId(), // temporary
-                    'ref_id' => $finalRef,
-                    'status' => Order::STATUS_NEW_ORDER,
-                    'ship_type' => $shipType,
-                    'shipping_label' => $hasLabel ? $data['shipping_label'] : null,
-                ]);
-                $order->update(['system_id' => $this->buildSystemIdForOrder($order->id, $variantId)]);
-
-                if (!$hasLabel && $hasAddress) {
-                    Address::create([
-                        'order_id' => $order->id,
-                        'first_name' => $data['first_name'],
-                        'last_name' => $data['last_name'] ?? '',
-                        'address_1' => $data['address_1'],
-                        'address_2' => $data['address_2'] ?? null,
-                        'city' => $data['city'],
-                        'state' => $data['state'] ?? null,
-                        'zipcode' => $data['zipcode'],
-                        'country' => $data['country'],
+                    $order = Order::create([
+                        'user_id' => $user->id,
+                        'system_id' => $this->generateSystemId(), // temporary
+                        'ref_id' => $finalRef,
+                        'status' => Order::STATUS_NEW_ORDER,
+                        'ship_type' => $hasLabel ? 'tiktok_ship' : 'seller_ship',
+                        'shipping_label' => $hasLabel ? $data['shipping_label'] : null,
                     ]);
+                    $order->update(['system_id' => $this->buildSystemIdForOrder($order->id, $variantId)]);
+
+                    if (!$hasLabel && $hasAddress) {
+                        Address::create([
+                            'order_id' => $order->id,
+                            'first_name' => $data['first_name'],
+                            'last_name' => $data['last_name'] ?? '',
+                            'address_1' => $data['address_1'],
+                            'address_2' => $data['address_2'] ?? null,
+                            'city' => $data['city'],
+                            'state' => $data['state'] ?? null,
+                            'zipcode' => $data['zipcode'],
+                            'country' => $data['country'],
+                        ]);
+                    }
+
+                    if ($rawRef !== null) {
+                        $batchOrders[$rawRef] = $order;
+                    }
+                    $created[] = $order->system_id;
                 }
 
                 $price = $this->getVariantPrice($variantId, $user->tier_id);
@@ -846,7 +866,7 @@ class OrderController extends Controller
                     'quantity' => $quantity,
                 ]);
 
-                // Metas: meta_<key> columns → OrderItemMeta rows (skip empty)
+                // Metas: meta_<key> columns → OrderItemMeta rows (skip empty).
                 foreach (['front', 'back', 'left', 'right', 'neck', 'special'] as $metaKey) {
                     $col = 'meta_' . $metaKey;
                     if (!empty($data[$col])) {
@@ -858,14 +878,25 @@ class OrderController extends Controller
                     }
                 }
 
-                $linePrint = ($price + $accessoryUnitPrice) * $quantity;
-                $lineShipping = $this->computeOrderShipping($variantId, $user->tier_id, $hasLabel, $quantity);
+                // Recompute order totals across ALL items now in the order so a
+                // grouped order's total reflects every appended row.
+                $orderHasLabel = !empty($order->shipping_label);
+                $items = $order->items()->with('accessoryPrice')->get();
+                $totalQty = 0;
+                $totalPrint = 0;
+                foreach ($items as $it) {
+                    $itQty = max(1, (int) ($it->quantity ?? 1));
+                    $itAcc = $it->accessoryPrice ? (float) $it->accessoryPrice->price : 0;
+                    $totalPrint += ((float) $it->price + $itAcc) * $itQty;
+                    $totalQty += $itQty;
+                }
+                $firstItemVariantId = (int) ($items->first()->product_variant_id ?? $variantId);
+                $shippingCost = $this->computeOrderShipping($firstItemVariantId, $user->tier_id, $orderHasLabel, $totalQty);
                 $order->update([
-                    'print_cost' => $linePrint,
-                    'shipping_cost' => $lineShipping,
-                    'total_cost' => $linePrint + $lineShipping,
+                    'print_cost' => $totalPrint,
+                    'shipping_cost' => $shippingCost,
+                    'total_cost' => $totalPrint + $shippingCost,
                 ]);
-                $created[] = $order->system_id;
             }
 
             return response()->json([
@@ -999,7 +1030,7 @@ class OrderController extends Controller
             if ($exists) {
                 return response()->json([
                     'message' => 'Duplicate ref_id',
-                    'duplicates' => [$rawRefId],
+                    'duplicates' => [(string) $rawRefId],
                 ], 409);
             }
         }
