@@ -332,6 +332,31 @@ class OrderController extends Controller
         });
     }
 
+    public function bulkAssign(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || !$user->hasRole('admin')) {
+            return response()->json(['message' => 'Only admin can bulk assign orders'], 403);
+        }
+
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+            'user_id' => 'required|integer|exists:users,id',
+        ]);
+
+        $count = Order::whereIn('id', $request->order_ids)
+            ->update(['user_id' => $request->user_id]);
+
+        $target = \App\Models\User::find($request->user_id);
+
+        return response()->json([
+            'message' => "Assigned {$count} order(s) to {$target->name}",
+            'count' => $count,
+            'user_id' => $request->user_id,
+        ]);
+    }
+
     public function bulkSetProduction(Request $request)
     {
         $user = $request->user();

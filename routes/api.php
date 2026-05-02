@@ -48,6 +48,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-delete', [OrderController::class, 'bulkDestroy']);
     Route::post('/orders/bulk-re-production', [OrderController::class, 'bulkReProduction']);
     Route::post('/orders/bulk-set-production', [OrderController::class, 'bulkSetProduction']);
+    Route::post('/orders/bulk-assign', [OrderController::class, 'bulkAssign']);
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     Route::put('/orders/{order}', [OrderController::class, 'update']);
     Route::delete('/orders/{order}', [OrderController::class, 'destroy']);
