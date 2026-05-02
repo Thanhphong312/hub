@@ -108,14 +108,14 @@ class ConversionController extends Controller
     }
 
     /**
-     * Per-order accessory summary, e.g. "2W-2R-1N":
-     *   one segment per order item, "<quantity><letter>" where letter is the
-     *   first uppercase character of accessoryPrice.style (fallback to
-     *   accessory_code) or "N" when no accessory was selected.
+     * Per-order accessory summary, e.g. "5P-2W-1N":
+     *   quantities are aggregated by letter (first char of style or accessory_code,
+     *   "N" when no accessory). Items sharing the same letter are merged so a
+     *   long order doesn't produce a runaway "1P-1P-1P-1P-…" string.
      */
     private function computeAccessorySummary($order): string
     {
-        $parts = [];
+        $totals = []; // letter => total qty
         foreach ($order->items as $item) {
             $qty = max(1, (int) ($item->quantity ?? 1));
             $letter = 'N';
@@ -128,6 +128,11 @@ class ConversionController extends Controller
                     $letter = strtoupper(substr($code, 0, 1));
                 }
             }
+            $totals[$letter] = ($totals[$letter] ?? 0) + $qty;
+        }
+
+        $parts = [];
+        foreach ($totals as $letter => $qty) {
             $parts[] = "{$qty}{$letter}";
         }
         return implode('-', $parts);

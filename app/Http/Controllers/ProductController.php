@@ -89,13 +89,14 @@ class ProductController extends Controller
             'sku' => 'nullable|string|unique:product_variants,sku',
             'color' => 'nullable|string',
             'size' => 'nullable|string',
+            'paper_type' => 'nullable|string',
             'weight' => 'nullable|numeric',
             'length' => 'nullable|numeric',
             'width' => 'nullable|numeric',
             'height' => 'nullable|numeric',
         ]);
 
-        $variant = $product->variants()->create($request->only('sku', 'color', 'size', 'weight', 'length', 'width', 'height'));
+        $variant = $product->variants()->create($request->only('sku', 'color', 'size', 'paper_type', 'weight', 'length', 'width', 'height'));
         return response()->json(['message' => 'Variant created', 'variant' => $variant], 201);
     }
 
@@ -107,6 +108,7 @@ class ProductController extends Controller
             'variants.*.sku' => 'nullable|string|distinct|unique:product_variants,sku',
             'variants.*.color' => 'nullable|string',
             'variants.*.size' => 'nullable|string',
+            'variants.*.paper_type' => 'nullable|string',
             'variants.*.weight' => 'nullable|numeric',
             'variants.*.length' => 'nullable|numeric',
             'variants.*.width' => 'nullable|numeric',
@@ -126,7 +128,7 @@ class ProductController extends Controller
         $request->validate([
             'sku' => 'nullable|string|unique:product_variants,sku,' . $variant->id,
         ]);
-        $variant->update($request->only('sku', 'color', 'size', 'weight', 'length', 'width', 'height', 'status'));
+        $variant->update($request->only('sku', 'color', 'size', 'paper_type', 'weight', 'length', 'width', 'height', 'status'));
         return response()->json(['message' => 'Variant updated', 'variant' => $variant]);
     }
 
