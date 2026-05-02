@@ -77,6 +77,28 @@ class OrderController extends Controller
         if ($hideQr) {
             $orders->getCollection()->each(fn ($o) => $o->makeHidden('production'));
         }
+
+        // Flag duplicates by lookup against the cached `duplicate_ref_ids` table.
+        // The table is refreshed by the scheduled `orders:refresh-duplicates`
+        // command (every 5 min) and inline after bulk write paths so flags are
+        // close to real-time without recomputing on every list query.
+        $pageItems = $orders->getCollection();
+        $pageRefs = $pageItems->pluck('ref_id')->filter(fn ($r) => $r !== null && $r !== '')->unique()->values();
+        $pageUserIds = $pageItems->pluck('user_id')->unique()->values();
+        $dupSet = [];
+        if ($pageRefs->isNotEmpty() && $pageUserIds->isNotEmpty()) {
+            $dupRows = \DB::table('duplicate_ref_ids')
+                ->whereIn('user_id', $pageUserIds)
+                ->whereIn('ref_id', $pageRefs)
+                ->get(['user_id', 'ref_id']);
+            foreach ($dupRows as $r) {
+                $dupSet["{$r->user_id}|{$r->ref_id}"] = true;
+            }
+        }
+        $pageItems->each(function ($o) use ($dupSet) {
+            $o->is_duplicate_ref = $o->ref_id !== null && isset($dupSet["{$o->user_id}|{$o->ref_id}"]);
+        });
+
         return response()->json($orders);
     }
 
@@ -350,6 +372,8 @@ class OrderController extends Controller
 
         $target = \App\Models\User::find($request->user_id);
 
+        $this->refreshDuplicateRefIds();
+
         return response()->json([
             'message' => "Assigned {$count} order(s) to {$target->name}",
             'count' => $count,
@@ -401,9 +425,48 @@ class OrderController extends Controller
 
         $deleted = Order::whereIn('id', $request->order_ids)->delete();
 
+        $this->refreshDuplicateRefIds();
+
         return response()->json([
             'message' => "Deleted {$deleted} order(s)",
             'count' => $deleted,
+        ]);
+    }
+
+    /**
+     * Recompute the duplicate_ref_ids snapshot inline. Cheap (single grouped
+     * INSERT) — call after bulk write paths so the next /orders index sees
+     * fresh duplicate flags without waiting for the scheduled refresh.
+     */
+    private function refreshDuplicateRefIds(): void
+    {
+        \Illuminate\Support\Facades\DB::table('duplicate_ref_ids')->delete();
+        \Illuminate\Support\Facades\DB::statement("
+            INSERT INTO duplicate_ref_ids (user_id, ref_id, count, computed_at)
+            SELECT user_id, ref_id, COUNT(*) AS cnt, NOW()
+            FROM orders
+            WHERE ref_id IS NOT NULL AND ref_id != ''
+            GROUP BY user_id, ref_id
+            HAVING COUNT(*) > 1
+        ");
+    }
+
+    public function runDuplicateRefresh(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || !in_array($user->role?->slug, ['admin', 'support'])) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $started = microtime(true);
+        $this->refreshDuplicateRefIds();
+        $count = \Illuminate\Support\Facades\DB::table('duplicate_ref_ids')->count();
+        $ms = (int) ((microtime(true) - $started) * 1000);
+
+        return response()->json([
+            'message' => "Refreshed {$count} duplicate ref_id(s) in {$ms}ms",
+            'count' => $count,
+            'duration_ms' => $ms,
         ]);
     }
 
@@ -764,7 +827,7 @@ class OrderController extends Controller
 
         $assignedInBatch = [];
 
-        return DB::transaction(function () use ($rows, $header, $user, $force, $rename, &$assignedInBatch, &$created, &$errors) {
+        $response = DB::transaction(function () use ($rows, $header, $user, $force, $rename, &$assignedInBatch, &$created, &$errors) {
             // ref_id (after rename) → Order model already created in this batch.
             // Rows sharing a ref_id append items to the same order instead of
             // creating a new one.
@@ -932,6 +995,10 @@ class OrderController extends Controller
                 'errors' => $errors,
             ]);
         });
+
+        $this->refreshDuplicateRefIds();
+
+        return $response;
     }
 
     public function exportCsvTemplate()
