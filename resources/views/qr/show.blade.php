@@ -88,7 +88,7 @@
         </div>
     @endif
 
-    <div class="flex justify-between items-start mb-6">
+    <div class="flex justify-between items-start mb-4 gap-4 flex-wrap">
         <div>
             <h1 class="text-2xl font-bold text-neutral-800">Order {{ $order->system_id }}</h1>
             @if ($order->ref_id)
@@ -100,38 +100,42 @@
                 @if ($order->production)
                     <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded font-medium">Production</span>
                 @endif
-
-                <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="inline">
-                    @csrf
-                    <input type="hidden" name="status" value="shipped" />
-                    <button type="submit"
-                        @if ($order->status === \App\Models\Order::STATUS_SHIPPED) disabled @endif
-                        class="px-2 py-0.5 rounded font-medium border transition
-                               {{ $order->status === \App\Models\Order::STATUS_SHIPPED
-                                  ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
-                                  : 'bg-white text-green-700 border-green-300 hover:bg-green-50' }}">
-                        Mark Shipped
-                    </button>
-                </form>
-
-                <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="inline">
-                    @csrf
-                    <input type="hidden" name="status" value="onhold" />
-                    <button type="submit"
-                        @if ($order->status === \App\Models\Order::STATUS_ONHOLD) disabled @endif
-                        class="px-2 py-0.5 rounded font-medium border transition
-                               {{ $order->status === \App\Models\Order::STATUS_ONHOLD
-                                  ? 'bg-yellow-100 text-yellow-700 border-yellow-200 cursor-not-allowed opacity-60'
-                                  : 'bg-white text-yellow-700 border-yellow-300 hover:bg-yellow-50' }}">
-                        Mark On Hold
-                    </button>
-                </form>
             </div>
         </div>
-        <form method="POST" action="{{ url('/logout') }}">
-            @csrf
-            <button class="text-xs text-neutral-500 hover:text-red-500">Logout ({{ $user->name }})</button>
-        </form>
+
+        {{-- Primary action toolbar: ship buttons promoted out of the badge row --}}
+        <div class="flex items-center gap-3 flex-wrap">
+            <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="inline">
+                @csrf
+                <input type="hidden" name="status" value="shipped" />
+                <button type="submit"
+                    @if ($order->status === \App\Models\Order::STATUS_SHIPPED) disabled @endif
+                    class="px-5 py-2.5 rounded-lg font-bold text-base border-2 transition shadow-sm
+                           {{ $order->status === \App\Models\Order::STATUS_SHIPPED
+                              ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
+                              : 'bg-green-500 text-white border-green-600 hover:bg-green-600 hover:shadow-md' }}">
+                    ✓ Mark Shipped
+                </button>
+            </form>
+
+            <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="inline">
+                @csrf
+                <input type="hidden" name="status" value="onhold" />
+                <button type="submit"
+                    @if ($order->status === \App\Models\Order::STATUS_ONHOLD) disabled @endif
+                    class="px-5 py-2.5 rounded-lg font-bold text-base border-2 transition shadow-sm
+                           {{ $order->status === \App\Models\Order::STATUS_ONHOLD
+                              ? 'bg-yellow-100 text-yellow-700 border-yellow-200 cursor-not-allowed opacity-60'
+                              : 'bg-yellow-500 text-white border-yellow-600 hover:bg-yellow-600 hover:shadow-md' }}">
+                    ⏸ Mark On Hold
+                </button>
+            </form>
+
+            <form method="POST" action="{{ url('/logout') }}">
+                @csrf
+                <button class="text-xs text-neutral-500 hover:text-red-500 ml-2">Logout ({{ $user->name }})</button>
+            </form>
+        </div>
     </div>
 
     {{-- Top row: Order info + Address + Shipping label preview --}}
@@ -207,16 +211,31 @@
                                 <span class="text-neutral-500 font-normal">— {{ $variant->color }} / {{ $variant->size }}</span>
                             @endif
                         </div>
-                        <div class="text-xs text-neutral-500 mt-0.5 flex flex-wrap gap-2">
+                        <div class="text-xs text-neutral-500 mt-0.5 flex flex-wrap items-center gap-2">
                             @if ($variant?->sku)
                                 <span class="font-mono">SKU: {{ $variant->sku }}</span>
                             @endif
-                            <span>Type: {{ $item->order_type === 0 ? 'Greeting Card' : 'Pass Sleeve' }}</span>
                             <span>Qty: <span class="font-semibold text-neutral-700">{{ $qty }}</span></span>
                             @if ($item->accessoryPrice)
-                                <span class="text-neutral-700">
+                                @php
+                                    $style = trim((string) ($item->accessoryPrice->style ?? ''));
+                                    $styleColor = match (strtolower($style)) {
+                                        'pink' => 'bg-pink-100 text-pink-700 border border-pink-300',
+                                        'red' => 'bg-red-100 text-red-700 border border-red-300',
+                                        'white' => 'bg-white text-neutral-800 border border-neutral-400',
+                                        'brown' => 'bg-amber-100 text-amber-800 border border-amber-400',
+                                        'black' => 'bg-neutral-800 text-white border border-neutral-900',
+                                        'blue' => 'bg-blue-100 text-blue-700 border border-blue-300',
+                                        'green' => 'bg-green-100 text-green-700 border border-green-300',
+                                        'yellow' => 'bg-yellow-100 text-yellow-800 border border-yellow-400',
+                                        default => 'bg-neutral-100 text-neutral-700 border border-neutral-300',
+                                    };
+                                @endphp
+                                <span class="text-neutral-700 inline-flex items-center gap-1.5">
                                     Accessory: {{ $item->accessoryPrice->accessory?->name }}
-                                    @if ($item->accessoryPrice->style) / {{ $item->accessoryPrice->style }} @endif
+                                    @if ($style)
+                                        / <span class="px-2 py-0.5 rounded {{ $styleColor }} font-extrabold text-base uppercase tracking-wide">{{ $style }}</span>
+                                    @endif
                                     <span class="text-neutral-400">(+${{ $item->accessoryPrice->price }})</span>
                                 </span>
                             @endif
