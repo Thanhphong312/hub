@@ -451,22 +451,78 @@ class OrderController extends Controller
         ");
     }
 
-    public function runFetchTracking(Request $request)
+    public function pendingTracking(Request $request)
     {
         $user = $request->user();
         if (!$user || !in_array($user->role?->slug, ['admin', 'support'])) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $limit = max(1, min(200, (int) $request->get('limit', 50)));
-        $exitCode = \Artisan::call('orders:fetch-tracking', ['--limit' => $limit]);
-        $output = \Artisan::output();
+        $limit = max(1, min(500, (int) $request->get('limit', 200)));
 
-        return response()->json([
-            'message' => 'Tracking fetch completed',
-            'exit_code' => $exitCode,
-            'output' => $output,
-        ]);
+        $orders = Order::whereNull('tracking_id')
+            ->whereNotNull('shipping_label')
+            ->where('shipping_label', '!=', '')
+            ->orderBy('id', 'desc')
+            ->limit($limit)
+            ->get(['id', 'system_id', 'shipping_label']);
+
+        return response()->json(['data' => $orders, 'count' => $orders->count()]);
+    }
+
+    public function fetchTrackingOne(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if (!$user || !in_array($user->role?->slug, ['admin', 'support'])) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        if ($order->tracking_id) {
+            return response()->json(['message' => 'Already has tracking', 'tracking_id' => $order->tracking_id]);
+        }
+        if (empty($order->shipping_label)) {
+            return response()->json(['message' => 'No shipping_label'], 400);
+        }
+
+        try {
+            $response = \Illuminate\Support\Facades\Http::timeout(15)->post('https://carrier.pressify.us/track', [
+                'url' => $order->shipping_label,
+            ]);
+
+            if (!$response->ok()) {
+                return response()->json([
+                    'message' => 'Carrier responded HTTP ' . $response->status(),
+                    'body' => substr($response->body(), 0, 500),
+                ], 502);
+            }
+
+            $data = $response->json();
+            $tracking = $data['tracking_id']
+                ?? $data['tracking']
+                ?? $data['trackingNumber']
+                ?? ($data['data']['tracking_id'] ?? null);
+
+            if (!$tracking) {
+                return response()->json([
+                    'message' => 'No tracking in carrier response',
+                    'body' => $data,
+                ], 422);
+            }
+
+            $tracking = trim((string) $tracking);
+            $order->update(['tracking_id' => $tracking]);
+
+            return response()->json([
+                'message' => 'Tracking saved',
+                'tracking_id' => $tracking,
+                'order_id' => $order->id,
+                'system_id' => $order->system_id,
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     public function runDuplicateRefresh(Request $request)
