@@ -51,7 +51,8 @@ class GangsheetController extends Controller
 
     /**
      * Orders ready to be ganged: have at least one *_qr meta whose own
-     * production=0, and are themselves production=0.
+     * production=0, are themselves production=0, and have NOT been shipped yet
+     * (no point producing prints for a shipped order).
      */
     public function pendingOrders(Request $request)
     {
@@ -60,6 +61,7 @@ class GangsheetController extends Controller
             'items.productVariant.product:id,name,line_id',
         ])
             ->where('production', false)
+            ->where('status', '!=', Order::STATUS_SHIPPED)
             ->whereHas('items.metas', fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX)->where('production', false))
             ->orderBy('id', 'asc');
 

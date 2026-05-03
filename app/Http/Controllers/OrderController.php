@@ -451,6 +451,24 @@ class OrderController extends Controller
         ");
     }
 
+    public function runFetchTracking(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || !in_array($user->role?->slug, ['admin', 'support'])) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $limit = max(1, min(200, (int) $request->get('limit', 50)));
+        $exitCode = \Artisan::call('orders:fetch-tracking', ['--limit' => $limit]);
+        $output = \Artisan::output();
+
+        return response()->json([
+            'message' => 'Tracking fetch completed',
+            'exit_code' => $exitCode,
+            'output' => $output,
+        ]);
+    }
+
     public function runDuplicateRefresh(Request $request)
     {
         $user = $request->user();

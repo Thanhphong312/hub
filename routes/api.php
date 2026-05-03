@@ -50,6 +50,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-set-production', [OrderController::class, 'bulkSetProduction']);
     Route::post('/orders/bulk-assign', [OrderController::class, 'bulkAssign']);
     Route::post('/orders/refresh-duplicates', [OrderController::class, 'runDuplicateRefresh']);
+    Route::post('/orders/fetch-tracking', [OrderController::class, 'runFetchTracking']);
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     Route::put('/orders/{order}', [OrderController::class, 'update']);
     Route::delete('/orders/{order}', [OrderController::class, 'destroy']);
