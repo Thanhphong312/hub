@@ -27,8 +27,14 @@ class DashboardController extends Controller
             $query->whereDate('created_at', '<=', $request->date_to);
         }
 
-        $totalOrders = (clone $query)->count();
+        // Active query = excludes cancelled orders. All revenue/cost/per-day
+        // aggregates use this so cancelled orders don't inflate the numbers.
+        $activeQuery = (clone $query)->where('status', '!=', Order::STATUS_CANCELLED);
 
+        $totalOrders = (clone $activeQuery)->count();
+
+        // Status breakdown keeps every status (incl. cancelled) so admins can
+        // see how many were cancelled at a glance.
         $ordersByStatus = (clone $query)
             ->select('status', DB::raw('count(*) as count'))
             ->groupBy('status')
@@ -39,21 +45,21 @@ class DashboardController extends Controller
                 'count' => $count,
             ])->values();
 
-        $totalRevenue = (clone $query)->sum('total_cost');
-        $totalPaid = (clone $query)->sum('paid_cost');
+        $totalRevenue = (clone $activeQuery)->sum('total_cost');
+        $totalPaid = (clone $activeQuery)->sum('paid_cost');
         $totalUnpaid = $totalRevenue - $totalPaid;
-        $totalShippingCost = (clone $query)->sum('shipping_cost');
-        $totalPrintCost = (clone $query)->sum('print_cost');
+        $totalShippingCost = (clone $activeQuery)->sum('shipping_cost');
+        $totalPrintCost = (clone $activeQuery)->sum('print_cost');
 
-        // Orders per day (last 30 days)
-        $ordersPerDay = (clone $query)
+        // Orders per day (last 30 days) — exclude cancelled
+        $ordersPerDay = (clone $activeQuery)
             ->where('created_at', '>=', now()->subDays(30))
             ->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as count'), DB::raw('SUM(total_cost) as revenue'))
             ->groupBy('date')
             ->orderBy('date')
             ->get();
 
-        // Recent orders
+        // Recent orders — keep all so admin can see the full timeline.
         $recentOrders = (clone $query)
             ->with('user')
             ->orderBy('id', 'desc')
@@ -78,8 +84,9 @@ class DashboardController extends Controller
             $stats['total_sellers'] = User::whereHas('role', fn($q) => $q->where('slug', 'seller'))->count();
             $stats['total_wallet_balance'] = round(User::sum('wallet'), 2);
 
-            // Top sellers
-            $stats['top_sellers'] = Order::select('user_id', DB::raw('count(*) as order_count'), DB::raw('SUM(total_cost) as total_revenue'))
+            // Top sellers — exclude cancelled orders so revenue is realistic.
+            $stats['top_sellers'] = Order::where('status', '!=', Order::STATUS_CANCELLED)
+                ->select('user_id', DB::raw('count(*) as order_count'), DB::raw('SUM(total_cost) as total_revenue'))
                 ->groupBy('user_id')
                 ->orderByDesc('order_count')
                 ->limit(10)

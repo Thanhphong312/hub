@@ -154,7 +154,7 @@ class OrderController extends Controller
         $hasLabel = !empty($request->shipping_label);
 
         $request->validate([
-            'ref_id' => 'nullable|string',
+            'ref_id' => 'required|string',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
             'items.*.accessory_item_id' => 'nullable|exists:accessory_prices,id',
@@ -969,7 +969,11 @@ class OrderController extends Controller
                 $hasAddress = !empty($data['first_name']) && !empty($data['address_1']) && !empty($data['city']) && !empty($data['zipcode']) && !empty($data['country']);
 
                 $rawRef = !empty($data['ref_id']) ? trim($data['ref_id']) : null;
-                $existingOrder = $rawRef !== null && isset($batchOrders[$rawRef]) ? $batchOrders[$rawRef] : null;
+                if ($rawRef === null) {
+                    $errors[] = "Line {$lineNum}: ref_id is required";
+                    continue;
+                }
+                $existingOrder = isset($batchOrders[$rawRef]) ? $batchOrders[$rawRef] : null;
 
                 // Address/shipping is only required for the FIRST row in a group.
                 // Follow-up rows attach to the same order regardless of their
