@@ -470,6 +470,26 @@ class OrderController extends Controller
         return response()->json(['data' => $orders, 'count' => $orders->count()]);
     }
 
+    public function saveTracking(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if (!$user || !in_array($user->role?->slug, ['admin', 'support'])) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $request->validate([
+            'tracking_id' => 'required|string|max:255',
+        ]);
+
+        $order->update(['tracking_id' => trim($request->tracking_id)]);
+
+        return response()->json([
+            'message' => 'Tracking saved',
+            'tracking_id' => $order->fresh()->tracking_id,
+            'order_id' => $order->id,
+        ]);
+    }
+
     public function fetchTrackingOne(Request $request, Order $order)
     {
         $user = $request->user();
@@ -484,16 +504,28 @@ class OrderController extends Controller
             return response()->json(['message' => 'No shipping_label'], 400);
         }
 
+        // Drive /view URLs serve an HTML preview wrapper rather than the file
+        // itself, so carrier.pressify.us can't parse them as PDF. Convert any
+        // Drive share URL into the direct-download form before forwarding.
+        $labelUrl = $order->shipping_label;
+        if (preg_match('#(?:/file/d/|[?&]id=)([a-zA-Z0-9_-]+)#', $labelUrl, $m)) {
+            $labelUrl = "https://drive.google.com/uc?export=download&id={$m[1]}";
+        }
+
         try {
             $response = \Illuminate\Support\Facades\Http::timeout(15)->post('https://carrier.pressify.us/track', [
-                'url' => $order->shipping_label,
+                'url' => $labelUrl,
             ]);
 
             if (!$response->ok()) {
+                // Use 422 (not 502) so web servers don't replace our JSON body
+                // with their own HTML error page — frontend needs the upstream
+                // message to know whether to retry or skip the order.
                 return response()->json([
                     'message' => 'Carrier responded HTTP ' . $response->status(),
                     'body' => substr($response->body(), 0, 500),
-                ], 502);
+                    'upstream_status' => $response->status(),
+                ], 422);
             }
 
             $data = $response->json();
@@ -521,7 +553,7 @@ class OrderController extends Controller
         } catch (\Throwable $e) {
             return response()->json([
                 'message' => $e->getMessage(),
-            ], 500);
+            ], 422);
         }
     }
 

@@ -52,6 +52,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/refresh-duplicates', [OrderController::class, 'runDuplicateRefresh']);
     Route::get('/orders/pending-tracking', [OrderController::class, 'pendingTracking']);
     Route::post('/orders/{order}/fetch-tracking', [OrderController::class, 'fetchTrackingOne']);
+    Route::post('/orders/{order}/save-tracking', [OrderController::class, 'saveTracking']);
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     Route::put('/orders/{order}', [OrderController::class, 'update']);
     Route::delete('/orders/{order}', [OrderController::class, 'destroy']);
