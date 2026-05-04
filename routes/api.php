@@ -59,6 +59,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
     Route::post('/orders/{order}/pay', [OrderController::class, 'pay']);
     Route::post('/orders/{order}/reconvert', [OrderController::class, 'reconvert']);
+    Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
 
     // Products (read for all)
     Route::get('/products', [ProductController::class, 'index']);

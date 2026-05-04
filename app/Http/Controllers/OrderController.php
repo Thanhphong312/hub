@@ -624,6 +624,82 @@ class OrderController extends Controller
      * the next time it polls. Also resets the order's production flag so it
      * can be re-ganged. Allowed for the order's owner, admin, or support.
      */
+    public function updateItemMetas(Request $request, OrderItem $item)
+    {
+        $user = $request->user();
+        $isStaff = $user?->role && in_array($user->role->slug, ['admin', 'support']);
+        $isOwner = $item->order && $item->order->user_id === $user?->id;
+        if (!$isStaff && !$isOwner) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $sourceKeys = ['front', 'back', 'left', 'right', 'neck', 'special'];
+
+        $request->validate([
+            'metas' => 'required|array|min:1',
+            'metas.*.key' => ['required', 'string', \Illuminate\Validation\Rule::in($sourceKeys)],
+            'metas.*.value' => 'nullable|string',
+        ]);
+
+        return DB::transaction(function () use ($request, $item, $sourceKeys) {
+            $changedKeys = [];
+            foreach ($request->metas as $m) {
+                $key = $m['key'];
+                $value = $m['value'] ?? null;
+
+                $existing = OrderItemMeta::where('order_item_id', $item->id)
+                    ->where('key', $key)
+                    ->first();
+
+                $oldValue = $existing?->value;
+                if ($oldValue === $value) continue; // skip no-op
+
+                if ($existing) {
+                    if ($value === null || $value === '') {
+                        $existing->delete();
+                    } else {
+                        $existing->update(['value' => $value, 'production' => false]);
+                    }
+                } elseif ($value !== null && $value !== '') {
+                    OrderItemMeta::create([
+                        'order_item_id' => $item->id,
+                        'key' => $key,
+                        'value' => $value,
+                        'production' => false,
+                    ]);
+                }
+                $changedKeys[] = $key;
+            }
+
+            if (!empty($changedKeys)) {
+                // Drop the corresponding _qr metas so the converter regenerates
+                // them from the new source URLs.
+                $qrPattern = '_qr(_[0-9]+)?$';
+                $deleted = OrderItemMeta::where('order_item_id', $item->id)
+                    ->where(function ($q) use ($changedKeys, $qrPattern) {
+                        foreach ($changedKeys as $k) {
+                            $q->orWhere('key', 'regexp', '^' . $k . $qrPattern);
+                        }
+                    })
+                    ->delete();
+
+                // Reset production flags so the order re-enters the gangsheet pipeline.
+                $item->order->update(['production' => false]);
+                OrderItemMeta::where('order_item_id', $item->id)
+                    ->where('production', true)
+                    ->update(['production' => false]);
+
+                return response()->json([
+                    'message' => "Updated " . count($changedKeys) . " meta(s); removed {$deleted} _qr meta(s) for regeneration",
+                    'changed_keys' => $changedKeys,
+                    'deleted_qr' => $deleted,
+                ]);
+            }
+
+            return response()->json(['message' => 'No changes', 'changed_keys' => []]);
+        });
+    }
+
     public function reconvert(Request $request, Order $order)
     {
         $user = $request->user();
