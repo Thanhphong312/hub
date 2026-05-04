@@ -111,9 +111,16 @@
 
     {{-- Top row: Order info + Address + Shipping label preview --}}
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+        @php
+            $totalQty = $order->items->sum(fn($i) => max(1, (int) ($i->quantity ?? 1)));
+        @endphp
         <div class="bg-white rounded-xl border border-neutral-200 p-4 shadow-sm space-y-1.5 text-sm">
             <h2 class="font-semibold text-neutral-700 mb-2 text-sm">Order info</h2>
             <div class="flex justify-between"><span class="text-neutral-500">Tracking</span><span class="font-medium">{{ $order->tracking_id ?? '-' }}</span></div>
+            <div class="flex justify-between items-center bg-orange-50 -mx-4 px-4 py-2 my-1 border-y border-orange-100">
+                <span class="text-orange-700 text-sm font-semibold">Total Qty</span>
+                <span class="font-extrabold text-orange-600 text-3xl leading-none">{{ $totalQty }}</span>
+            </div>
             <div class="flex justify-between"><span class="text-neutral-500">Print Cost</span><span class="font-medium">${{ $order->print_cost }}</span></div>
             <div class="flex justify-between"><span class="text-neutral-500">Shipping Cost</span><span class="font-medium">${{ $order->shipping_cost }}</span></div>
             <div class="flex justify-between border-t border-neutral-100 pt-1.5"><span class="text-neutral-500">Total</span><span class="font-semibold text-neutral-800">${{ $order->total_cost }}</span></div>
