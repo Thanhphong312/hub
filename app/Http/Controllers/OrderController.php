@@ -1236,6 +1236,10 @@ class OrderController extends Controller
             $query->where('user_id', $request->user()->id);
         }
 
+        // Mirror /orders index filters so export reflects what admin is seeing.
+        if ($request->has('user_id') && !$request->user()->hasRole('seller')) {
+            $query->where('user_id', $request->user_id);
+        }
         if ($request->has('status')) {
             $query->where('status', $request->status);
         }
@@ -1244,6 +1248,25 @@ class OrderController extends Controller
         }
         if ($request->has('date_to')) {
             $query->whereDate('created_at', '<=', $request->date_to);
+        }
+        if ($request->filled('ref_id')) {
+            $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
+        }
+        if ($request->filled('system_id')) {
+            $query->where('system_id', 'like', '%' . $request->system_id . '%');
+        }
+        if ($request->filled('ref_ids')) {
+            $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
+            $list = array_values(array_unique(array_map('trim', $list)));
+            if (!empty($list)) {
+                $query->whereIn('ref_id', $list);
+            }
+        }
+        if ($request->filled('order_ids')) {
+            $ids = is_array($request->order_ids)
+                ? $request->order_ids
+                : preg_split('/[\s,]+/', (string) $request->order_ids, -1, PREG_SPLIT_NO_EMPTY);
+            $query->whereIn('id', array_map('intval', $ids));
         }
 
         $orders = $query->orderBy('id', 'desc')->get();
