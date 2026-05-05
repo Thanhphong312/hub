@@ -35,4 +35,14 @@ return [
         ],
     ],
 
+    'vnpay' => [
+        'tmn_code'    => env('VNPAY_TMN_CODE', ''),
+        'hash_secret' => env('VNPAY_HASH_SECRET', ''),
+        'url'         => env('VNPAY_URL', 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html'),
+        'return_url'  => env('VNPAY_RETURN_URL', 'https://bullstart.us/wallet/vnpay/return'),
+        // VND per 1 USD (e.g. 25500). Adjust per environment.
+        'rate'        => (float) env('VND_TO_USD_RATE', 25500),
+        'min_vnd'     => (int) env('VNPAY_MIN_VND', 50000),
+    ],
+
 ];

@@ -45,9 +45,19 @@ class OrderController extends Controller
             $query->where('ship_type', $request->ship_type);
         }
 
-        // Search by ref_id
-        if ($request->has('ref_id')) {
+        // Search by ref_id — single substring match.
+        if ($request->filled('ref_id')) {
             $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
+        }
+
+        // Search by ref_ids — list mode (newline / comma separated, exact match).
+        // Used by the admin "list paste" search to look up many TikTok refs at once.
+        if ($request->filled('ref_ids')) {
+            $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
+            $list = array_values(array_unique(array_map('trim', $list)));
+            if (!empty($list)) {
+                $query->whereIn('ref_id', $list);
+            }
         }
 
         // Search by system_id

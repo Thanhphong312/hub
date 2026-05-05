@@ -6,11 +6,12 @@ use Illuminate\Database\Eloquent\Model;
 
 class WalletTransaction extends Model
 {
-    protected $fillable = ['user_id', 'order_id', 'order_system_id', 'type', 'status', 'method', 'transaction_id', 'amount', 'balance_before', 'balance_after', 'note'];
+    protected $fillable = ['user_id', 'order_id', 'order_system_id', 'type', 'status', 'method', 'transaction_id', 'amount', 'vnd_amount', 'exchange_rate', 'balance_before', 'balance_after', 'note'];
 
     const METHOD_PAYPAL = 'paypal';
     const METHOD_PINGPONG = 'pingpong';
-    const METHODS = [self::METHOD_PAYPAL, self::METHOD_PINGPONG];
+    const METHOD_VNPAY = 'vnpay';
+    const METHODS = [self::METHOD_PAYPAL, self::METHOD_PINGPONG, self::METHOD_VNPAY];
 
     const STATUS_PENDING = 'pending';
     const STATUS_APPROVED = 'approved';

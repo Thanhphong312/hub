@@ -105,6 +105,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/gangsheets/{gangsheet}', [GangsheetController::class, 'destroy']);
     });
 
+    // VNPay (authenticated — seller initiates a deposit)
+    Route::get('/wallet/vnpay/rate', [\App\Http\Controllers\VnpayController::class, 'rate']);
+    Route::post('/wallet/vnpay/create', [\App\Http\Controllers\VnpayController::class, 'create']);
+
     // Wallet
     Route::get('/wallet/balance', [WalletController::class, 'balance']);
     Route::get('/wallet/transactions', [WalletController::class, 'transactions']);

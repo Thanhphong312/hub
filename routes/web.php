@@ -1,8 +1,13 @@
 <?php
 
+use App\Http\Controllers\VnpayController;
 use App\Http\Controllers\Web\QrController;
 use App\Http\Controllers\Web\WebAuthController;
 use Illuminate\Support\Facades\Route;
+
+// VNPay public endpoints — no auth (VNPay calls these without a session).
+Route::any('/wallet/vnpay/ipn', [VnpayController::class, 'ipn']);
+Route::get('/wallet/vnpay/return', [VnpayController::class, 'return'])->name('vnpay.return');
 
 Route::get('/', function () {
     return auth()->check()
