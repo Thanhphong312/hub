@@ -1374,16 +1374,20 @@ class OrderController extends Controller
 
         $callback = function () use ($orders) {
             $file = fopen('php://output', 'w');
-            fputcsv($file, ['system_id', 'ref_id', 'status', 'ship_type', 'tracking_id', 'print_cost', 'shipping_cost', 'total_cost', 'paid_cost', 'first_name', 'last_name', 'address_1', 'city', 'state', 'zipcode', 'country', 'created_at']);
+            // BOM so Excel reads UTF-8 correctly (vietnamese names in addresses).
+            fwrite($file, "\xEF\xBB\xBF");
+            fputcsv($file, ['system_id', 'ref_id', 'status', 'ship_type', 'tracking_id', 'total_quantity', 'print_cost', 'shipping_cost', 'total_cost', 'paid_cost', 'first_name', 'last_name', 'address_1', 'city', 'state', 'zipcode', 'country', 'created_at']);
 
             foreach ($orders as $order) {
                 $addr = $order->address;
+                $totalQty = $order->items->sum(fn($i) => max(1, (int) ($i->quantity ?? 1)));
                 fputcsv($file, [
                     $order->system_id,
                     $order->ref_id,
                     Order::STATUS_MAP[$order->status] ?? 'unknown',
                     $order->ship_type,
                     $order->tracking_id,
+                    $totalQty,
                     $order->print_cost,
                     $order->shipping_cost,
                     $order->total_cost,
