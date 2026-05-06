@@ -364,6 +364,107 @@ class OrderController extends Controller
         });
     }
 
+    public function bulkMergeDuplicates(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || !$user->hasRole('admin')) {
+            return response()->json(['message' => 'Only admin can merge orders'], 403);
+        }
+
+        $request->validate([
+            'order_ids' => 'required|array|min:2',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        $orders = Order::with('items.accessoryPrice')
+            ->whereIn('id', $request->order_ids)
+            ->whereNotNull('ref_id')
+            ->get();
+
+        if ($orders->count() < 2) {
+            return response()->json(['message' => 'Need at least 2 orders with ref_id to merge'], 400);
+        }
+
+        // Group selected orders by (user_id, ref_id). Only groups of size >= 2 merge.
+        $groups = $orders->groupBy(fn($o) => $o->user_id . '|' . $o->ref_id)
+            ->filter(fn($g) => $g->count() >= 2);
+
+        if ($groups->isEmpty()) {
+            return response()->json(['message' => 'No duplicate ref_id groups in the selection'], 400);
+        }
+
+        $merged = 0;
+        $deleted = 0;
+        $details = [];
+
+        DB::transaction(function () use ($groups, &$merged, &$deleted, &$details) {
+            foreach ($groups as $key => $group) {
+                // Winner = newest (highest id). Losers = the rest.
+                $sorted  = $group->sortByDesc('id')->values();
+                $winner  = $sorted->first();
+                $losers  = $sorted->slice(1);
+                $loserIds = $losers->pluck('id')->all();
+
+                // 1. Move OrderItems from losers to winner.
+                OrderItem::whereIn('order_id', $loserIds)->update(['order_id' => $winner->id]);
+
+                // 2. Re-link historical wallet_transactions so paid/refund history follows the winner.
+                \App\Models\WalletTransaction::whereIn('order_id', $loserIds)->update(['order_id' => $winner->id]);
+
+                // 3. Sum paid_cost across the group → winner inherits total payment.
+                $totalPaid = $group->sum('paid_cost');
+
+                // 4. Drop loser address rows + the loser orders themselves.
+                Address::whereIn('order_id', $loserIds)->delete();
+                $deleted += Order::whereIn('id', $loserIds)->delete();
+
+                // 5. Recompute winner totals from the merged items.
+                $winner->load('items.accessoryPrice', 'user');
+                $totalQty = 0;
+                $totalPrint = 0;
+                foreach ($winner->items as $it) {
+                    $qty   = max(1, (int) ($it->quantity ?? 1));
+                    $acc   = $it->accessoryPrice ? (float) $it->accessoryPrice->price : 0;
+                    $totalPrint += ((float) $it->price + $acc) * $qty;
+                    $totalQty   += $qty;
+                }
+                $hasLabel = !empty($winner->shipping_label);
+                $firstVariantId = (int) ($winner->items->first()?->product_variant_id ?? 0);
+                $shippingCost = $firstVariantId
+                    ? $this->computeOrderShipping($firstVariantId, $winner->user?->tier_id, $hasLabel, $totalQty)
+                    : (float) $winner->shipping_cost;
+
+                $winner->update([
+                    'print_cost'    => $totalPrint,
+                    'shipping_cost' => $shippingCost,
+                    'total_cost'    => $totalPrint + $shippingCost,
+                    'paid_cost'     => $totalPaid,
+                ]);
+
+                $merged++;
+                $details[] = [
+                    'ref_id'         => $winner->ref_id,
+                    'winner_id'      => $winner->id,
+                    'winner_system'  => $winner->system_id,
+                    'merged_count'   => $losers->count(),
+                    'loser_ids'      => $loserIds,
+                    'item_count'     => $winner->items->count(),
+                    'total_cost'     => $totalPrint + $shippingCost,
+                ];
+            }
+        });
+
+        // Duplicate snapshot is now stale.
+        $this->refreshDuplicateRefIds();
+
+        return response()->json([
+            'message' => "Merged {$merged} group(s); deleted {$deleted} duplicate order(s)",
+            'merged_groups' => $merged,
+            'deleted_orders' => $deleted,
+            'details' => $details,
+        ]);
+    }
+
     public function bulkAssign(Request $request)
     {
         $user = $request->user();
