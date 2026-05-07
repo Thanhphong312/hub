@@ -1411,6 +1411,115 @@ class OrderController extends Controller
         ]);
     }
 
+    /**
+     * Public API (X-API-KEY): list products + variants with the API user's
+     * tier prices. External systems use this to know which SKUs they can
+     * pass to POST /api/fulfill and what each variant costs.
+     */
+    public function productsByApiKey(Request $request)
+    {
+        $user = $request->get('api_user');
+        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+        $tierId = $user->tier_id;
+
+        $products = \App\Models\Product::with([
+            'variants' => fn ($q) => $q->where('status', 1),
+            'variants.prices' => fn ($q) => $q->where('tier_id', $tierId),
+        ])->where('status', 1)->get();
+
+        // Flatten variant prices into a {key => price} map per variant for easier consumption.
+        $products->each(function ($p) {
+            $p->variants->each(function ($v) {
+                $v->price_map = $v->prices->mapWithKeys(fn ($p) => [$p->key => (float) $p->price]);
+                $v->makeHidden('prices');
+            });
+        });
+
+        return response()->json([
+            'tier_id' => $tierId,
+            'data' => $products,
+        ]);
+    }
+
+    /**
+     * Public API: list accessories + tier-scoped prices. Returns the
+     * accessory_code values the seller can pass when creating orders via
+     * POST /api/fulfill.
+     */
+    public function accessoriesByApiKey(Request $request)
+    {
+        $user = $request->get('api_user');
+        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+        $tierId = $user->tier_id;
+
+        $rows = \App\Models\AccessoryPrice::with('accessory:id,name')
+            ->where('tier_id', $tierId)
+            ->get(['id', 'accessory_id', 'tier_id', 'style', 'accessory_code', 'price']);
+
+        return response()->json([
+            'tier_id' => $tierId,
+            'data' => $rows,
+        ]);
+    }
+
+    /**
+     * Public API: list orders for the API key's user. Supports the same
+     * filters as the desktop app (status, ref_id substring, ref_ids list,
+     * system_id substring, date range, pagination).
+     */
+    public function indexByApiKey(Request $request)
+    {
+        $user = $request->get('api_user');
+        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+
+        $query = Order::with(['items.metas', 'items.productVariant.product', 'items.accessoryPrice', 'address'])
+            ->where('user_id', $user->id);
+
+        if ($request->filled('status'))    $query->where('status', $request->status);
+        if ($request->filled('ref_id'))    $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
+        if ($request->filled('system_id')) $query->where('system_id', 'like', '%' . $request->system_id . '%');
+        if ($request->filled('tracking_id')) $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
+        if ($request->filled('date_from')) $query->whereDate('created_at', '>=', $request->date_from);
+        if ($request->filled('date_to'))   $query->whereDate('created_at', '<=', $request->date_to);
+        if ($request->filled('ref_ids')) {
+            $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
+            $list = array_values(array_unique(array_map('trim', $list)));
+            if (!empty($list)) $query->whereIn('ref_id', $list);
+        }
+
+        $perPage = min(200, max(1, (int) $request->get('per_page', 50)));
+        return response()->json($query->orderBy('id', 'desc')->paginate($perPage));
+    }
+
+    /**
+     * Public API: show a single order belonging to the API key's user.
+     * Looks up by system_id first, then ref_id (so external sellers can call
+     * either GET /api/fulfill/PS_C123 or GET /api/fulfill/MY-CUSTOM-REF).
+     */
+    public function showByApiKey(Request $request, string $idOrRef)
+    {
+        $user = $request->get('api_user');
+        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+
+        $order = Order::with([
+            'items.metas',
+            'items.productVariant.product',
+            'items.accessoryPrice.accessory',
+            'address',
+        ])
+        ->where('user_id', $user->id)
+        ->where(function ($q) use ($idOrRef) {
+            $q->where('system_id', $idOrRef)->orWhere('ref_id', $idOrRef);
+        })
+        ->first();
+
+        if (!$order) {
+            return response()->json(['message' => 'Order not found'], 404);
+        }
+
+        return response()->json(['order' => $order]);
+    }
+
     public function fulfillByApiKey(Request $request)
     {
         $user = $request->get('api_user');

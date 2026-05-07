@@ -16,8 +16,16 @@ use Illuminate\Support\Facades\Route;
 // Public
 Route::post('/login', [AuthController::class, 'login']);
 
-// Fulfill via API key (for sellers to POST orders externally)
-Route::post('/fulfill', [OrderController::class, 'fulfillByApiKey'])->middleware(CheckApiKey::class);
+// Public API for external sellers (header X-API-KEY: bsk_...).
+Route::middleware(CheckApiKey::class)->group(function () {
+    // Orders
+    Route::post('/fulfill', [OrderController::class, 'fulfillByApiKey']);
+    Route::get('/fulfill', [OrderController::class, 'indexByApiKey']);
+    Route::get('/fulfill/{idOrRef}', [OrderController::class, 'showByApiKey']);
+    // Catalog (tier-scoped)
+    Route::get('/catalog/products', [OrderController::class, 'productsByApiKey']);
+    Route::get('/catalog/accessories', [OrderController::class, 'accessoriesByApiKey']);
+});
 
 // Authenticated routes
 Route::middleware('auth:sanctum')->group(function () {

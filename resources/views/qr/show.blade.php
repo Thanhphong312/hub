@@ -148,37 +148,139 @@
             <div class="bg-white rounded-xl border border-neutral-200 p-4 shadow-sm text-sm">
                 <h2 class="font-semibold text-neutral-700 mb-2 text-sm">Shipping label</h2>
                 <a href="{{ $order->shipping_label }}" target="_blank" rel="noreferrer" class="block">
-                    <img src="{{ $driveThumb($order->shipping_label, 'w600') }}" alt="shipping label" class="w-full h-40 object-contain bg-neutral-50 rounded border border-neutral-200" onerror="this.style.display='none'" />
+                    <img src="{{ route('qr.label-image', ['systemId' => $order->system_id]) }}"
+                        alt="shipping label"
+                        class="w-full h-40 object-contain bg-neutral-50 rounded border border-neutral-200"
+                        onerror="this.onerror=null; this.src='{{ $driveThumb($order->shipping_label, 'w600') }}';" />
                 </a>
                 <p class="text-[10px] text-neutral-400 mt-1 truncate mb-3">{{ $order->shipping_label }}</p>
 
                 {{-- Ship action buttons next to the label for one-click marking after print --}}
-                <div class="flex gap-2 pt-3 border-t border-neutral-100">
-                    <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="flex-1">
-                        @csrf
-                        <input type="hidden" name="status" value="shipped" />
-                        <button type="submit"
-                            @if ($order->status === \App\Models\Order::STATUS_SHIPPED) disabled @endif
-                            class="w-full px-4 py-2.5 rounded-lg font-bold text-sm border-2 transition shadow-sm
-                                   {{ $order->status === \App\Models\Order::STATUS_SHIPPED
-                                      ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
-                                      : 'bg-green-500 text-white border-green-600 hover:bg-green-600 hover:shadow-md' }}">
-                            ✓ Mark Shipped
-                        </button>
-                    </form>
+                <div class="flex gap-2 pt-3 border-t border-neutral-100" data-system-id="{{ $order->system_id }}">
+                    @php
+                        $isShipped = $order->status === \App\Models\Order::STATUS_SHIPPED;
+                        $isOnHold = $order->status === \App\Models\Order::STATUS_ONHOLD;
+                    @endphp
+                    <button type="button"
+                        id="shipPrintBtn"
+                        @if ($isShipped) disabled @endif
+                        data-image-url="{{ route('qr.label-image', ['systemId' => $order->system_id]) }}"
+                        data-status-url="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}"
+                        class="flex-1 px-4 py-2.5 rounded-lg font-bold text-sm border-2 transition shadow-sm
+                               {{ $isShipped
+                                  ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
+                                  : 'bg-green-500 text-white border-green-600 hover:bg-green-600 hover:shadow-md' }}">
+                        ✓ {{ $isShipped ? 'Shipped' : 'Ship & Print' }}
+                    </button>
+                    <button type="button"
+                        id="printOnlyBtn"
+                        data-image-url="{{ route('qr.label-image', ['systemId' => $order->system_id]) }}"
+                        class="flex-1 px-4 py-2.5 rounded-lg font-bold text-sm border-2 transition shadow-sm
+                               bg-white text-blue-600 border-blue-300 hover:bg-blue-50 hover:border-blue-400 hover:shadow-md">
+                        🖨 Print Label
+                    </button>
                     <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="flex-1">
                         @csrf
                         <input type="hidden" name="status" value="onhold" />
                         <button type="submit"
-                            @if ($order->status === \App\Models\Order::STATUS_ONHOLD) disabled @endif
+                            @if ($isOnHold) disabled @endif
                             class="w-full px-4 py-2.5 rounded-lg font-bold text-sm border-2 transition shadow-sm
-                                   {{ $order->status === \App\Models\Order::STATUS_ONHOLD
+                                   {{ $isOnHold
                                       ? 'bg-yellow-100 text-yellow-700 border-yellow-200 cursor-not-allowed opacity-60'
                                       : 'bg-yellow-500 text-white border-yellow-600 hover:bg-yellow-600 hover:shadow-md' }}">
                             ⏸ Mark On Hold
                         </button>
                     </form>
                 </div>
+
+                <script>
+                    (function () {
+                        const shipBtn = document.getElementById('shipPrintBtn');
+                        const printBtn = document.getElementById('printOnlyBtn');
+                        if ((!shipBtn || shipBtn.dataset.bound === '1') && (!printBtn || printBtn.dataset.bound === '1')) return;
+
+                        const printLabel = (imageUrl) => {
+                            // Reuse a single hidden iframe so repeated clicks don't pile up.
+                            let iframe = document.getElementById('hiddenPrintFrame');
+                            if (iframe) iframe.remove();
+                            iframe = document.createElement('iframe');
+                            iframe.id = 'hiddenPrintFrame';
+                            iframe.setAttribute('aria-hidden', 'true');
+                            iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+                            document.body.appendChild(iframe);
+
+                            iframe.addEventListener('load', () => {
+                                // The iframe document is the proxied label (image or PDF). Wait
+                                // one tick so the browser finishes laying out the image, then
+                                // print the iframe — this opens the native print dialog (Ctrl+P)
+                                // on the current tab without spawning a new window.
+                                setTimeout(() => {
+                                    try {
+                                        iframe.contentWindow.focus();
+                                        iframe.contentWindow.print();
+                                    } catch (e) {
+                                        console.error('Print failed', e);
+                                    }
+                                }, 200);
+
+                                // Clean up the iframe once the user dismisses the print dialog.
+                                try {
+                                    iframe.contentWindow.addEventListener('afterprint', () => {
+                                        setTimeout(() => iframe.remove(), 200);
+                                    });
+                                } catch (e) { /* same-origin, should not throw */ }
+                            }, { once: true });
+
+                            // Cache-bust so the proxy serves a fresh stream each click.
+                            iframe.src = imageUrl + (imageUrl.includes('?') ? '&' : '?') + '_=' + Date.now();
+                        };
+
+                        if (printBtn && printBtn.dataset.bound !== '1') {
+                            printBtn.dataset.bound = '1';
+                            printBtn.addEventListener('click', () => printLabel(printBtn.dataset.imageUrl));
+                        }
+
+                        if (shipBtn && shipBtn.dataset.bound !== '1') {
+                            shipBtn.dataset.bound = '1';
+                            shipBtn.addEventListener('click', async () => {
+                                if (shipBtn.disabled) return;
+
+                                // Trigger Ctrl+P on the current page via hidden iframe.
+                                printLabel(shipBtn.dataset.imageUrl);
+
+                                shipBtn.disabled = true;
+                                const orig = shipBtn.innerHTML;
+                                shipBtn.innerHTML = '… marking shipped';
+
+                                try {
+                                    const csrf = document.querySelector('meta[name="csrf-token"]')?.content
+                                        || document.querySelector('input[name="_token"]')?.value;
+
+                                    const res = await fetch(shipBtn.dataset.statusUrl, {
+                                        method: 'POST',
+                                        credentials: 'same-origin',
+                                        headers: {
+                                            'X-Requested-With': 'XMLHttpRequest',
+                                            'Accept': 'application/json',
+                                            'Content-Type': 'application/x-www-form-urlencoded',
+                                            'X-CSRF-TOKEN': csrf || '',
+                                        },
+                                        body: 'status=shipped&_token=' + encodeURIComponent(csrf || ''),
+                                    });
+                                    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+                                    shipBtn.innerHTML = '✓ Shipped';
+                                    shipBtn.classList.remove('bg-green-500', 'text-white', 'border-green-600', 'hover:bg-green-600');
+                                    shipBtn.classList.add('bg-green-100', 'text-green-700', 'border-green-200', 'cursor-not-allowed', 'opacity-60');
+                                } catch (err) {
+                                    shipBtn.disabled = false;
+                                    shipBtn.innerHTML = orig;
+                                    alert('Could not mark shipped: ' + err.message);
+                                }
+                            });
+                        }
+                    })();
+                </script>
             </div>
         @endif
     </div>

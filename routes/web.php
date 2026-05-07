@@ -28,4 +28,6 @@ Route::middleware(['auth', 'web.portal'])->group(function () {
     Route::post('/logout', [WebAuthController::class, 'logout'])->name('logout');
     Route::get('/qr/{systemId}', [QrController::class, 'show'])->name('qr.show');
     Route::post('/qr/{systemId}/status', [QrController::class, 'updateStatus'])->name('qr.update-status');
+    Route::get('/qr/{systemId}/label-image', [QrController::class, 'labelImage'])->name('qr.label-image');
+    Route::get('/qr/{systemId}/print', [QrController::class, 'printPage'])->name('qr.print');
 });

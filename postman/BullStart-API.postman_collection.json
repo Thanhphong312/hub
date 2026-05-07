@@ -1,0 +1,505 @@
+{
+  "info": {
+    "name": "BullStart API",
+    "description": "Public + private endpoints for the BullStart fulfillment platform.\n\n**Two auth schemes:**\n- **API Key** (`X-API-KEY: bsk_...`) — for external sellers integrating with the platform. Endpoints under \"Public API (X-API-KEY)\".\n- **Bearer token** (Sanctum) — for the desktop / mobile apps. Run `Auth → Login` first to populate `{{bearer_token}}` automatically.\n\n**Set up:** import the companion `BullStart-API.postman_environment.json`, fill in `api_key` (from your seller profile in the desktop app) and `user_email` / `user_password`, then activate the environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {"key": "api_url", "value": "https://bullstart.us/api"}
+  ],
+  "item": [
+    {
+      "name": "Public API (X-API-KEY)",
+      "description": "External seller integration. Send `X-API-KEY: bsk_...` on every request — scoped to that user.",
+      "item": [
+        {
+          "name": "Catalog — Products",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/catalog/products", "host": ["{{api_url}}"], "path": ["catalog", "products"]},
+            "header": [{"key": "X-API-KEY", "value": "{{api_key}}"}, {"key": "Accept", "value": "application/json"}],
+            "description": "Lists every product + variant active for your account's tier. Each variant carries a `price_map` (base_cost / label_fee / shipping_cost / addition_fee / 2nd_fee). Use the `sku` and `id` here when calling **Create Order**."
+          }
+        },
+        {
+          "name": "Catalog — Accessories",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/catalog/accessories", "host": ["{{api_url}}"], "path": ["catalog", "accessories"]},
+            "header": [{"key": "X-API-KEY", "value": "{{api_key}}"}, {"key": "Accept", "value": "application/json"}],
+            "description": "Accessories + tier-scoped prices. Use `accessory_code` (e.g. `GEW`, `GEP`) or `id` (`accessory_item_id`) when creating orders."
+          }
+        },
+        {
+          "name": "Orders — List",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{api_url}}/fulfill?status=&date_from=&date_to=&per_page=50&page=1",
+              "host": ["{{api_url}}"],
+              "path": ["fulfill"],
+              "query": [
+                {"key": "status", "value": "", "description": "0=new_order, 1=processing, 2=wrongsize, 3=fixed, 4=reprint, 5=onhold, 6=shipped, 7=cancelled"},
+                {"key": "ref_id", "value": "", "description": "Substring match (LIKE %x%)", "disabled": true},
+                {"key": "ref_ids", "value": "", "description": "Newline / comma separated list — exact match", "disabled": true},
+                {"key": "system_id", "value": "", "description": "Substring match", "disabled": true},
+                {"key": "tracking_id", "value": "", "description": "Substring match", "disabled": true},
+                {"key": "date_from", "value": "", "description": "YYYY-MM-DD"},
+                {"key": "date_to", "value": "", "description": "YYYY-MM-DD"},
+                {"key": "per_page", "value": "50", "description": "Max 200"},
+                {"key": "page", "value": "1"}
+              ]
+            },
+            "header": [{"key": "X-API-KEY", "value": "{{api_key}}"}, {"key": "Accept", "value": "application/json"}],
+            "description": "Paginated list of orders for your account. Returns `data[]`, `current_page`, `last_page`, `total`."
+          }
+        },
+        {
+          "name": "Orders — Get by system_id or ref_id",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/fulfill/{{system_id}}", "host": ["{{api_url}}"], "path": ["fulfill", "{{system_id}}"]},
+            "header": [{"key": "X-API-KEY", "value": "{{api_key}}"}, {"key": "Accept", "value": "application/json"}],
+            "description": "Single order detail. The path segment can be a `system_id` (`PS_C155`) or your custom `ref_id`. Eager-loads items, metas, product variant, accessory, and address.\n\n**Errors:**\n- `404` — order not found or doesn't belong to you."
+          }
+        },
+        {
+          "name": "Orders — Create (POST /fulfill)",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/fulfill", "host": ["{{api_url}}"], "path": ["fulfill"]},
+            "header": [
+              {"key": "X-API-KEY", "value": "{{api_key}}"},
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Accept", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"TIKTOK-577371321906729198\",\n  \"shipping_label\": \"https://drive.google.com/file/d/FILE_ID/view\",\n  \"items\": [\n    {\n      \"product_variant_id\": 2,\n      \"accessory_item_id\": 5,\n      \"quantity\": 1,\n      \"order_type\": 0,\n      \"mockup_front\": \"https://...\",\n      \"mockup_back\": \"https://...\",\n      \"metas\": [\n        { \"key\": \"front\", \"value\": \"https://drive.google.com/file/d/DESIGN_FRONT/view\" },\n        { \"key\": \"back\", \"value\": \"https://drive.google.com/file/d/DESIGN_BACK/view\" }\n      ]\n    }\n  ]\n}"
+            },
+            "description": "Create a single order.\n\n**Required:** `items[]`, `items.*.product_variant_id`, plus EITHER `shipping_label` (TikTok auto-ship URL) OR a complete `address` block (`first_name`, `address_1`, `city`, `zipcode`, `country`).\n\n**Optional:** `ref_id`, `accessory_item_id`, `mockup_front`/`mockup_back`, `metas[]` (keys: `front`, `back`, `left`, `right`, `neck`, `special` — the converter auto-generates `_qr` overlays from these).\n\n**Errors:**\n- `409 Duplicate ref_id` — that `ref_id` already exists for your account. Use a different value or pass `force=true` (handled in the desktop app, not in this raw API).\n- `422` — validation failure (see `errors` map in the body).\n\nResponse: `201 Created` with the new order JSON."
+          }
+        },
+        {
+          "name": "Orders — Create (with address)",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/fulfill", "host": ["{{api_url}}"], "path": ["fulfill"]},
+            "header": [
+              {"key": "X-API-KEY", "value": "{{api_key}}"},
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Accept", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"MY-INTERNAL-101\",\n  \"address\": {\n    \"first_name\": \"Jane\",\n    \"last_name\": \"Doe\",\n    \"address_1\": \"123 Main St\",\n    \"address_2\": \"Apt 4B\",\n    \"city\": \"Brooklyn\",\n    \"state\": \"NY\",\n    \"zipcode\": \"11201\",\n    \"country\": \"US\"\n  },\n  \"items\": [\n    {\n      \"product_variant_id\": 2,\n      \"quantity\": 2,\n      \"metas\": [\n        { \"key\": \"front\", \"value\": \"https://drive.google.com/file/d/.../view\" }\n      ]\n    }\n  ]\n}"
+            },
+            "description": "Same `/fulfill` endpoint, but supplying a shipping address instead of `shipping_label`. Server stamps `ship_type=seller_ship`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth (Bearer / Sanctum)",
+      "description": "For the desktop / mobile apps. Use `Login` first; it stores the token in `{{bearer_token}}`.",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  if (json.token) {",
+                  "    pm.environment.set('bearer_token', json.token);",
+                  "    console.log('Saved bearer_token to environment');",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/login", "host": ["{{api_url}}"], "path": ["login"]},
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Accept", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{user_email}}\",\n  \"password\": \"{{user_password}}\"\n}"
+            },
+            "description": "Returns `{ token, user }` where `user.role.permissions` and `user.tier` are eager-loaded. The Tests script auto-saves `token` into `{{bearer_token}}` for subsequent requests."
+          }
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/me", "host": ["{{api_url}}"], "path": ["me"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Accept", "value": "application/json"}
+            ]
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/logout", "host": ["{{api_url}}"], "path": ["logout"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Accept", "value": "application/json"}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orders (Bearer)",
+      "description": "Same `/orders/*` endpoints used by the Electron apps.",
+      "item": [
+        {
+          "name": "List orders",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{api_url}}/orders?per_page=20&page=1",
+              "host": ["{{api_url}}"],
+              "path": ["orders"],
+              "query": [
+                {"key": "status", "value": "", "disabled": true},
+                {"key": "ref_id", "value": "", "disabled": true},
+                {"key": "ref_ids", "value": "", "disabled": true},
+                {"key": "system_id", "value": "", "disabled": true},
+                {"key": "tracking_id", "value": "", "disabled": true},
+                {"key": "date_from", "value": "", "disabled": true},
+                {"key": "date_to", "value": "", "disabled": true},
+                {"key": "user_id", "value": "", "description": "Admin/support only", "disabled": true},
+                {"key": "per_page", "value": "20"},
+                {"key": "page", "value": "1"}
+              ]
+            },
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}, {"key": "Accept", "value": "application/json"}]
+          }
+        },
+        {
+          "name": "Get order",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/orders/{{order_id}}", "host": ["{{api_url}}"], "path": ["orders", "{{order_id}}"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}, {"key": "Accept", "value": "application/json"}]
+          }
+        },
+        {
+          "name": "Create order",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/orders", "host": ["{{api_url}}"], "path": ["orders"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Accept", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"REF-1\",\n  \"shipping_label\": \"https://drive.google.com/file/d/FILE_ID/view\",\n  \"items\": [\n    {\n      \"product_variant_id\": 2,\n      \"quantity\": 1,\n      \"metas\": [\n        { \"key\": \"front\", \"value\": \"https://...\" }\n      ]\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Update order",
+          "request": {
+            "method": "PUT",
+            "url": {"raw": "{{api_url}}/orders/{{order_id}}", "host": ["{{api_url}}"], "path": ["orders", "{{order_id}}"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Accept", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shipping_label\": \"https://...\",\n  \"tracking_id\": \"9200190412380...\",\n  \"shipping_cost\": 0.30,\n  \"status\": 6\n}"
+            }
+          }
+        },
+        {
+          "name": "Update item metas (regenerate _qr)",
+          "request": {
+            "method": "PUT",
+            "url": {"raw": "{{api_url}}/order-items/1/metas", "host": ["{{api_url}}"], "path": ["order-items", "1", "metas"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Accept", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"metas\": [\n    { \"key\": \"front\", \"value\": \"https://drive.google.com/file/d/NEW_FRONT/view\" },\n    { \"key\": \"back\", \"value\": null }\n  ]\n}"
+            },
+            "description": "Replace source meta URLs. Empty `value` deletes the meta. Backend auto-deletes the matching `_qr` metas so the converter regenerates."
+          }
+        },
+        {
+          "name": "Pay order",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/orders/{{order_id}}/pay", "host": ["{{api_url}}"], "path": ["orders", "{{order_id}}", "pay"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}, {"key": "Accept", "value": "application/json"}]
+          }
+        },
+        {
+          "name": "Bulk pay",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/orders/bulk-pay", "host": ["{{api_url}}"], "path": ["orders", "bulk-pay"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"order_ids\": [1, 2, 3]\n}"}
+          }
+        },
+        {
+          "name": "Pay all unpaid",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/orders/pay-all-unpaid", "host": ["{{api_url}}"], "path": ["orders", "pay-all-unpaid"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {"mode": "raw", "raw": "{}"}
+          }
+        },
+        {
+          "name": "Unpaid summary",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/orders/unpaid-summary", "host": ["{{api_url}}"], "path": ["orders", "unpaid-summary"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}, {"key": "Accept", "value": "application/json"}]
+          }
+        },
+        {
+          "name": "Bulk status",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/orders/bulk-status", "host": ["{{api_url}}"], "path": ["orders", "bulk-status"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"order_ids\": [1, 2],\n  \"status\": 6\n}"}
+          }
+        },
+        {
+          "name": "Bulk merge duplicates",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/orders/bulk-merge-duplicates", "host": ["{{api_url}}"], "path": ["orders", "bulk-merge-duplicates"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"order_ids\": [10, 11, 12]\n}"},
+            "description": "Admin only. Group by `(user_id, ref_id)`, keep newest order per group, move items + wallet history to it, recalc totals, delete losers."
+          }
+        },
+        {
+          "name": "Export CSV",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{api_url}}/orders/export?date_from=&date_to=",
+              "host": ["{{api_url}}"],
+              "path": ["orders", "export"],
+              "query": [
+                {"key": "status", "value": "", "disabled": true},
+                {"key": "ref_id", "value": "", "disabled": true},
+                {"key": "ref_ids", "value": "", "disabled": true},
+                {"key": "system_id", "value": "", "disabled": true},
+                {"key": "user_id", "value": "", "disabled": true},
+                {"key": "date_from", "value": ""},
+                {"key": "date_to", "value": ""},
+                {"key": "order_ids", "value": "", "description": "Comma-separated; overrides other filters when set", "disabled": true}
+              ]
+            },
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}, {"key": "Accept", "value": "text/csv"}],
+            "description": "CSV download. Columns: system_id, ref_id, status, ship_type, tracking_id, total_quantity, print_cost, shipping_cost, total_cost, paid_cost, address fields, created_at."
+          }
+        },
+        {
+          "name": "Import CSV",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/orders/import-csv", "host": ["{{api_url}}"], "path": ["orders", "import-csv"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {"key": "file", "type": "file"},
+                {"key": "force", "type": "text", "value": "1", "description": "Set when retrying after a 409 duplicate ref_id response", "disabled": true},
+                {"key": "rename", "type": "text", "value": "1", "description": "Rename duplicate ref_ids to <ref>_r_<n>", "disabled": true}
+              ]
+            },
+            "description": "CSV columns (header row required): `ref_id, sku, quantity, mockup_front, mockup_back, accessory_code, shipping_label, meta_front, meta_back, meta_left, meta_right, meta_neck, meta_special`. Rows sharing `ref_id` are grouped into one order with multiple items."
+          }
+        },
+        {
+          "name": "Pending tracking — list",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/orders/pending-tracking?limit=200", "host": ["{{api_url}}"], "path": ["orders", "pending-tracking"], "query": [{"key": "limit", "value": "200"}]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}, {"key": "Accept", "value": "application/json"}]
+          }
+        },
+        {
+          "name": "Save tracking (called by mobile/desktop after carrier fetch)",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/orders/{{order_id}}/save-tracking", "host": ["{{api_url}}"], "path": ["orders", "{{order_id}}", "save-tracking"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"tracking_id\": \"9200190412380448326369\"\n}"}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wallet (Bearer)",
+      "item": [
+        {
+          "name": "Balance",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/wallet/balance", "host": ["{{api_url}}"], "path": ["wallet", "balance"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}]
+          }
+        },
+        {
+          "name": "Transactions",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/wallet/transactions?per_page=20&page=1", "host": ["{{api_url}}"], "path": ["wallet", "transactions"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}]
+          }
+        },
+        {
+          "name": "Manual deposit (admin or seller pending)",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/wallet/deposit", "host": ["{{api_url}}"], "path": ["wallet", "deposit"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 100.00,\n  \"method\": \"paypal\",\n  \"transaction_id\": \"PP-12345\",\n  \"note\": \"Reload\"\n}"}
+          }
+        },
+        {
+          "name": "Approve deposit (admin)",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/wallet/deposit/1/approve", "host": ["{{api_url}}"], "path": ["wallet", "deposit", "1", "approve"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}]
+          }
+        },
+        {
+          "name": "VNPay — current rate",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/wallet/vnpay/rate", "host": ["{{api_url}}"], "path": ["wallet", "vnpay", "rate"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}],
+            "description": "Returns current VND→USD rate + min VND deposit. Used by the seller wallet UI to preview USD."
+          }
+        },
+        {
+          "name": "VNPay — create payment URL",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/wallet/vnpay/create", "host": ["{{api_url}}"], "path": ["wallet", "vnpay", "create"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"vnd_amount\": 500000\n}"},
+            "description": "Snapshots the rate, creates a pending wallet_transaction (status=pending, method=vnpay), returns `payment_url` for the renderer to open."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Conversion (admin/support)",
+      "description": "Used by the desktop converter cron — generates `_qr` metas from source design URLs.",
+      "item": [
+        {
+          "name": "Pending conversions",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/conversion/pending", "host": ["{{api_url}}"], "path": ["conversion", "pending"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}]
+          }
+        },
+        {
+          "name": "Upload _qr meta",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/conversion/1/qr-meta", "host": ["{{api_url}}"], "path": ["conversion", "1", "qr-meta"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {"key": "key", "type": "text", "value": "front_qr_1"},
+                {"key": "image", "type": "file"}
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Gangsheet (admin/support)",
+      "item": [
+        {
+          "name": "Pending orders",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/gangsheets/pending-orders", "host": ["{{api_url}}"], "path": ["gangsheets", "pending-orders"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}]
+          }
+        },
+        {
+          "name": "Lookup orders",
+          "request": {
+            "method": "POST",
+            "url": {"raw": "{{api_url}}/gangsheets/lookup-orders", "host": ["{{api_url}}"], "path": ["gangsheets", "lookup-orders"]},
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{bearer_token}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"system_ids\": [\"PS_C150\", \"PS_C151\"]\n}"}
+          }
+        },
+        {
+          "name": "Storage credentials",
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{api_url}}/gangsheets/storage-credentials", "host": ["{{api_url}}"], "path": ["gangsheets", "storage-credentials"]},
+            "header": [{"key": "Authorization", "value": "Bearer {{bearer_token}}"}],
+            "description": "B2 / S3 credentials (short-lived) for the desktop app to upload generated gangsheets directly."
+          }
+        }
+      ]
+    }
+  ]
+}
