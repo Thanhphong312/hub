@@ -231,8 +231,11 @@
                                 } catch (e) { /* same-origin, should not throw */ }
                             }, { once: true });
 
-                            // Cache-bust so the proxy serves a fresh stream each click.
-                            iframe.src = imageUrl + (imageUrl.includes('?') ? '&' : '?') + '_=' + Date.now();
+                            // Cache-bust + invalidate poisoned cache for this URL once.
+                            const sep = imageUrl.includes('?') ? '&' : '?';
+                            const refreshOnce = sessionStorage.getItem('qrLabelRefreshed-{{ $order->system_id }}') ? '' : '&nocache=1';
+                            sessionStorage.setItem('qrLabelRefreshed-{{ $order->system_id }}', '1');
+                            iframe.src = imageUrl + sep + '_=' + Date.now() + refreshOnce;
                         };
 
                         if (printBtn && printBtn.dataset.bound !== '1') {

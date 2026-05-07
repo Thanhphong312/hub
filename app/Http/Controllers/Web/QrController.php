@@ -90,9 +90,27 @@ class QrController extends Controller
         abort_unless($url, 404, 'No shipping label URL.');
 
         $cacheKey = 'qr-labels/' . md5($url);
+        $forceFresh = $request->boolean('nocache') || $request->boolean('refresh');
+
+        // Invalidate poisoned caches (HTML wrappers, octet-stream, missing type).
+        // Older requests may have cached a Drive virus-scan page or set the wrong
+        // Content-Type, which makes the browser auto-download instead of render.
+        if (Storage::disk('local')->exists($cacheKey . '.type')) {
+            $cachedType = Storage::disk('local')->get($cacheKey . '.type');
+            if ($forceFresh
+                || str_contains($cachedType, 'text/html')
+                || str_contains($cachedType, 'octet-stream')
+                || $cachedType === ''
+            ) {
+                Storage::disk('local')->delete($cacheKey);
+                Storage::disk('local')->delete($cacheKey . '.type');
+            }
+        } elseif ($forceFresh && Storage::disk('local')->exists($cacheKey)) {
+            Storage::disk('local')->delete($cacheKey);
+        }
 
         if (!Storage::disk('local')->exists($cacheKey)) {
-            $resp = Http::timeout(15)
+            $resp = Http::timeout(20)
                 ->withHeaders(['User-Agent' => 'Mozilla/5.0 BullStart-QrProxy'])
                 ->get($url);
 
@@ -101,19 +119,31 @@ class QrController extends Controller
             }
 
             $body = $resp->body();
-            $contentType = $resp->header('Content-Type') ?: $this->guessContentType($body);
+            $sourceType = $resp->header('Content-Type') ?: '';
 
-            // Sanity check: Drive sometimes returns an HTML "virus scan" page
-            // for large files instead of the binary. In that case, follow the
-            // confirm link once.
-            if (str_contains($contentType, 'text/html') && str_contains($body, 'confirm=')) {
+            // Drive sometimes returns an HTML "virus scan" page for large files.
+            // Follow the confirm link once.
+            if ((str_contains($sourceType, 'text/html') || str_starts_with($body, '<'))
+                && str_contains($body, 'confirm=')
+            ) {
                 if (preg_match('/confirm=([0-9A-Za-z_-]+)/', $body, $m) && preg_match('/[?&]id=([a-zA-Z0-9_-]+)/', $url, $idMatch)) {
                     $confirmUrl = "https://drive.google.com/uc?export=download&confirm={$m[1]}&id={$idMatch[1]}";
-                    $resp = Http::timeout(15)->get($confirmUrl);
+                    $resp = Http::timeout(20)->get($confirmUrl);
                     if ($resp->successful()) {
                         $body = $resp->body();
-                        $contentType = $resp->header('Content-Type') ?: $this->guessContentType($body);
+                        $sourceType = $resp->header('Content-Type') ?: '';
                     }
+                }
+            }
+
+            // Always trust magic bytes over upstream Content-Type. If we still
+            // can't classify, refuse to cache so the next click can retry.
+            $contentType = $this->guessContentType($body);
+            if ($contentType === 'application/octet-stream') {
+                if (str_contains($sourceType, 'image/') || str_contains($sourceType, 'pdf')) {
+                    $contentType = $sourceType;
+                } else {
+                    abort(502, 'Source returned an unrecognized format (' . substr($sourceType, 0, 60) . '). Original URL: ' . $url);
                 }
             }
 
@@ -129,7 +159,11 @@ class QrController extends Controller
         return response($body, 200, [
             'Content-Type' => $contentType,
             'Cache-Control' => 'private, max-age=3600',
+            // `inline` + `X-Content-Type-Options: nosniff` together stop nginx /
+            // CDNs from forcing a download on browsers that would otherwise
+            // sniff the response and treat it as an attachment.
             'Content-Disposition' => 'inline; filename="label-' . $systemId . '"',
+            'X-Content-Type-Options' => 'nosniff',
         ]);
     }
 
