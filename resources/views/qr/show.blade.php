@@ -74,7 +74,9 @@
     let lastKeyAt = 0;
     let fastStreak = 0;
     let detected = false;
-    function flipDetected() {
+    let burstChars = '';        // accumulated chars of the current burst, for logging
+    let burstStartedAt = 0;
+    function flipDetected(reason) {
         if (detected) return;
         detected = true;
         badge.classList.remove('bg-amber-50', 'text-amber-700', 'border-amber-200');
@@ -82,6 +84,7 @@
         dot.classList.remove('bg-amber-500', 'animate-pulse');
         dot.classList.add('bg-emerald-500');
         label.textContent = 'Scanner connected';
+        console.log('[qr-scan] ✅ Scanner DETECTED →', reason);
     }
 
     input.addEventListener('input', () => {
@@ -95,24 +98,42 @@
         // Detection runs on every printable key (ignore modifiers and Enter).
         if (e.key.length === 1) {
             const now = performance.now();
-            const gap = now - lastKeyAt;
+            const gap = lastKeyAt ? now - lastKeyAt : null;
             lastKeyAt = now;
-            if (gap < 30) {
+            if (gap !== null && gap < 30) {
+                if (fastStreak === 0) {
+                    burstStartedAt = now;
+                    burstChars = '';
+                }
                 fastStreak += 1;
-                if (fastStreak >= 3) flipDetected();
+                burstChars += e.key;
+                console.log(`[qr-scan] key="${e.key}" gap=${gap.toFixed(1)}ms streak=${fastStreak} (FAST)`);
+                if (fastStreak >= 3 && !detected) {
+                    flipDetected(`burst of ${fastStreak} chars @ avg ${((now - burstStartedAt) / fastStreak).toFixed(1)}ms gap → "${burstChars}"`);
+                }
             } else {
+                if (fastStreak > 0) {
+                    console.log(`[qr-scan] streak broken at ${fastStreak} chars ("${burstChars}"), gap=${gap?.toFixed(1) ?? '∞'}ms`);
+                }
+                console.log(`[qr-scan] key="${e.key}" gap=${gap === null ? '∞ (first)' : gap.toFixed(1) + 'ms'} streak=0`);
                 fastStreak = 0;
+                burstChars = '';
             }
         }
 
         if (e.key === 'Enter') {
             e.preventDefault();
             clearTimeout(timer);
+            const value = input.value;
+            console.log(`[qr-scan] ⏎ Enter → value="${value}" streak-before=${fastStreak}`);
             // Enter that closes a fast burst is the scanner's terminator — also
             // a strong signal it was a scanner, not a human typing.
-            if (fastStreak >= 2) flipDetected();
+            if (fastStreak >= 2 && !detected) {
+                flipDetected(`Enter after burst of ${fastStreak} fast chars → "${burstChars}"`);
+            }
             fastStreak = 0;
-            go(input.value);
+            burstChars = '';
+            go(value);
         }
     });
 
