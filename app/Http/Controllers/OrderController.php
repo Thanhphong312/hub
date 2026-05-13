@@ -1021,54 +1021,85 @@ class OrderController extends Controller
             'order_ids.*' => 'exists:orders,id',
         ]);
 
-        $user = $request->user();
-        $orders = Order::whereIn('id', $request->order_ids)
-            ->where('user_id', $user->id)
-            ->get();
-
-        $totalToPay = 0;
-        foreach ($orders as $order) {
-            if ($order->paid_cost < $order->total_cost) {
-                $totalToPay += ($order->total_cost - $order->paid_cost);
-            }
+        $caller = $request->user();
+        $query = Order::whereIn('id', $request->order_ids);
+        if ($caller->hasRole('seller')) {
+            // Sellers can only bulk-pay their own orders.
+            $query->where('user_id', $caller->id);
         }
+        $orders = $query->get();
 
-        if ($totalToPay == 0) {
+        // Group unpaid orders by owner. Each owner is charged from THEIR OWN
+        // wallet, so the same caller (e.g. admin) can pay across multiple
+        // sellers in one request without ever touching the admin's wallet.
+        $unpaidByOwner = $orders
+            ->filter(fn($o) => $o->paid_cost < $o->total_cost)
+            ->groupBy('user_id');
+
+        if ($unpaidByOwner->isEmpty()) {
             return response()->json(['message' => 'All orders already paid'], 400);
         }
 
-        if ($user->wallet < $totalToPay) {
-            return response()->json(['message' => 'Insufficient wallet balance', 'required' => $totalToPay, 'wallet' => $user->wallet], 400);
+        $owners = \App\Models\User::whereIn('id', $unpaidByOwner->keys())->get()->keyBy('id');
+
+        // Pre-flight: every owner must have enough wallet for THEIR slice. If
+        // any single owner is short, abort the whole batch (otherwise we'd
+        // partially pay some sellers and leave others in a weird state).
+        $totalsByOwner = [];
+        foreach ($unpaidByOwner as $ownerId => $ownerOrders) {
+            $owner = $owners[$ownerId] ?? null;
+            if (!$owner) {
+                return response()->json(['message' => "Order owner #{$ownerId} not found"], 400);
+            }
+            $ownerTotal = $ownerOrders->sum(fn($o) => max(0, $o->total_cost - $o->paid_cost));
+            if ($owner->wallet < $ownerTotal) {
+                return response()->json([
+                    'message' => "Insufficient wallet balance for {$owner->name}",
+                    'user_id' => $owner->id,
+                    'user_name' => $owner->name,
+                    'required' => $ownerTotal,
+                    'wallet' => (float) $owner->wallet,
+                ], 400);
+            }
+            $totalsByOwner[$ownerId] = $ownerTotal;
         }
 
-        return DB::transaction(function () use ($user, $orders, $totalToPay) {
+        return DB::transaction(function () use ($unpaidByOwner, $owners, $totalsByOwner) {
             $paidCount = 0;
-            foreach ($orders as $order) {
-                $amountToPay = $order->total_cost - $order->paid_cost;
-                if ($amountToPay <= 0) continue;
+            $totalPaid = 0;
+            $walletsAfter = [];
+            foreach ($unpaidByOwner as $ownerId => $ownerOrders) {
+                $owner = $owners[$ownerId];
+                foreach ($ownerOrders as $order) {
+                    $amountToPay = $order->total_cost - $order->paid_cost;
+                    if ($amountToPay <= 0) continue;
 
-                $balanceBefore = (float) $user->wallet;
-                $user->decrement('wallet', $amountToPay);
-                $order->update(['paid_cost' => $order->total_cost]);
+                    $balanceBefore = (float) $owner->wallet;
+                    $owner->decrement('wallet', $amountToPay);
+                    $order->update(['paid_cost' => $order->total_cost]);
 
-                WalletTransaction::create([
-                    'user_id' => $user->id,
-                    'order_id' => $order->id,
-                    'order_system_id' => $order->system_id,
-                    'type' => 'paid',
-                    'status' => WalletTransaction::STATUS_APPROVED,
-                    'amount' => -$amountToPay,
-                    'balance_before' => $balanceBefore,
-                    'balance_after' => $user->fresh()->wallet,
-                    'note' => "Paid order #{$order->system_id}",
-                ]);
-                $paidCount++;
+                    WalletTransaction::create([
+                        'user_id' => $owner->id,
+                        'order_id' => $order->id,
+                        'order_system_id' => $order->system_id,
+                        'type' => 'paid',
+                        'status' => WalletTransaction::STATUS_APPROVED,
+                        'amount' => -$amountToPay,
+                        'balance_before' => $balanceBefore,
+                        'balance_after' => $owner->fresh()->wallet,
+                        'note' => "Paid order #{$order->system_id}",
+                    ]);
+                    $paidCount++;
+                    $totalPaid += $amountToPay;
+                }
+                $walletsAfter[$ownerId] = (float) $owner->fresh()->wallet;
             }
 
             return response()->json([
                 'message' => "Paid {$paidCount} orders",
-                'total_paid' => $totalToPay,
-                'wallet' => $user->fresh()->wallet,
+                'total_paid' => $totalPaid,
+                'totals_by_owner' => $totalsByOwner,
+                'wallets_after' => $walletsAfter,
             ]);
         });
     }
