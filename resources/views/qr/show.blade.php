@@ -37,6 +37,12 @@
             class="flex-1 px-3 py-2 bg-[#faf8f6] border border-neutral-200 rounded-lg text-neutral-800 text-sm font-mono focus:outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20"
             placeholder="e.g. GC123"
         />
+        <span id="scannerBadge"
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap bg-amber-50 text-amber-700 border border-amber-200"
+              title="Browsers can't see HID scanners directly. We detect them by their characteristic fast burst of keystrokes (≥3 chars typed in <30ms each).">
+            <span id="scannerDot" class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+            <span id="scannerLabel">Connecting…</span>
+        </span>
         <span id="systemIdStatus" class="text-xs text-neutral-400 w-24 text-right"></span>
     </div>
 </div>
@@ -45,6 +51,9 @@
 (function () {
     const input = document.getElementById('systemIdInput');
     const statusEl = document.getElementById('systemIdStatus');
+    const badge = document.getElementById('scannerBadge');
+    const dot = document.getElementById('scannerDot');
+    const label = document.getElementById('scannerLabel');
     const currentId = @json($order->system_id);
     let timer = null;
 
@@ -59,6 +68,22 @@
         window.location.href = '/qr/' + encodeURIComponent(id);
     }
 
+    // Passive scanner detection: a hardware HID scanner sends keystrokes
+    // dramatically faster than human typing. We watch the last few keydown
+    // intervals and flip the badge once we see 3+ keystrokes each <30ms apart.
+    let lastKeyAt = 0;
+    let fastStreak = 0;
+    let detected = false;
+    function flipDetected() {
+        if (detected) return;
+        detected = true;
+        badge.classList.remove('bg-amber-50', 'text-amber-700', 'border-amber-200');
+        badge.classList.add('bg-emerald-50', 'text-emerald-700', 'border-emerald-200');
+        dot.classList.remove('bg-amber-500', 'animate-pulse');
+        dot.classList.add('bg-emerald-500');
+        label.textContent = 'Scanner connected';
+    }
+
     input.addEventListener('input', () => {
         clearTimeout(timer);
         const v = input.value;
@@ -67,9 +92,26 @@
     });
 
     input.addEventListener('keydown', (e) => {
+        // Detection runs on every printable key (ignore modifiers and Enter).
+        if (e.key.length === 1) {
+            const now = performance.now();
+            const gap = now - lastKeyAt;
+            lastKeyAt = now;
+            if (gap < 30) {
+                fastStreak += 1;
+                if (fastStreak >= 3) flipDetected();
+            } else {
+                fastStreak = 0;
+            }
+        }
+
         if (e.key === 'Enter') {
             e.preventDefault();
             clearTimeout(timer);
+            // Enter that closes a fast burst is the scanner's terminator — also
+            // a strong signal it was a scanner, not a human typing.
+            if (fastStreak >= 2) flipDetected();
+            fastStreak = 0;
             go(input.value);
         }
     });

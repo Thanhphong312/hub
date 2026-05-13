@@ -78,6 +78,16 @@ class OrderController extends Controller
             $query->whereDate('created_at', '<=', $request->date_to);
         }
 
+        // Filter by pay status. "paid" = paid_cost >= total_cost,
+        // "unpaid" = paid_cost < total_cost (covers $0 paid and partial pays).
+        if ($request->filled('paid')) {
+            if ($request->paid === 'paid') {
+                $query->whereColumn('paid_cost', '>=', 'total_cost');
+            } elseif ($request->paid === 'unpaid') {
+                $query->whereColumn('paid_cost', '<', 'total_cost');
+            }
+        }
+
         // Sort
         $sortBy = $request->get('sort_by', 'id');
         $sortDir = $request->get('sort_dir', 'desc');
@@ -1399,6 +1409,13 @@ class OrderController extends Controller
                 ? $request->order_ids
                 : preg_split('/[\s,]+/', (string) $request->order_ids, -1, PREG_SPLIT_NO_EMPTY);
             $query->whereIn('id', array_map('intval', $ids));
+        }
+        if ($request->filled('paid')) {
+            if ($request->paid === 'paid') {
+                $query->whereColumn('paid_cost', '>=', 'total_cost');
+            } elseif ($request->paid === 'unpaid') {
+                $query->whereColumn('paid_cost', '<', 'total_cost');
+            }
         }
 
         $orders = $query->orderBy('id', 'desc')->get();
