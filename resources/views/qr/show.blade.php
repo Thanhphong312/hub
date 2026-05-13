@@ -137,10 +137,55 @@
         }
     });
 
-    input.addEventListener('focus', () => input.select());
+    input.addEventListener('focus', () => {
+        input.select();
+        console.log('[qr-scan] 📥 input FOCUSED');
+    });
+    input.addEventListener('blur', () => {
+        console.log('[qr-scan] 📤 input BLURRED (scanner keystrokes will go elsewhere unless global capture rescues them)');
+    });
 
     // Select all on load so barcode scanners overwrite cleanly.
     setTimeout(() => { input.focus(); input.select(); }, 50);
+
+    // Re-focus when the tab/window regains focus (alt-tab back, returning
+    // from another app). Without this, scanner keystrokes get lost in body.
+    window.addEventListener('focus', () => {
+        console.log('[qr-scan] 🪟 window FOCUS event — refocusing input');
+        input.focus();
+        input.select();
+    });
+
+    // Global capture: even if the user clicked away and input lost focus,
+    // we catch keystrokes at the window level and forward them to the input
+    // so a scan never gets dropped. Skip if focus is on another editable
+    // field (textarea, contenteditable) so we don't interfere with typing.
+    window.addEventListener('keydown', (e) => {
+        const active = document.activeElement;
+        if (active === input) return;            // input handler already runs
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return;
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+        if (e.key === 'Enter') {
+            console.log('[qr-scan] 🌐 window-level Enter (input was not focused) → refocus + submit');
+            e.preventDefault();
+            // Whatever was accumulated on the input gets submitted.
+            input.focus();
+            clearTimeout(timer);
+            go(input.value);
+            return;
+        }
+        if (e.key.length === 1) {
+            console.log(`[qr-scan] 🌐 window-level key="${e.key}" forwarded to input (was not focused, active=${active?.tagName || 'none'})`);
+            // Forward the keystroke: append printable char and refocus.
+            // Mirroring the scanner output into the input box keeps the
+            // burst-timing detector working on subsequent keys.
+            input.focus();
+            // We don't preventDefault — letting the browser deliver the key
+            // to the now-focused input results in correct text + keydown
+            // event firing on the input, which feeds the burst detector.
+        }
+    }, true);
 })();
 </script>
 
