@@ -157,9 +157,16 @@
     });
 
     // Global capture: even if the user clicked away and input lost focus,
-    // we catch keystrokes at the window level and forward them to the input
-    // so a scan never gets dropped. Skip if focus is on another editable
-    // field (textarea, contenteditable) so we don't interfere with typing.
+    // we catch keystrokes at the window level, programmatically append the
+    // character to the input, and refocus. Skip if focus is on another
+    // editable field so we don't interfere with normal typing.
+    //
+    // Why we append manually instead of just calling input.focus(): refocus
+    // happens asynchronously after the current keydown finishes propagating,
+    // so the FIRST scanner key would still go to <body> and get lost. By
+    // mutating input.value directly and dispatching an input event, we never
+    // drop a character — even the very first one after print dialog closes.
+    let pendingBurstStart = 0;
     window.addEventListener('keydown', (e) => {
         const active = document.activeElement;
         if (active === input) return;            // input handler already runs
@@ -167,23 +174,28 @@
         if (e.ctrlKey || e.altKey || e.metaKey) return;
 
         if (e.key === 'Enter') {
-            console.log('[qr-scan] 🌐 window-level Enter (input was not focused) → refocus + submit');
+            console.log('[qr-scan] 🌐 window-level Enter (input was not focused) → submit value="' + input.value + '"');
             e.preventDefault();
-            // Whatever was accumulated on the input gets submitted.
             input.focus();
             clearTimeout(timer);
             go(input.value);
             return;
         }
         if (e.key.length === 1) {
-            console.log(`[qr-scan] 🌐 window-level key="${e.key}" forwarded to input (was not focused, active=${active?.tagName || 'none'})`);
-            // Forward the keystroke: append printable char and refocus.
-            // Mirroring the scanner output into the input box keeps the
-            // burst-timing detector working on subsequent keys.
+            e.preventDefault();
+            // First char after focus loss: clear input so the new scan starts
+            // clean instead of appending to the old systemId.
+            const now = performance.now();
+            if (now - pendingBurstStart > 100) {
+                input.value = '';
+            }
+            pendingBurstStart = now;
+            input.value += e.key;
             input.focus();
-            // We don't preventDefault — letting the browser deliver the key
-            // to the now-focused input results in correct text + keydown
-            // event firing on the input, which feeds the burst detector.
+            // Fire input event so the 350ms debounced navigate kicks in even
+            // if no Enter suffix is sent by the scanner.
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            console.log(`[qr-scan] 🌐 window-level key="${e.key}" appended to input (was not focused, active=${active?.tagName || 'none'}, value now="${input.value}")`);
         }
     }, true);
 })();
@@ -332,11 +344,32 @@
                                 }, 200);
 
                                 // Clean up the iframe once the user dismisses the print dialog.
+                                // After print, focus jumps to the iframe (we called
+                                // contentWindow.focus() above) and then drops to <body>
+                                // when the iframe is removed — that swallows the next
+                                // scanner burst. Restore focus to the scan input.
+                                const restoreScanFocus = () => {
+                                    const scanInput = document.getElementById('systemIdInput');
+                                    if (scanInput) { scanInput.focus(); scanInput.select(); }
+                                };
                                 try {
                                     iframe.contentWindow.addEventListener('afterprint', () => {
-                                        setTimeout(() => iframe.remove(), 200);
+                                        setTimeout(() => {
+                                            iframe.remove();
+                                            restoreScanFocus();
+                                            console.log('[qr-scan] 🖨 afterprint → systemIdInput refocused');
+                                        }, 200);
                                     });
                                 } catch (e) { /* same-origin, should not throw */ }
+                                // Belt-and-suspenders: some browsers don't deliver
+                                // afterprint reliably (especially if the user clicks
+                                // outside the print preview to dismiss). Also refocus
+                                // when the main window itself regains focus.
+                                const onWinFocus = () => {
+                                    restoreScanFocus();
+                                    window.removeEventListener('focus', onWinFocus);
+                                };
+                                window.addEventListener('focus', onWinFocus);
                             }, { once: true });
 
                             // Cache-bust + invalidate poisoned cache for this URL once.
