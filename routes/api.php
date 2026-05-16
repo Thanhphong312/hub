@@ -102,6 +102,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Conversion (only for users with convert=1)
     Route::get('/conversion/pending', [ConversionController::class, 'pending']);
     Route::post('/conversion/{item}/qr-meta', [ConversionController::class, 'uploadQrMeta']);
+    Route::post('/conversion/order/{order}/convert-label', [ConversionController::class, 'uploadConvertLabel']);
 
     // Gangsheet (admin/support only)
     Route::middleware(CheckRole::class . ':admin,support')->group(function () {

@@ -8,15 +8,21 @@ class Order extends Model
 {
     protected $fillable = [
         'user_id', 'system_id', 'ref_id', 'status', 'ship_type', 'shipping_label',
+        'shipping_label_converted', 'convert_label',
         'tracking_id', 'print_cost', 'shipping_cost', 'total_cost',
         'paid_cost', 'completed_time', 'production',
     ];
+
+    // convert_label is admin/support-only — hidden by default, controllers call
+    // makeVisible('convert_label') when the requesting user is staff.
+    protected $hidden = ['convert_label'];
 
     protected function casts(): array
     {
         return [
             'completed_time' => 'datetime',
             'production' => 'boolean',
+            'shipping_label_converted' => 'boolean',
         ];
     }
 

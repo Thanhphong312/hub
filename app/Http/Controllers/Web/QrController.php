@@ -70,7 +70,8 @@ class QrController extends Controller
     public function printPage(Request $request, string $systemId)
     {
         $order = $this->findOrderForUser($request, $systemId);
-        abort_unless($order->shipping_label, 404, 'No shipping label on this order.');
+        $printLabel = $this->pickPrintLabel($request, $order);
+        abort_unless($printLabel, 404, 'No shipping label on this order.');
 
         return view('qr.print', [
             'order' => $order,
@@ -86,7 +87,8 @@ class QrController extends Controller
     public function labelImage(Request $request, string $systemId)
     {
         $order = $this->findOrderForUser($request, $systemId);
-        $url = $this->resolveDirectUrl($order->shipping_label);
+        $sourceUrl = $this->pickPrintLabel($request, $order);
+        $url = $this->resolveDirectUrl($sourceUrl);
         abort_unless($url, 404, 'No shipping label URL.');
 
         $cacheKey = 'qr-labels/' . md5($url);
@@ -165,6 +167,21 @@ class QrController extends Controller
             'Content-Disposition' => 'inline; filename="label-' . $systemId . '"',
             'X-Content-Type-Options' => 'nosniff',
         ]);
+    }
+
+    /**
+     * Pick which URL to print: prefer convert_label (system_id overlay) for
+     * admin/support; fall back to the original carrier shipping_label. Sellers
+     * only ever see the original — convert_label is an internal artifact.
+     */
+    private function pickPrintLabel(Request $request, Order $order): ?string
+    {
+        $user = $request->user();
+        $isStaff = $user && ($user->hasRole('admin') || $user->hasRole('support'));
+        if ($isStaff && !empty($order->convert_label)) {
+            return $order->convert_label;
+        }
+        return $order->shipping_label;
     }
 
     private function findOrderForUser(Request $request, string $systemId): Order

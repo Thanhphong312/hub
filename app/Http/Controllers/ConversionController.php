@@ -104,7 +104,55 @@ class ConversionController extends Controller
             }
         }
 
-        return response()->json($result);
+        // Convert-label queue. Orders still in NEW_ORDER status with a
+        // shipping_label set but no convert_label yet. The converter produces
+        // a separate image (system_id text + Code 128 barcode + accessory
+        // summary stamped on the carrier label) and saves the URL to
+        // `orders.convert_label` — the original `shipping_label` is kept
+        // intact so the carrier source is never lost.
+        $labelQuery = Order::query()
+            ->where('status', Order::STATUS_NEW_ORDER)
+            ->whereNotNull('shipping_label')
+            ->where('shipping_label', '!=', '')
+            ->where(function ($q) {
+                $q->whereNull('convert_label')->orWhere('convert_label', '');
+            })
+            ->orderBy('id', 'asc');
+
+        if (!$isStaff) {
+            $labelQuery->where('user_id', $user->id);
+        }
+
+        $convertLabelPending = $labelQuery->get(['id', 'system_id', 'shipping_label'])
+            ->map(fn ($o) => [
+                'order_id' => $o->id,
+                'system_id' => $o->system_id,
+                'shipping_label' => $o->shipping_label,
+            ])
+            ->values();
+
+        // Build accessory summary per pending convert-label order so the
+        // composed image can include it alongside the barcode (matches the
+        // _qr layout: "{system_id}-{accessory_summary}").
+        $orderIds = $convertLabelPending->pluck('order_id')->all();
+        $summaries = [];
+        if (!empty($orderIds)) {
+            $accOrders = Order::with('items.accessoryPrice')
+                ->whereIn('id', $orderIds)
+                ->get();
+            foreach ($accOrders as $o) {
+                $summaries[$o->id] = $this->computeAccessorySummary($o);
+            }
+        }
+        $convertLabelPending = $convertLabelPending->map(function ($row) use ($summaries) {
+            $row['accessory_summary'] = $summaries[$row['order_id']] ?? '';
+            return $row;
+        });
+
+        return response()->json([
+            'items' => $result,
+            'convert_label_pending' => $convertLabelPending,
+        ]);
     }
 
     /**
@@ -178,6 +226,47 @@ class ConversionController extends Controller
         return response()->json([
             'message' => 'QR meta saved',
             'meta' => $meta,
+        ], 201);
+    }
+
+    /**
+     * Receive the composed convert-label image (carrier label with system_id
+     * text + Code 128 barcode + accessory summary overlaid). Upload to B2 and
+     * persist the URL to `orders.convert_label` — the original shipping_label
+     * is left untouched so the carrier source can always be retrieved.
+     */
+    public function uploadConvertLabel(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if (!$user->convert) {
+            return response()->json(['message' => 'Convert mode is not enabled for this account'], 403);
+        }
+        $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
+        if (!$isStaff && $order->user_id !== $user->id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if ($order->status !== Order::STATUS_NEW_ORDER) {
+            return response()->json(['message' => 'Order is not in new_order status'], 422);
+        }
+
+        $request->validate([
+            'image' => 'required|file|max:51200',
+        ]);
+
+        $file = $request->file('image');
+        $ext = $file->getClientOriginalExtension() ?: 'png';
+        $path = "convert-labels/{$order->id}/system_id_" . time() . '.' . $ext;
+
+        Storage::disk('b2')->put($path, file_get_contents($file->getPathname()), 'public');
+        $base = rtrim(config('filesystems.disks.b2.url') ?? '', '/');
+        $url = $base . '/' . ltrim($path, '/');
+
+        $order->update(['convert_label' => $url]);
+
+        return response()->json([
+            'message' => 'Convert label saved',
+            'order' => $order->fresh()->makeVisible('convert_label')
+                ->only(['id', 'system_id', 'shipping_label', 'convert_label']),
         ], 201);
     }
 }

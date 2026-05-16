@@ -264,16 +264,28 @@
             </div>
         @endif
 
-        @if ($isImageish($order->shipping_label))
+        @php
+            $isStaff = $user && ($user->hasRole('admin') || $user->hasRole('support'));
+            // print_label is the source of truth for what gets printed: prefer
+            // the converted overlay, fall back to the original carrier label.
+            // Sellers only ever see the carrier label.
+            $printLabel = ($isStaff && $order->convert_label) ? $order->convert_label : $order->shipping_label;
+        @endphp
+        @if ($isImageish($printLabel))
             <div class="bg-white rounded-xl border border-neutral-200 p-4 shadow-sm text-sm">
-                <h2 class="font-semibold text-neutral-700 mb-2 text-sm">Shipping label</h2>
-                <a href="{{ $order->shipping_label }}" target="_blank" rel="noreferrer" class="block">
+                <h2 class="font-semibold text-neutral-700 mb-2 text-sm">
+                    Shipping label
+                    @if ($isStaff && $order->convert_label)
+                        <span class="ml-1 text-[10px] font-semibold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">CONVERTED</span>
+                    @endif
+                </h2>
+                <a href="{{ $printLabel }}" target="_blank" rel="noreferrer" class="block">
                     <img src="{{ route('qr.label-image', ['systemId' => $order->system_id]) }}"
                         alt="shipping label"
                         class="w-full h-40 object-contain bg-neutral-50 rounded border border-neutral-200"
-                        onerror="this.onerror=null; this.src='{{ $driveThumb($order->shipping_label, 'w600') }}';" />
+                        onerror="this.onerror=null; this.src='{{ $driveThumb($printLabel, 'w600') }}';" />
                 </a>
-                <p class="text-[10px] text-neutral-400 mt-1 truncate mb-3">{{ $order->shipping_label }}</p>
+                <p class="text-[10px] text-neutral-400 mt-1 truncate mb-3">{{ $printLabel }}</p>
 
                 {{-- Ship action buttons next to the label for one-click marking after print --}}
                 <div class="flex gap-2 pt-3 border-t border-neutral-100" data-system-id="{{ $order->system_id }}">

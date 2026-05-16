@@ -96,6 +96,9 @@ class OrderController extends Controller
         $orders = $query->paginate($request->get('per_page', 20));
         if ($hideQr) {
             $orders->getCollection()->each(fn ($o) => $o->makeHidden('production'));
+        } else {
+            // admin/support can read convert_label (hidden by default on the model)
+            $orders->getCollection()->each(fn ($o) => $o->makeVisible('convert_label'));
         }
 
         // Flag duplicates by lookup against the cached `duplicate_ref_ids` table.
@@ -130,7 +133,11 @@ class OrderController extends Controller
             : ['items.metas'];
 
         $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'address', 'user']));
-        if ($hideQr) $order->makeHidden('production');
+        if ($hideQr) {
+            $order->makeHidden('production');
+        } else {
+            $order->makeVisible('convert_label');
+        }
 
         return response()->json(['order' => $order]);
     }
@@ -1396,6 +1403,9 @@ class OrderController extends Controller
         }
         if ($request->filled('system_id')) {
             $query->where('system_id', 'like', '%' . $request->system_id . '%');
+        }
+        if ($request->filled('tracking_id')) {
+            $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
         }
         if ($request->filled('ref_ids')) {
             $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
