@@ -68,7 +68,7 @@
         <p class="text-lg md:text-xl text-neutral-600 max-w-2xl mx-auto mb-10 leading-relaxed">
             BullStart syncs your listings, fulfills your open orders, prints packing slips, and
             posts tracking back to Etsy — so you can ship faster without juggling tabs.
-            <span class="inline-block mt-2 px-2 py-0.5 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded">Free for Etsy sellers.</span>
+            <span class="inline-block mt-2 px-2 py-0.5 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded">Free during early access.</span>
         </p>
         <div class="flex flex-col sm:flex-row justify-center gap-3 mb-14">
             <a href="#contact" class="px-6 py-3.5 bg-neutral-900 hover:bg-neutral-800 text-white rounded-xl font-semibold text-sm shadow-soft-lg transition">
@@ -347,8 +347,8 @@
     <div class="max-w-4xl mx-auto px-6">
         <div class="text-center mb-12">
             <span class="text-xs font-bold uppercase tracking-widest text-orange-600">Pricing</span>
-            <h2 class="text-3xl md:text-4xl font-extrabold text-neutral-900 mt-2 mb-3 tracking-tight">Free for Etsy sellers</h2>
-            <p class="text-neutral-600 max-w-2xl mx-auto">BullStart is built and operated by Team Bullstart's own print shop. We use the platform to run our own fulfillment line — and we open it to other Etsy sellers at no cost while we collect feedback.</p>
+            <h2 class="text-3xl md:text-4xl font-extrabold text-neutral-900 mt-2 mb-3 tracking-tight">Free during early access</h2>
+            <p class="text-neutral-600 max-w-2xl mx-auto">BullStart is built and operated by Team Bullstart's own print shop. We use the platform to run our own fulfillment line — and during early access we open it to every Etsy seller at no cost while we collect feedback. Paid tiers will be introduced after general availability.</p>
         </div>
 
         <div class="bg-gradient-to-br from-orange-50 to-orange-100 border-2 border-orange-200 rounded-3xl p-10 text-center shadow-soft">
@@ -370,8 +370,8 @@
         </div>
 
         <p class="text-center text-xs text-neutral-500 mt-6 max-w-2xl mx-auto">
-            We may introduce paid tiers in the future. If and when that happens, we'll publish the
-            change on this page and email every active seller at least 30 days in advance.
+            Paid tiers will be introduced after general availability. We'll publish the change on
+            this page and email every active seller at least 30 days in advance.
         </p>
     </div>
 </section>
@@ -387,8 +387,8 @@
         @php
             $faqs = [
                 ['q' => 'Is BullStart endorsed by Etsy?', 'a' => 'No. BullStart is an independent seller tool that uses the public Etsy Open API v3. The term "Etsy" is a trademark of Etsy, Inc. This application uses the Etsy API but is not endorsed or certified by Etsy, Inc.'],
-                ['q' => 'Do you take a cut of my sales?', 'a' => 'No. BullStart is free for sellers — no per-order fee, no subscription, no setup cost. BullStart does not touch the buyer payment flow either; buyers continue to check out on Etsy.'],
-                ['q' => 'Why is it free? What\'s the catch?', 'a' => 'BullStart was built by Team Bullstart\'s own print shop. We use the platform to run our own fulfillment line, so the infrastructure cost is already covered. Opening it to other Etsy sellers at no cost lets us collect feedback and improve faster. We may introduce paid tiers in the future, and we\'ll email every active seller at least 30 days before any change.'],
+                ['q' => 'Do you take a cut of my sales?', 'a' => 'No. BullStart does not touch the buyer payment flow — buyers continue to check out on Etsy. BullStart is also free during early access, with no per-order fee. Future paid tiers will be subscription-style; we will never take a percentage of your sales.'],
+                ['q' => 'Why is it free during early access?', 'a' => 'BullStart was built by Team Bullstart\'s own print shop. We use the platform to run our own fulfillment line, so the infrastructure cost is already covered. Keeping early access free for every Etsy seller lets us collect feedback and improve faster. Paid tiers will be introduced after general availability; we\'ll email every active seller at least 30 days before any change.'],
                 ['q' => 'Can buyers see BullStart?', 'a' => 'No. There is no buyer-facing surface. BullStart only renders inside the seller\'s workspace. Buyers continue to browse, check out, and receive notifications on Etsy as usual.'],
                 ['q' => 'Will BullStart change my listings without asking?', 'a' => 'Never. Every write happens after a human in your team clicks Save inside BullStart. There are no scheduled or autonomous edits.'],
                 ['q' => 'How do I revoke access?', 'a' => 'Open your Etsy account settings → Apps & Permissions → BullStart → Revoke. We stop polling and writing the moment Etsy returns an invalid-token response.'],
@@ -417,7 +417,7 @@
     <div class="relative max-w-3xl mx-auto px-6 text-center text-white">
         <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4">Want to bring your shop on?</h2>
         <p class="text-neutral-300 text-lg mb-8 max-w-xl mx-auto">
-            BullStart is free for Etsy sellers and rolling out to the general public. Drop us a
+            BullStart is free during early access and rolling out to the general public. Drop us a
             note and we'll send your onboarding link within one business day.
         </p>
         <a href="mailto:thanhp0312@gmail.com" class="inline-flex items-center gap-2 px-6 py-3.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-bold text-sm shadow-soft-lg transition">
