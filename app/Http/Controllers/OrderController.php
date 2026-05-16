@@ -852,6 +852,79 @@ class OrderController extends Controller
         ]);
     }
 
+    /**
+     * Clear the convert_label column so the converter cron picks the order
+     * back up and re-runs the overlay. Admin/support only — convert_label is
+     * an internal artifact and sellers do not see the column.
+     */
+    public function reconvertLabel(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if (!$user) abort(401);
+
+        $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
+        if (!$isStaff) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        if (empty($order->shipping_label)) {
+            return response()->json(['message' => 'Order has no shipping_label to overlay'], 422);
+        }
+
+        $order->update(['convert_label' => null]);
+
+        $note = $order->status === Order::STATUS_NEW_ORDER
+            ? 'Reconvert queued — the converter cron will rebuild convert_label on its next poll.'
+            : 'convert_label cleared. Order is no longer in new_order status, so the converter cron will skip it; reset the status to new_order if you want it re-processed.';
+
+        return response()->json([
+            'message' => $note,
+            'order' => $order->fresh()->makeVisible('convert_label')
+                ->only(['id', 'system_id', 'status', 'shipping_label', 'convert_label']),
+        ]);
+    }
+
+    /**
+     * Bulk-clear convert_label for many orders at once. Body: order_ids[].
+     * Admin/support only.
+     */
+    public function bulkReconvertLabel(Request $request)
+    {
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        $user = $request->user();
+        $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
+        if (!$isStaff) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $orders = Order::whereIn('id', $request->order_ids)
+            ->whereNotNull('shipping_label')
+            ->where('shipping_label', '!=', '')
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json([
+                'message' => 'No matching orders with a shipping_label to reconvert',
+                'count' => 0,
+            ], 422);
+        }
+
+        $count = 0;
+        foreach ($orders as $order) {
+            $order->update(['convert_label' => null]);
+            $count++;
+        }
+
+        return response()->json([
+            'message' => "Cleared convert_label on {$count} order(s). The converter cron will rebuild them for orders still in new_order status.",
+            'count' => $count,
+        ]);
+    }
+
     public function updateStatus(Request $request, Order $order)
     {
         $request->validate(['status' => 'required|integer|in:0,1,2,3,4,5,6,7']);

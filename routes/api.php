@@ -53,6 +53,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders/unpaid-summary', [OrderController::class, 'unpaidSummary']);
     Route::post('/orders/pay-all-unpaid', [OrderController::class, 'payAllUnpaid']);
     Route::post('/orders/bulk-reconvert', [OrderController::class, 'bulkReconvert']);
+    Route::post('/orders/bulk-reconvert-label', [OrderController::class, 'bulkReconvertLabel']);
     Route::post('/orders/bulk-delete', [OrderController::class, 'bulkDestroy']);
     Route::post('/orders/bulk-re-production', [OrderController::class, 'bulkReProduction']);
     Route::post('/orders/bulk-set-production', [OrderController::class, 'bulkSetProduction']);
@@ -68,6 +69,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
     Route::post('/orders/{order}/pay', [OrderController::class, 'pay']);
     Route::post('/orders/{order}/reconvert', [OrderController::class, 'reconvert']);
+    Route::post('/orders/{order}/reconvert-label', [OrderController::class, 'reconvertLabel']);
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
 
     // Products (read for all)
