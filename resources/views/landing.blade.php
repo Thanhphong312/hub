@@ -36,9 +36,8 @@
 {{-- ============================== STICKY NAV ============================== --}}
 <nav class="sticky top-0 z-50 glass border-b border-neutral-200/60">
     <div class="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
-        <a href="/" class="flex items-center gap-2.5">
-            <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 text-white flex items-center justify-center font-extrabold text-sm shadow-soft">BS</div>
-            <span class="font-bold text-neutral-900 text-base tracking-tight">BullStart</span>
+        <a href="/" class="flex items-center">
+            <img src="{{ asset('logo.png') }}" alt="BullStart" class="h-9 w-auto" />
         </a>
         <nav class="hidden md:flex items-center gap-7 text-sm font-medium">
             <a href="#features" class="text-neutral-600 hover:text-neutral-900 transition">Features</a>
@@ -396,10 +395,7 @@
 <footer class="bg-[#faf6f1] border-t border-neutral-200">
     <div class="max-w-6xl mx-auto px-6 py-10 grid md:grid-cols-4 gap-8 text-sm">
         <div class="md:col-span-2">
-            <div class="flex items-center gap-2.5 mb-3">
-                <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 text-white flex items-center justify-center font-extrabold text-sm">BS</div>
-                <span class="font-bold text-neutral-900">BullStart</span>
-            </div>
+            <img src="{{ asset('logo.png') }}" alt="BullStart" class="h-10 w-auto mb-4" />
             <p class="text-xs text-neutral-500 leading-relaxed max-w-sm">
                 The term &ldquo;Etsy&rdquo; is a trademark of Etsy, Inc.
                 This application uses the Etsy API but is not endorsed or certified by Etsy, Inc.
