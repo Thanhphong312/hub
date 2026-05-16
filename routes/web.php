@@ -9,11 +9,14 @@ use Illuminate\Support\Facades\Route;
 Route::any('/wallet/vnpay/ipn', [VnpayController::class, 'ipn']);
 Route::get('/wallet/vnpay/return', [VnpayController::class, 'return'])->name('vnpay.return');
 
+// Public landing page. Etsy reviewers visit this URL when evaluating the API
+// application — it must be reachable without authentication and must carry
+// the Etsy attribution disclaimer (Section 6 of Etsy's API Terms of Use).
 Route::get('/', function () {
     return auth()->check()
         ? redirect('/home')
-        : redirect()->route('login');
-});
+        : view('landing');
+})->name('landing');
 
 // Web auth (session-based) for the QR detail page
 Route::middleware('guest')->group(function () {
