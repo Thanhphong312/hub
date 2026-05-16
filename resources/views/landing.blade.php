@@ -43,6 +43,7 @@
             <a href="#features" class="text-neutral-600 hover:text-neutral-900 transition">Features</a>
             <a href="#how" class="text-neutral-600 hover:text-neutral-900 transition">How it works</a>
             <a href="#security" class="text-neutral-600 hover:text-neutral-900 transition">Security</a>
+            <a href="#pricing" class="text-neutral-600 hover:text-neutral-900 transition">Pricing</a>
             <a href="#faq" class="text-neutral-600 hover:text-neutral-900 transition">FAQ</a>
         </nav>
         <div class="flex items-center gap-2">
@@ -65,8 +66,9 @@
             <span class="bg-gradient-to-r from-orange-500 to-orange-700 bg-clip-text text-transparent">from one workspace.</span>
         </h1>
         <p class="text-lg md:text-xl text-neutral-600 max-w-2xl mx-auto mb-10 leading-relaxed">
-            BullStart syncs your listings, fulfills your open orders, prints packing labels, and
-            posts tracking back to Etsy — so your team can ship faster without juggling tabs.
+            BullStart syncs your listings, fulfills your open orders, prints packing slips, and
+            posts tracking back to Etsy — so you can ship faster without juggling tabs.
+            <span class="inline-block mt-2 px-2 py-0.5 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded">Free for Etsy sellers.</span>
         </p>
         <div class="flex flex-col sm:flex-row justify-center gap-3 mb-14">
             <a href="#contact" class="px-6 py-3.5 bg-neutral-900 hover:bg-neutral-800 text-white rounded-xl font-semibold text-sm shadow-soft-lg transition">
@@ -157,7 +159,7 @@
     <div class="max-w-6xl mx-auto px-6 py-12 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
         @php
             $stats = [
-                ['n' => '< 60s', 'l' => 'From scan to "shipped" on Etsy'],
+                ['n' => '< 60s', 'l' => 'From order to "shipped" on Etsy'],
                 ['n' => '5', 'l' => 'OAuth scopes — no more, no less'],
                 ['n' => '100%', 'l' => 'Server-side token storage'],
                 ['n' => '0', 'l' => 'Listings created without seller approval'],
@@ -193,8 +195,8 @@
                 [
                     'kicker' => 'Fulfillment',
                     'title' => 'From open order to shipped',
-                    'desc' => 'Filter open orders, batch designs onto gangsheets, scan a Code 128 barcode at the QC station, print the carrier label, and BullStart posts the tracking number back to Etsy. The buyer gets Etsy\'s standard shipped email — exactly as if you\'d marked it shipped on Etsy.',
-                    'features' => ['Unified order list', 'Gangsheet batcher', 'QR-scan QC station', 'Tracking write-back'],
+                    'desc' => 'Filter open orders, generate a print-ready packing slip with one click, mark orders shipped inside BullStart — and we post the tracking number back to Etsy. The buyer gets Etsy\'s standard shipped email, exactly as if you\'d marked it shipped on Etsy.',
+                    'features' => ['Unified order list', 'One-click packing slips', 'Tracking write-back', 'Shipped status sync'],
                     'icon' => '<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0"/></svg>',
                 ],
                 [
@@ -261,7 +263,7 @@
                 ['t' => 'Approve scopes', 'd' => 'Review the five scopes BullStart needs (listings_r, listings_w, transactions_r, transactions_w, shops_r) and approve them on Etsy.'],
                 ['t' => 'Sync your catalog', 'd' => 'BullStart performs a one-time pull of your listings and open orders into your private workspace.'],
                 ['t' => 'Edit listings', 'd' => 'Update inventory, price, title, description, and images inside BullStart. Click Save to push the change back to Etsy.'],
-                ['t' => 'Print &amp; ship', 'd' => 'Scan a Code 128 barcode at the QC station, print the carrier label, and BullStart marks the order shipped.'],
+                ['t' => 'Print &amp; ship', 'd' => 'Generate a packing slip, ship the order, and mark it shipped in BullStart. The shipped status flows back to Etsy through the API.'],
                 ['t' => 'Tracking write-back', 'd' => 'BullStart posts the tracking number to Etsy via the API. The buyer receives Etsy\'s standard shipped notification.'],
             ];
         @endphp
@@ -340,6 +342,40 @@
     </div>
 </section>
 
+{{-- ============================== PRICING ============================== --}}
+<section id="pricing" class="py-24 bg-white">
+    <div class="max-w-4xl mx-auto px-6">
+        <div class="text-center mb-12">
+            <span class="text-xs font-bold uppercase tracking-widest text-orange-600">Pricing</span>
+            <h2 class="text-3xl md:text-4xl font-extrabold text-neutral-900 mt-2 mb-3 tracking-tight">Free for Etsy sellers</h2>
+            <p class="text-neutral-600 max-w-2xl mx-auto">BullStart is built and operated by Team Bullstart's own print shop. We use the platform to run our own fulfillment line — and we open it to other Etsy sellers at no cost while we collect feedback.</p>
+        </div>
+
+        <div class="bg-gradient-to-br from-orange-50 to-orange-100 border-2 border-orange-200 rounded-3xl p-10 text-center shadow-soft">
+            <div class="inline-flex items-center gap-2 px-3 py-1 bg-white text-orange-700 text-xs font-bold rounded-full mb-5 shadow-soft">
+                <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
+                EARLY ACCESS · NO CREDIT CARD
+            </div>
+            <div class="text-7xl font-extrabold text-neutral-900 tracking-tight mb-2">$0</div>
+            <p class="text-neutral-600 mb-8">No setup fee · No per-order fee · No subscription</p>
+            <div class="grid sm:grid-cols-2 gap-3 max-w-md mx-auto text-left mb-8">
+                @foreach (['Unlimited listings sync', 'Unlimited orders fulfilled', 'One-click packing slips', 'Variation &amp; image editor', 'Tracking write-back to Etsy', 'Email support'] as $item)
+                    <div class="flex items-start gap-2 text-sm text-neutral-700">
+                        <svg class="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                        <span>{{ $item }}</span>
+                    </div>
+                @endforeach
+            </div>
+            <a href="#contact" class="inline-block px-6 py-3.5 bg-neutral-900 hover:bg-neutral-800 text-white rounded-xl font-semibold text-sm shadow-soft-lg transition">Request early access</a>
+        </div>
+
+        <p class="text-center text-xs text-neutral-500 mt-6 max-w-2xl mx-auto">
+            We may introduce paid tiers in the future. If and when that happens, we'll publish the
+            change on this page and email every active seller at least 30 days in advance.
+        </p>
+    </div>
+</section>
+
 {{-- ============================== FAQ ============================== --}}
 <section id="faq" class="py-24 bg-white">
     <div class="max-w-3xl mx-auto px-6">
@@ -351,12 +387,13 @@
         @php
             $faqs = [
                 ['q' => 'Is BullStart endorsed by Etsy?', 'a' => 'No. BullStart is an independent seller tool that uses the public Etsy Open API v3. The term "Etsy" is a trademark of Etsy, Inc. This application uses the Etsy API but is not endorsed or certified by Etsy, Inc.'],
-                ['q' => 'Do you take a cut of my sales?', 'a' => 'No. BullStart does not touch the buyer payment flow — buyers continue to check out on Etsy. We are not commercial software; we do not charge a per-order fee.'],
-                ['q' => 'Can buyers see BullStart?', 'a' => 'No. There is no buyer-facing surface. BullStart only renders inside the seller\'s workspace and on the production-floor desktop app.'],
+                ['q' => 'Do you take a cut of my sales?', 'a' => 'No. BullStart is free for sellers — no per-order fee, no subscription, no setup cost. BullStart does not touch the buyer payment flow either; buyers continue to check out on Etsy.'],
+                ['q' => 'Why is it free? What\'s the catch?', 'a' => 'BullStart was built by Team Bullstart\'s own print shop. We use the platform to run our own fulfillment line, so the infrastructure cost is already covered. Opening it to other Etsy sellers at no cost lets us collect feedback and improve faster. We may introduce paid tiers in the future, and we\'ll email every active seller at least 30 days before any change.'],
+                ['q' => 'Can buyers see BullStart?', 'a' => 'No. There is no buyer-facing surface. BullStart only renders inside the seller\'s workspace. Buyers continue to browse, check out, and receive notifications on Etsy as usual.'],
                 ['q' => 'Will BullStart change my listings without asking?', 'a' => 'Never. Every write happens after a human in your team clicks Save inside BullStart. There are no scheduled or autonomous edits.'],
                 ['q' => 'How do I revoke access?', 'a' => 'Open your Etsy account settings → Apps & Permissions → BullStart → Revoke. We stop polling and writing the moment Etsy returns an invalid-token response.'],
                 ['q' => 'Where can I delete my data?', 'a' => 'Email us at the address below. We remove your records and confirm the deletion within seven business days.'],
-                ['q' => 'Do you support more than 5 shops?', 'a' => 'Our current API key is approved for Personal Access (up to 5 shops). Once we onboard a sixth shop we will request Commercial Access from Etsy.'],
+                ['q' => 'Do you support more than 5 shops?', 'a' => 'Yes — that is exactly why we are requesting Commercial Access from Etsy. Personal Access caps at 5 shops; Commercial Access unlocks BullStart for the general public, which is who we want to serve.'],
             ];
         @endphp
 
@@ -380,8 +417,8 @@
     <div class="relative max-w-3xl mx-auto px-6 text-center text-white">
         <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4">Want to bring your shop on?</h2>
         <p class="text-neutral-300 text-lg mb-8 max-w-xl mx-auto">
-            BullStart is currently in limited rollout to our team and a small group of partner Etsy
-            sellers. Drop us a note — we'll reply within one business day.
+            BullStart is free for Etsy sellers and rolling out to the general public. Drop us a
+            note and we'll send your onboarding link within one business day.
         </p>
         <a href="mailto:thanhp0312@gmail.com" class="inline-flex items-center gap-2 px-6 py-3.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-bold text-sm shadow-soft-lg transition">
             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
@@ -407,6 +444,7 @@
                 <li><a href="#features" class="hover:text-neutral-900">Features</a></li>
                 <li><a href="#how" class="hover:text-neutral-900">How it works</a></li>
                 <li><a href="#security" class="hover:text-neutral-900">Security</a></li>
+                <li><a href="#pricing" class="hover:text-neutral-900">Pricing</a></li>
                 <li><a href="#faq" class="hover:text-neutral-900">FAQ</a></li>
             </ul>
         </div>
