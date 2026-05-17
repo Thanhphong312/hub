@@ -65,7 +65,13 @@
             return;
         }
         statusEl.textContent = 'Loading…';
-        window.location.href = '/qr/' + encodeURIComponent(id);
+        // Route by prefix: "GSL123" → gangsheet-label scan page; everything
+        // else falls through to the per-order /qr page.
+        if (/^GSL\d+$/i.test(id)) {
+            window.location.href = '/gs/' + encodeURIComponent(id);
+        } else {
+            window.location.href = '/qr/' + encodeURIComponent(id);
+        }
     }
 
     // Passive scanner detection: a hardware HID scanner sends keystrokes

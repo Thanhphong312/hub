@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\VnpayController;
+use App\Http\Controllers\Web\GangsheetLabelWebController;
 use App\Http\Controllers\Web\QrController;
 use App\Http\Controllers\Web\WebAuthController;
 use Illuminate\Support\Facades\Route;
@@ -33,4 +34,8 @@ Route::middleware(['auth', 'web.portal'])->group(function () {
     Route::post('/qr/{systemId}/status', [QrController::class, 'updateStatus'])->name('qr.update-status');
     Route::get('/qr/{systemId}/label-image', [QrController::class, 'labelImage'])->name('qr.label-image');
     Route::get('/qr/{systemId}/print', [QrController::class, 'printPage'])->name('qr.print');
+
+    // Gangsheet Label scan page — scanned barcode "GSL{id}" lands here.
+    Route::get('/gs/{code}', [GangsheetLabelWebController::class, 'show'])->name('gs.show');
+    Route::post('/gs/{code}/complete-all', [GangsheetLabelWebController::class, 'completeAll'])->name('gs.complete-all');
 });

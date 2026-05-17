@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Gangsheet;
+use App\Models\GangsheetLabel;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderItemMeta;
@@ -169,6 +170,26 @@ class GangsheetController extends Controller
                 if (!empty($orderIds)) {
                     Order::whereIn('id', $orderIds)->update(['production' => true]);
                 }
+
+                // Parallel gangsheet_labels row: mirrors the orders so the
+                // scan-to-complete-all workflow can operate on the same set.
+                // The name reuses the gangsheet's filename (minus the .pdf)
+                // so operators can match the printed _qr sheet against this
+                // label group at a glance.
+                $labelName = preg_replace('/\.pdf$/i', '', $gs->filename) . '_label';
+                $totalItemsQty = empty($orderIds)
+                    ? 0
+                    : (int) OrderItem::whereIn('order_id', $orderIds)->sum('quantity');
+                GangsheetLabel::create([
+                    'gangsheet_id' => $gs->id,
+                    'created_by_user_id' => $request->user()?->id,
+                    'name' => $labelName,
+                    'line_id' => $gs->line_id,
+                    'order_ids' => $orderIds,
+                    'orders_count' => count($orderIds),
+                    'total_items_qty' => $totalItemsQty,
+                    'status' => 'pending',
+                ]);
 
                 return $gs;
             });

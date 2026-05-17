@@ -4,6 +4,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ConversionController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\GangsheetController;
+use App\Http\Controllers\GangsheetLabelController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\SettingController;
@@ -116,6 +117,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheets', [GangsheetController::class, 'store']);
         Route::get('/gangsheets/{gangsheet}', [GangsheetController::class, 'show']);
         Route::delete('/gangsheets/{gangsheet}', [GangsheetController::class, 'destroy']);
+
+        // Gangsheet label — parallel grouping of convert_labels for orders
+        // already in a _qr gangsheet. Scanned for bulk complete-all.
+        Route::get('/gangsheet-labels', [GangsheetLabelController::class, 'index']);
+        Route::get('/gangsheet-labels/{gangsheetLabel}', [GangsheetLabelController::class, 'show']);
+        Route::post('/gangsheet-labels/{gangsheetLabel}/complete-all', [GangsheetLabelController::class, 'completeAll']);
+        Route::delete('/gangsheet-labels/{gangsheetLabel}', [GangsheetLabelController::class, 'destroy']);
     });
 
     // VNPay (authenticated — seller initiates a deposit)
