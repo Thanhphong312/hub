@@ -875,7 +875,7 @@ class OrderController extends Controller
 
         $note = $order->status === Order::STATUS_NEW_ORDER
             ? 'Reconvert queued — the converter cron will rebuild convert_label on its next poll.'
-            : 'convert_label cleared. Order is no longer in new_order status, so the converter cron will skip it; reset the status to new_order if you want it re-processed.';
+            : "convert_label cleared. Order {$order->system_id} is past new_order status, so the cron will skip it — use \"Convert by ID\" on the Convert Label page to force a rebuild.";
 
         return response()->json([
             'message' => $note,

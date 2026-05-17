@@ -245,7 +245,12 @@ class ConversionController extends Controller
         if (!$isStaff && $order->user_id !== $user->id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-        if ($order->status !== Order::STATUS_NEW_ORDER) {
+        // Staff can pass `force=1` to bypass the NEW_ORDER status check —
+        // used by the manual "Convert by ID" input on the Convert Label
+        // page when operators need to re-overlay an order that already
+        // moved past new_order.
+        $force = $isStaff && $request->boolean('force');
+        if (!$force && $order->status !== Order::STATUS_NEW_ORDER) {
             return response()->json(['message' => 'Order is not in new_order status'], 422);
         }
 
@@ -268,5 +273,47 @@ class ConversionController extends Controller
             'order' => $order->fresh()->makeVisible('convert_label')
                 ->only(['id', 'system_id', 'shipping_label', 'convert_label']),
         ], 201);
+    }
+
+    /**
+     * Look up a single order by numeric id OR system_id and return the
+     * payload needed to render a convert_label (the same shape that
+     * `pending()` returns in `convert_label_pending`). Admin/support only.
+     * Used by the manual input on the Convert Label page.
+     */
+    public function lookupLabelTarget(Request $request, string $idOrSystemId)
+    {
+        $user = $request->user();
+        if (!$user->convert) {
+            return response()->json(['message' => 'Convert mode is not enabled for this account'], 403);
+        }
+        $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
+        if (!$isStaff) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $needle = trim($idOrSystemId);
+        if ($needle === '') {
+            return response()->json(['message' => 'Missing id or system_id'], 422);
+        }
+
+        $order = ctype_digit($needle)
+            ? Order::with('items.accessoryPrice')->find((int) $needle)
+            : Order::with('items.accessoryPrice')->where('system_id', $needle)->first();
+
+        if (!$order) {
+            return response()->json(['message' => "No order found for \"{$needle}\""], 404);
+        }
+        if (empty($order->shipping_label)) {
+            return response()->json(['message' => "Order {$order->system_id} has no shipping_label"], 422);
+        }
+
+        return response()->json([
+            'order_id' => $order->id,
+            'system_id' => $order->system_id,
+            'shipping_label' => $order->shipping_label,
+            'accessory_summary' => $this->computeAccessorySummary($order),
+            'status' => $order->status,
+        ]);
     }
 }
