@@ -70,16 +70,19 @@ class ConversionController extends Controller
                 $qty = max(1, (int) ($item->quantity ?? 1));
                 $total = count($sourceKeysWithValue) * $qty;
 
-                // Detect greeting-card products robustly so the client can
-                // toggle the back-face transform without depending on the
-                // exact line_id value. Accepts any of:
-                //   - line_id (case-insensitive) === "GC"
-                //   - product name contains "greeting" or "card" (covers
-                //     existing typo "Greating Card" and future variants).
+                // Detect greeting-card / card-line products. Accepts any of:
+                //   - line_id == "GC" or starts with "GC" (Greeting Card)
+                //   - line_id ends with "_C"  (Pressify convention: PS_C, HC_C, …)
+                //   - line_id is 2 chars ending in C (LC, HC, …)
+                //   - product name contains "greeting" or "card"
+                //     (covers the existing "Greating Card" typo too).
                 $product = $item->productVariant?->product;
                 $lineId = strtoupper((string) ($product->line_id ?? ''));
                 $productName = strtolower((string) ($product->name ?? ''));
                 $isGcProduct = $lineId === 'GC'
+                    || str_starts_with($lineId, 'GC')
+                    || str_ends_with($lineId, '_C')
+                    || (strlen($lineId) === 2 && str_ends_with($lineId, 'C'))
                     || str_contains($productName, 'greeting')
                     || str_contains($productName, 'card');
 
