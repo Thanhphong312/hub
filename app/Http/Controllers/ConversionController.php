@@ -70,6 +70,19 @@ class ConversionController extends Controller
                 $qty = max(1, (int) ($item->quantity ?? 1));
                 $total = count($sourceKeysWithValue) * $qty;
 
+                // Detect greeting-card products robustly so the client can
+                // toggle the back-face transform without depending on the
+                // exact line_id value. Accepts any of:
+                //   - line_id (case-insensitive) === "GC"
+                //   - product name contains "greeting" or "card" (covers
+                //     existing typo "Greating Card" and future variants).
+                $product = $item->productVariant?->product;
+                $lineId = strtoupper((string) ($product->line_id ?? ''));
+                $productName = strtolower((string) ($product->name ?? ''));
+                $isGcProduct = $lineId === 'GC'
+                    || str_contains($productName, 'greeting')
+                    || str_contains($productName, 'card');
+
                 $globalIdx = 0;
                 $pending = [];
                 foreach ($sourceKeysWithValue as $sk) {
@@ -87,6 +100,10 @@ class ConversionController extends Controller
                             'total_copies' => $qty,
                             'index' => $globalIdx,
                             'total' => $total,
+                            // Pre-computed server-side so the client doesn't
+                            // need to do string matching itself. Only "back"
+                            // gets the flip + no-overlay treatment.
+                            'is_greeting_card_back' => $isGcProduct && $sk === 'back',
                         ];
                     }
                 }
