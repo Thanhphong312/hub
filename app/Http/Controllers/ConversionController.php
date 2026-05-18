@@ -39,6 +39,7 @@ class ConversionController extends Controller
         $query = Order::with([
                 'items.metas',
                 'items.accessoryPrice',
+                'items.productVariant.product:id,line_id',
             ])
             ->whereHas('items.metas', fn ($q) => $q->whereIn('key', self::SOURCE_KEYS))
             ->orderBy('id', 'asc');
@@ -98,6 +99,11 @@ class ConversionController extends Controller
                         'accessory_summary' => $accessorySummary,
                         'quantity' => $qty,
                         'total_metas' => $total,
+                        // Surfaced so the desktop composer can apply
+                        // line-specific behavior — currently used to skip
+                        // the system_id overlay and rotate 180° for the
+                        // back face of a greeting card (line_id "GC").
+                        'line_id' => $item->productVariant?->product?->line_id,
                         'pending' => $pending,
                     ];
                 }
