@@ -828,6 +828,129 @@ class OrderController extends Controller
         });
     }
 
+    /**
+     * Bulk-update the envelope/accessory of existing orders from a CSV-style
+     * payload. Each row carries a ref_id and an accessory_code (e.g. "W"/"R"/"B").
+     * Rows are applied to the matching order's items in id ASC order, so a
+     * ref_id with N rows updates the first N items.
+     *
+     * Body: { rows: [{ ref_id, accessory_code }] }
+     * Admin / support only — sellers update their own orders through the
+     * normal order edit screen.
+     */
+    public function importEnvelopes(Request $request)
+    {
+        $request->validate([
+            'rows' => 'required|array|min:1',
+            'rows.*.ref_id' => 'required|string',
+            'rows.*.accessory_code' => 'nullable|string',
+        ]);
+
+        $user = $request->user();
+        $isStaff = $user && $user->role && in_array($user->role->slug, ['admin', 'support']);
+        if (!$isStaff) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        // Group rows by ref_id, preserving original sequence — we use the
+        // position within the group as the item index when applying updates.
+        $grouped = [];
+        foreach ($request->rows as $row) {
+            $rid = trim($row['ref_id']);
+            $code = strtoupper(trim((string) ($row['accessory_code'] ?? '')));
+            if ($rid === '') continue;
+            $grouped[$rid][] = $code;
+        }
+
+        $refIds = array_keys($grouped);
+        // Load orders + items + product (for accessory lookup) + user (for tier).
+        $orders = Order::with(['items.productVariant.product', 'user:id,tier_id'])
+            ->whereIn('ref_id', $refIds)
+            ->orderBy('id', 'desc')
+            ->get()
+            ->groupBy('ref_id');
+
+        $results = [];
+        $updated = 0; $skipped = 0; $errors = 0;
+
+        foreach ($grouped as $refId => $codes) {
+            $orderList = $orders->get($refId);
+            if (!$orderList || $orderList->isEmpty()) {
+                foreach ($codes as $i => $code) {
+                    $results[] = ['ref_id' => $refId, 'index' => $i, 'status' => 'no_order', 'message' => "No order with ref_id {$refId}"];
+                    $errors++;
+                }
+                continue;
+            }
+            // Multiple orders share a ref_id when sellers re-upload. Take the
+            // most recent — same convention the dup-detector uses elsewhere.
+            $order = $orderList->first();
+            $items = $order->items->sortBy('id')->values();
+            $tierId = $order->user?->tier_id;
+
+            foreach ($codes as $i => $code) {
+                $rowResult = ['ref_id' => $refId, 'order_id' => $order->id, 'system_id' => $order->system_id, 'index' => $i];
+
+                if ($code === '') {
+                    $rowResult += ['status' => 'skipped', 'message' => 'No accessory_code in row'];
+                    $skipped++;
+                    $results[] = $rowResult;
+                    continue;
+                }
+
+                $item = $items->get($i);
+                if (!$item) {
+                    $rowResult += ['status' => 'no_item', 'message' => "Order has only {$items->count()} item(s); row {$i} skipped"];
+                    $errors++;
+                    $results[] = $rowResult;
+                    continue;
+                }
+
+                $productId = $item->productVariant?->product_id;
+                if (!$productId || !$tierId) {
+                    $rowResult += ['status' => 'no_accessory', 'message' => 'Item missing product or seller tier'];
+                    $errors++;
+                    $results[] = $rowResult;
+                    continue;
+                }
+
+                $accessory = AccessoryPrice::whereHas('accessory', fn ($q) => $q->where('product_id', $productId))
+                    ->where('tier_id', $tierId)
+                    ->where('accessory_code', $code)
+                    ->first();
+                if (!$accessory) {
+                    $rowResult += ['status' => 'no_accessory', 'message' => "No accessory '{$code}' for product {$productId} / tier {$tierId}"];
+                    $errors++;
+                    $results[] = $rowResult;
+                    continue;
+                }
+
+                if ($item->accessory_item_id === $accessory->id) {
+                    $rowResult += ['status' => 'no_change', 'message' => "Already {$code}"];
+                    $skipped++;
+                    $results[] = $rowResult;
+                    continue;
+                }
+
+                $item->update(['accessory_item_id' => $accessory->id]);
+                $rowResult += ['status' => 'ok', 'message' => "Updated item {$item->id} → {$code}", 'item_id' => $item->id, 'accessory_id' => $accessory->id];
+                $updated++;
+                $results[] = $rowResult;
+            }
+        }
+
+        return response()->json([
+            'summary' => [
+                'rows_total' => count($results),
+                'updated' => $updated,
+                'skipped' => $skipped,
+                'errors' => $errors,
+                'orders_touched' => count(array_unique(array_filter(array_column($results, 'order_id')))),
+            ],
+            'results' => $results,
+        ]);
+    }
+
     public function reconvert(Request $request, Order $order)
     {
         $user = $request->user();
