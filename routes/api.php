@@ -74,6 +74,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{order}/reconvert', [OrderController::class, 'reconvert']);
     Route::post('/orders/{order}/reconvert-label', [OrderController::class, 'reconvertLabel']);
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
+    Route::put('/order-items/{item}/accessories', [OrderController::class, 'updateItemAccessories']);
 
     // Products (read for all)
     Route::get('/products', [ProductController::class, 'index']);

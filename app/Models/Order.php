@@ -83,14 +83,14 @@ class Order extends Model
     {
         if ($this->stock_decremented) return;
 
-        $this->loadMissing('items');
+        $this->loadMissing('items.accessoryPrices');
         foreach ($this->items as $item) {
             $qty = max(1, (int) ($item->quantity ?? 1));
             if ($item->product_variant_id) {
                 ProductVariant::where('id', $item->product_variant_id)->decrement('stock', $qty);
             }
-            if ($item->accessory_item_id) {
-                AccessoryPrice::where('id', $item->accessory_item_id)->decrement('stock', $qty);
+            foreach ($item->accessoryPrices as $acc) {
+                AccessoryPrice::where('id', $acc->id)->decrement('stock', $qty);
             }
         }
         $this->stock_decremented = true;

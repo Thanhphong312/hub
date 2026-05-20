@@ -23,7 +23,7 @@ class OrderController extends Controller
             ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
-        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'address', 'user']));
+        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
 
         // Seller chỉ thấy đơn của mình
         if ($request->user()->hasRole('seller')) {
@@ -132,7 +132,7 @@ class OrderController extends Controller
             ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
-        $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'address', 'user']));
+        $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
         if ($hideQr) {
             $order->makeHidden('production');
         } else {
@@ -176,6 +176,65 @@ class OrderController extends Controller
         }
     }
 
+    /**
+     * Normalize accessory ids from a request item payload. Accepts either
+     * the legacy single `accessory_item_id` or the new `accessory_ids[]`
+     * array; returns a deduped int array preserving order.
+     */
+    private function collectAccessoryIds(array $itemData): array
+    {
+        $ids = [];
+        if (!empty($itemData['accessory_ids']) && is_array($itemData['accessory_ids'])) {
+            foreach ($itemData['accessory_ids'] as $id) {
+                $i = (int) $id;
+                if ($i > 0) $ids[$i] = true;
+            }
+        }
+        if (!empty($itemData['accessory_item_id'])) {
+            $i = (int) $itemData['accessory_item_id'];
+            if ($i > 0) $ids[$i] = true;
+        }
+        return array_keys($ids);
+    }
+
+    /**
+     * Attach the given accessory ids to the item via the pivot, filtering
+     * down to the user's tier so a seller can't trick the form into using
+     * another tier's price. Also updates the legacy primary
+     * accessory_item_id column to the first valid id so single-accessory
+     * read paths (Conversion / QR) keep working. Returns the per-unit
+     * accessory total (sum of prices) for inclusion in print_cost.
+     */
+    private function syncItemAccessories(OrderItem $item, array $accessoryIds, ?int $tierId): float
+    {
+        if (empty($accessoryIds) || $tierId === null) {
+            $item->accessoryPrices()->sync([]);
+            if ($item->accessory_item_id !== null) {
+                $item->update(['accessory_item_id' => null]);
+            }
+            return 0.0;
+        }
+        $valid = AccessoryPrice::whereIn('id', $accessoryIds)
+            ->where('tier_id', $tierId)
+            ->get()
+            ->keyBy('id');
+        // Preserve the caller's order so accessory_item_id maps to the first
+        // accessory the user actually picked, not the lowest id.
+        $orderedValid = collect($accessoryIds)
+            ->map(fn ($id) => $valid->get((int) $id))
+            ->filter()
+            ->values();
+        if ($orderedValid->isEmpty()) {
+            $item->accessoryPrices()->sync([]);
+            $item->update(['accessory_item_id' => null]);
+            return 0.0;
+        }
+        $ids = $orderedValid->pluck('id')->all();
+        $item->accessoryPrices()->sync($ids);
+        $item->update(['accessory_item_id' => $ids[0]]);
+        return (float) $orderedValid->sum('price');
+    }
+
     public function store(Request $request)
     {
         $hasLabel = !empty($request->shipping_label);
@@ -184,7 +243,11 @@ class OrderController extends Controller
             'ref_id' => 'required|string',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
+            // Legacy single accessory (kept for backward compat — callers may
+            // still send it). Multi-accessory uses accessory_ids[] below.
             'items.*.accessory_item_id' => 'nullable|exists:accessory_prices,id',
+            'items.*.accessory_ids' => 'nullable|array',
+            'items.*.accessory_ids.*' => 'integer|exists:accessory_prices,id',
             'items.*.mockup_front' => 'nullable|string',
             'items.*.mockup_back' => 'nullable|string',
             'items.*.quantity' => 'nullable|integer|min:1',
@@ -248,27 +311,18 @@ class OrderController extends Controller
                 $price = $this->getVariantPrice($itemData['product_variant_id'], $userTierId);
                 $quantity = max(1, (int)($itemData['quantity'] ?? 1));
 
-                // Validate accessory price belongs to user's tier
-                $accessoryItemId = null;
-                $accessoryUnitPrice = 0;
-                if (!empty($itemData['accessory_item_id'])) {
-                    $accPrice = AccessoryPrice::find($itemData['accessory_item_id']);
-                    if ($accPrice && $accPrice->tier_id === $userTierId) {
-                        $accessoryItemId = $accPrice->id;
-                        $accessoryUnitPrice = (float)$accPrice->price;
-                    }
-                }
-
                 $item = OrderItem::create([
                     'order_id' => $order->id,
                     'product_variant_id' => $itemData['product_variant_id'],
-                    'accessory_item_id' => $accessoryItemId,
+                    'accessory_item_id' => null, // set by syncItemAccessories below
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
                     'order_type' => $itemData['order_type'] ?? 0,
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
+                $accessoryIds = $this->collectAccessoryIds($itemData);
+                $accessoryUnitPrice = $this->syncItemAccessories($item, $accessoryIds, $userTierId);
                 $printCost += ($price + $accessoryUnitPrice) * $quantity;
                 $totalQty += $quantity;
                 if ($refVariantId === null) $refVariantId = $itemData['product_variant_id'];
@@ -298,7 +352,7 @@ class OrderController extends Controller
 
             return response()->json([
                 'message' => 'Order created',
-                'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'address']),
+                'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
             ], 201);
         });
     }
@@ -340,7 +394,7 @@ class OrderController extends Controller
 
         return response()->json([
             'message' => 'Order updated',
-            'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'address']),
+            'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
         ]);
     }
 
@@ -397,7 +451,7 @@ class OrderController extends Controller
             'order_ids.*' => 'integer|exists:orders,id',
         ]);
 
-        $orders = Order::with('items.accessoryPrice')
+        $orders = Order::with('items.accessoryPrices')
             ->whereIn('id', $request->order_ids)
             ->whereNotNull('ref_id')
             ->get();
@@ -440,12 +494,12 @@ class OrderController extends Controller
                 $deleted += Order::whereIn('id', $loserIds)->delete();
 
                 // 5. Recompute winner totals from the merged items.
-                $winner->load('items.accessoryPrice', 'user');
+                $winner->load('items.accessoryPrices', 'user');
                 $totalQty = 0;
                 $totalPrint = 0;
                 foreach ($winner->items as $it) {
                     $qty   = max(1, (int) ($it->quantity ?? 1));
-                    $acc   = $it->accessoryPrice ? (float) $it->accessoryPrice->price : 0;
+                    $acc   = (float) $it->accessoryPrices->sum('price');
                     $totalPrint += ((float) $it->price + $acc) * $qty;
                     $totalQty   += $qty;
                 }
@@ -833,6 +887,86 @@ class OrderController extends Controller
     }
 
     /**
+     * Replace the accessories attached to an order item, then recompute the
+     * parent order's print_cost / total_cost. Used by the OrderDetail "Edit
+     * accessories" inline editor.
+     *
+     * Authorization mirrors updateItemMetas: admin/support, or the order's
+     * owner. Shipped/cancelled orders are locked since pricing/stock has
+     * already been settled.
+     *
+     * Prices are looked up at the ORDER OWNER'S tier — not the caller's —
+     * because the seller's tier set the unit price when the order was
+     * created and we shouldn't switch tiers mid-flight just because an
+     * admin is editing.
+     */
+    public function updateItemAccessories(Request $request, OrderItem $item)
+    {
+        $caller = $request->user();
+        $item->loadMissing('order.user');
+        $order = $item->order;
+        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+
+        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
+        $isOwner = $order->user_id === $caller?->id;
+        if (!$isStaff && !$isOwner) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if (in_array((int) $order->status, [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED], true)) {
+            return response()->json(['message' => 'Order is shipped or cancelled — accessories are locked'], 422);
+        }
+
+        $request->validate([
+            'accessory_ids' => 'present|array',
+            'accessory_ids.*' => 'integer|exists:accessory_prices,id',
+        ]);
+
+        $ownerTierId = $order->user?->tier_id;
+        if ($ownerTierId === null) {
+            return response()->json(['message' => "Order owner has no tier — can't price accessories"], 422);
+        }
+
+        return DB::transaction(function () use ($request, $item, $order, $ownerTierId) {
+            $accIds = array_values(array_unique(array_map('intval', $request->accessory_ids)));
+            $this->syncItemAccessories($item, $accIds, $ownerTierId);
+
+            // Recompute order totals from every item now in the order.
+            $order->load('items.accessoryPrices', 'user');
+            $totalQty = 0;
+            $totalPrint = 0;
+            foreach ($order->items as $it) {
+                $itQty = max(1, (int) ($it->quantity ?? 1));
+                $itAcc = (float) $it->accessoryPrices->sum('price');
+                $totalPrint += ((float) $it->price + $itAcc) * $itQty;
+                $totalQty += $itQty;
+            }
+            // Shipping is set from the order's first variant — same convention
+            // as createOrder/importCsv. Keep current shipping_cost if no
+            // variant exists (shouldn't happen but safe).
+            $hasLabel = !empty($order->shipping_label);
+            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+            $shippingCost = $firstVariantId
+                ? $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty)
+                : (float) $order->shipping_cost;
+            $order->update([
+                'print_cost'    => $totalPrint,
+                'shipping_cost' => $shippingCost,
+                'total_cost'    => $totalPrint + $shippingCost,
+            ]);
+
+            return response()->json([
+                'message' => 'Accessories updated; order totals recomputed',
+                'item_id' => $item->id,
+                'accessory_ids' => $item->accessoryPrices()->pluck('accessory_prices.id'),
+                'order' => $order->fresh()->load([
+                    'items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier',
+                    'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address',
+                ]),
+            ]);
+        });
+    }
+
+    /**
      * Bulk-update the envelope/accessory of existing orders from a CSV-style
      * payload. Each row carries a ref_id and an accessory_code (e.g. "W"/"R"/"B").
      * Rows are applied to the matching order's items in id ASC order, so a
@@ -936,7 +1070,11 @@ class OrderController extends Controller
                     continue;
                 }
 
+                // Envelope import = single-accessory replace. Whatever pivot
+                // rows existed get wiped and the new code becomes the only
+                // accessory + the primary legacy reference.
                 $item->update(['accessory_item_id' => $accessory->id]);
+                $item->accessoryPrices()->sync([$accessory->id]);
                 $rowResult += ['status' => 'ok', 'message' => "Updated item {$item->id} → {$code}", 'item_id' => $item->id, 'accessory_id' => $accessory->id];
                 $updated++;
                 $results[] = $rowResult;
@@ -1430,30 +1568,41 @@ class OrderController extends Controller
                     continue;
                 }
 
-                // Resolve accessory price (skip row entirely if invalid).
-                $accessoryItemId = null;
-                $accessoryUnitPrice = 0;
-                if (!empty($data['accessory_code'])) {
-                    $accPrice = AccessoryPrice::where('accessory_code', $data['accessory_code'])
-                        ->where('tier_id', $user->tier_id)
-                        ->first();
-                    if ($accPrice) {
-                        $accessoryItemId = $accPrice->id;
-                        $accessoryUnitPrice = (float)$accPrice->price;
-                    } else {
-                        $errors[] = "Line {$lineNum}: accessory_code '{$data['accessory_code']}' not found for your tier (row skipped)";
-                        continue;
+                // Resolve accessory price(s). accessory_code accepts a single
+                // code or comma/pipe-separated list (e.g. "W,B,R") to attach
+                // multiple accessories to the same line item. accessory_item_id
+                // is kept for legacy CSVs that use the numeric id.
+                $resolvedAccPrices = collect();
+                $codeRaw = trim((string) ($data['accessory_code'] ?? ''));
+                $idRaw = trim((string) ($data['accessory_item_id'] ?? ''));
+                if ($codeRaw !== '') {
+                    $codes = array_values(array_filter(array_map('trim', preg_split('/[\s,;|]+/', $codeRaw))));
+                    foreach ($codes as $code) {
+                        $accPrice = AccessoryPrice::where('accessory_code', $code)
+                            ->where('tier_id', $user->tier_id)
+                            ->first();
+                        if (!$accPrice) {
+                            $errors[] = "Line {$lineNum}: accessory_code '{$code}' not found for your tier (row skipped)";
+                            $resolvedAccPrices = null;
+                            break;
+                        }
+                        $resolvedAccPrices->push($accPrice);
                     }
-                } elseif (!empty($data['accessory_item_id'])) {
-                    $accPrice = AccessoryPrice::find((int)$data['accessory_item_id']);
-                    if ($accPrice && $accPrice->tier_id === $user->tier_id) {
-                        $accessoryItemId = $accPrice->id;
-                        $accessoryUnitPrice = (float)$accPrice->price;
-                    } else {
-                        $errors[] = "Line {$lineNum}: accessory_item_id not valid for your tier (row skipped)";
-                        continue;
+                } elseif ($idRaw !== '') {
+                    $ids = array_values(array_filter(array_map('intval', preg_split('/[\s,;|]+/', $idRaw))));
+                    foreach ($ids as $id) {
+                        $accPrice = AccessoryPrice::find($id);
+                        if (!$accPrice || $accPrice->tier_id !== $user->tier_id) {
+                            $errors[] = "Line {$lineNum}: accessory_item_id {$id} not valid for your tier (row skipped)";
+                            $resolvedAccPrices = null;
+                            break;
+                        }
+                        $resolvedAccPrices->push($accPrice);
                     }
                 }
+                if ($resolvedAccPrices === null) continue; // any invalid → skip row entirely
+                $accessoryItemId = $resolvedAccPrices->isNotEmpty() ? $resolvedAccPrices->first()->id : null;
+                $accessoryUnitPrice = (float) $resolvedAccPrices->sum('price');
 
                 if ($existingOrder) {
                     // Row joins an existing order in this batch — append item only.
@@ -1510,6 +1659,9 @@ class OrderController extends Controller
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
+                if ($resolvedAccPrices->isNotEmpty()) {
+                    $item->accessoryPrices()->sync($resolvedAccPrices->pluck('id')->all());
+                }
 
                 // Metas: meta_<key> columns → OrderItemMeta rows (skip empty).
                 foreach (['front', 'back', 'left', 'right', 'neck', 'special'] as $metaKey) {
@@ -1526,12 +1678,12 @@ class OrderController extends Controller
                 // Recompute order totals across ALL items now in the order so a
                 // grouped order's total reflects every appended row.
                 $orderHasLabel = !empty($order->shipping_label);
-                $items = $order->items()->with('accessoryPrice')->get();
+                $items = $order->items()->with('accessoryPrices')->get();
                 $totalQty = 0;
                 $totalPrint = 0;
                 foreach ($items as $it) {
                     $itQty = max(1, (int) ($it->quantity ?? 1));
-                    $itAcc = $it->accessoryPrice ? (float) $it->accessoryPrice->price : 0;
+                    $itAcc = (float) $it->accessoryPrices->sum('price');
                     $totalPrint += ((float) $it->price + $itAcc) * $itQty;
                     $totalQty += $itQty;
                 }
@@ -1799,7 +1951,11 @@ class OrderController extends Controller
             'ref_id' => 'nullable|string',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
+            // Legacy single accessory (kept for backward compat — callers may
+            // still send it). Multi-accessory uses accessory_ids[] below.
             'items.*.accessory_item_id' => 'nullable|exists:accessory_prices,id',
+            'items.*.accessory_ids' => 'nullable|array',
+            'items.*.accessory_ids.*' => 'integer|exists:accessory_prices,id',
             'items.*.mockup_front' => 'nullable|string',
             'items.*.mockup_back' => 'nullable|string',
             'items.*.quantity' => 'nullable|integer|min:1',
@@ -1851,26 +2007,18 @@ class OrderController extends Controller
                 $price = $this->getVariantPrice($itemData['product_variant_id'], $userTierId);
                 $quantity = max(1, (int)($itemData['quantity'] ?? 1));
 
-                $accessoryItemId = null;
-                $accessoryUnitPrice = 0;
-                if (!empty($itemData['accessory_item_id'])) {
-                    $accPrice = AccessoryPrice::find($itemData['accessory_item_id']);
-                    if ($accPrice && $accPrice->tier_id === $userTierId) {
-                        $accessoryItemId = $accPrice->id;
-                        $accessoryUnitPrice = (float)$accPrice->price;
-                    }
-                }
-
                 $item = OrderItem::create([
                     'order_id' => $order->id,
                     'product_variant_id' => $itemData['product_variant_id'],
-                    'accessory_item_id' => $accessoryItemId,
+                    'accessory_item_id' => null,
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
                     'order_type' => $itemData['order_type'] ?? 0,
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
+                $accessoryIds = $this->collectAccessoryIds($itemData);
+                $accessoryUnitPrice = $this->syncItemAccessories($item, $accessoryIds, $userTierId);
                 $printCost += ($price + $accessoryUnitPrice) * $quantity;
                 $totalQty += $quantity;
                 if ($refVariantId === null) $refVariantId = $itemData['product_variant_id'];
@@ -1900,7 +2048,7 @@ class OrderController extends Controller
 
             return response()->json([
                 'message' => 'Order created via API key',
-                'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'address']),
+                'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
             ], 201);
         });
     }

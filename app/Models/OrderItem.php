@@ -21,9 +21,23 @@ class OrderItem extends Model
         return $this->belongsTo(ProductVariant::class);
     }
 
+    // Legacy single-accessory relation. Kept in sync with the first
+    // accessory of accessoryPrices() so existing consumers (Conversion / QR /
+    // envelope import) keep working unchanged.
     public function accessoryPrice()
     {
         return $this->belongsTo(AccessoryPrice::class, 'accessory_item_id');
+    }
+
+    // Multi-accessory via pivot. Source of truth for pricing and stock.
+    public function accessoryPrices()
+    {
+        return $this->belongsToMany(
+            AccessoryPrice::class,
+            'order_item_accessories',
+            'order_item_id',
+            'accessory_price_id'
+        )->withTimestamps();
     }
 
     public function metas()
