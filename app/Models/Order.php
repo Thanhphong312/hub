@@ -10,7 +10,7 @@ class Order extends Model
         'user_id', 'system_id', 'ref_id', 'status', 'ship_type', 'shipping_label',
         'shipping_label_converted', 'convert_label',
         'tracking_id', 'print_cost', 'shipping_cost', 'total_cost',
-        'paid_cost', 'completed_time', 'production',
+        'paid_cost', 'completed_time', 'production', 'stock_decremented',
     ];
 
     // convert_label is admin/support-only — hidden by default, controllers call
@@ -23,6 +23,7 @@ class Order extends Model
             'completed_time' => 'datetime',
             'production' => 'boolean',
             'shipping_label_converted' => 'boolean',
+            'stock_decremented' => 'boolean',
         ];
     }
 
@@ -69,5 +70,30 @@ class Order extends Model
     public function getStatusNameAttribute(): string
     {
         return self::STATUS_MAP[$this->status] ?? 'unknown';
+    }
+
+    /**
+     * Decrement product_variants.stock and accessory_prices.stock for every
+     * item in this order. Idempotent: the `stock_decremented` flag prevents
+     * double-deduction when the same order transitions to SHIPPED twice (e.g.
+     * re-saving an already-shipped order). Caller is responsible for wrapping
+     * this in a DB::transaction if it's part of a larger update.
+     */
+    public function decrementStockForShipment(): void
+    {
+        if ($this->stock_decremented) return;
+
+        $this->loadMissing('items');
+        foreach ($this->items as $item) {
+            $qty = max(1, (int) ($item->quantity ?? 1));
+            if ($item->product_variant_id) {
+                ProductVariant::where('id', $item->product_variant_id)->decrement('stock', $qty);
+            }
+            if ($item->accessory_item_id) {
+                AccessoryPrice::where('id', $item->accessory_item_id)->decrement('stock', $qty);
+            }
+        }
+        $this->stock_decremented = true;
+        $this->saveQuietly();
     }
 }

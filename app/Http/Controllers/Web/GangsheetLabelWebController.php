@@ -52,12 +52,14 @@ class GangsheetLabelWebController extends Controller
 
         $affected = 0;
         if (!empty($orderIds)) {
-            $affected = Order::whereIn('id', $orderIds)
+            $toShip = Order::with('items')->whereIn('id', $orderIds)
                 ->where('status', '!=', Order::STATUS_SHIPPED)
-                ->update([
-                    'status' => Order::STATUS_SHIPPED,
-                    'completed_time' => now(),
-                ]);
+                ->get();
+            foreach ($toShip as $o) {
+                $o->update(['status' => Order::STATUS_SHIPPED, 'completed_time' => now()]);
+                $o->decrementStockForShipment();
+                $affected++;
+            }
             $label->update(['status' => 'completed', 'completed_at' => now()]);
         }
 

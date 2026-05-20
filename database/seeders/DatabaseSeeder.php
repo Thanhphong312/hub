@@ -24,7 +24,7 @@ class DatabaseSeeder extends Seeder
         Tier::create(['name' => 'Tier 3']);
 
         // Admin permissions - full access
-        $modules = ['orders', 'products', 'dashboard', 'wallet', 'users', 'settings'];
+        $modules = ['orders', 'products', 'dashboard', 'wallet', 'users', 'settings', 'inventory'];
         foreach ($modules as $module) {
             Permission::create([
                 'role_id' => $admin->id,

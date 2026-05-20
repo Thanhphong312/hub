@@ -74,12 +74,15 @@ class GangsheetLabelController extends Controller
         return DB::transaction(function () use ($gangsheetLabel, $orderIds) {
             // Only flip orders that are not already shipped — keeps
             // completed_time on the original ship event.
-            $affected = Order::whereIn('id', $orderIds)
+            $toShip = Order::with('items')->whereIn('id', $orderIds)
                 ->where('status', '!=', Order::STATUS_SHIPPED)
-                ->update([
-                    'status' => Order::STATUS_SHIPPED,
-                    'completed_time' => now(),
-                ]);
+                ->get();
+            $affected = 0;
+            foreach ($toShip as $o) {
+                $o->update(['status' => Order::STATUS_SHIPPED, 'completed_time' => now()]);
+                $o->decrementStockForShipment();
+                $affected++;
+            }
 
             $gangsheetLabel->update([
                 'status' => 'completed',

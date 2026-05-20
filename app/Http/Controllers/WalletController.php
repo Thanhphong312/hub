@@ -118,9 +118,14 @@ class WalletController extends Controller
             'method' => 'sometimes|in:' . implode(',', WalletTransaction::METHODS),
             'transaction_id' => 'sometimes|string|unique:wallet_transactions,transaction_id,' . $transaction->id,
             'note' => 'nullable|string',
+            // Admin-only: reassign the deposit to a different user before approval.
+            // The validate-or-strip below blocks sellers from sending it.
+            'user_id' => 'sometimes|exists:users,id',
         ]);
 
-        $transaction->update($request->only(['amount', 'method', 'transaction_id', 'note']));
+        $fields = ['amount', 'method', 'transaction_id', 'note'];
+        if ($isAdmin) $fields[] = 'user_id';
+        $transaction->update($request->only($fields));
 
         return response()->json([
             'message' => 'Deposit updated',

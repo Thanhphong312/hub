@@ -334,6 +334,10 @@ class OrderController extends Controller
 
         $order->update($data);
 
+        if (isset($data['status']) && $data['status'] == Order::STATUS_SHIPPED) {
+            $order->fresh()->decrementStockForShipment();
+        }
+
         return response()->json([
             'message' => 'Order updated',
             'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'address']),
@@ -1064,6 +1068,11 @@ class OrderController extends Controller
         }
 
         $order->update($data);
+
+        if ($request->status == Order::STATUS_SHIPPED) {
+            $order->fresh()->decrementStockForShipment();
+        }
+
         return response()->json(['message' => 'Status updated', 'order' => $order->fresh()]);
     }
 
@@ -1087,6 +1096,13 @@ class OrderController extends Controller
         }
 
         Order::whereIn('id', $request->order_ids)->update($data);
+
+        if ($request->status == Order::STATUS_SHIPPED) {
+            // Decrement stock per-order (each call is idempotent via
+            // stock_decremented), so re-shipping orders in a bulk batch is safe.
+            Order::with('items')->whereIn('id', $request->order_ids)->get()
+                ->each(fn ($o) => $o->decrementStockForShipment());
+        }
 
         return response()->json([
             'message' => 'Bulk status updated',

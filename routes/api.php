@@ -4,6 +4,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ConversionController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\GangsheetController;
+use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\GangsheetLabelController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ProductController;
@@ -140,6 +141,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(CheckRole::class . ':admin')->group(function () {
         Route::post('/wallet/deposit/{transaction}/approve', [WalletController::class, 'approveDeposit']);
         Route::post('/wallet/refund', [WalletController::class, 'refund']);
+    });
+
+    // Inventory (admin only) — manual stock imports. Shipping orders also
+    // decrements stock automatically (see Order::decrementStockForShipment).
+    Route::middleware(CheckRole::class . ':admin')->group(function () {
+        Route::get('/inventory/stock', [InventoryController::class, 'stock']);
+        Route::get('/inventory/imports', [InventoryController::class, 'index']);
+        Route::post('/inventory/imports', [InventoryController::class, 'store']);
+        Route::delete('/inventory/imports/{import}', [InventoryController::class, 'destroy']);
     });
 
     // Users (admin only)

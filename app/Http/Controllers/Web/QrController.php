@@ -55,6 +55,10 @@ class QrController extends Controller
 
         $order->update($data);
 
+        if ($statusValue === Order::STATUS_SHIPPED) {
+            $order->fresh()->decrementStockForShipment();
+        }
+
         // XHR (from Ship & Print button) gets JSON; classic form posts redirect.
         if ($request->expectsJson() || $request->ajax()) {
             return response()->json(['ok' => true, 'status' => $request->status]);
