@@ -213,6 +213,26 @@ class GangsheetController extends Controller
         return response()->json(['message' => 'Gangsheet deleted']);
     }
 
+    /**
+     * Bulk-delete gangsheets selected from the Manage tab. Same semantics as
+     * single destroy — orders/metas keep their production=true flags so we
+     * don't accidentally re-gang the same prints.
+     */
+    public function bulkDestroy(Request $request)
+    {
+        $request->validate([
+            'gangsheet_ids' => 'required|array|min:1',
+            'gangsheet_ids.*' => 'integer|exists:gangsheets,id',
+        ]);
+
+        $deleted = Gangsheet::whereIn('id', $request->gangsheet_ids)->delete();
+
+        return response()->json([
+            'message' => "Deleted {$deleted} gangsheet(s)",
+            'count' => $deleted,
+        ]);
+    }
+
     private function decodeIds($input): array
     {
         if (is_array($input)) {

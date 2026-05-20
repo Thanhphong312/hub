@@ -118,6 +118,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/gangsheets/storage-credentials', [GangsheetController::class, 'storageCredentials']);
         Route::get('/gangsheets', [GangsheetController::class, 'index']);
         Route::post('/gangsheets', [GangsheetController::class, 'store']);
+        Route::post('/gangsheets/bulk-delete', [GangsheetController::class, 'bulkDestroy']);
         Route::get('/gangsheets/{gangsheet}', [GangsheetController::class, 'show']);
         Route::delete('/gangsheets/{gangsheet}', [GangsheetController::class, 'destroy']);
 
