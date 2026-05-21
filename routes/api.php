@@ -149,6 +149,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // decrements stock automatically (see Order::decrementStockForShipment).
     Route::middleware(CheckRole::class . ':admin')->group(function () {
         Route::get('/inventory/stock', [InventoryController::class, 'stock']);
+        Route::post('/inventory/resync', [InventoryController::class, 'resyncStock']);
         Route::get('/inventory/imports', [InventoryController::class, 'index']);
         Route::post('/inventory/imports', [InventoryController::class, 'store']);
         Route::delete('/inventory/imports/{import}', [InventoryController::class, 'destroy']);

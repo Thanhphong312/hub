@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\AccessoryPrice;
+use App\Models\Order;
 use App\Models\ProductVariant;
 use App\Models\StockImport;
 use Illuminate\Http\Request;
@@ -130,6 +131,85 @@ class InventoryController extends Controller
             }
             $import->delete();
             return response()->json(['message' => 'Stock import deleted; stock adjusted back']);
+        });
+    }
+
+    /**
+     * POST /api/inventory/resync — recompute every variant + accessory stock
+     * from history: `stock = SUM(imports.quantity) - SUM(shipped_orders × item.qty)`.
+     *
+     * Used after upgrading installs that have historical shipped orders, since
+     * those didn't decrement stock at ship-time (the feature didn't exist yet).
+     * Also flips `orders.stock_decremented = true` on every SHIPPED order so
+     * future re-saves of the same order don't trigger a phantom decrement.
+     *
+     * Idempotent: running it twice gives the same result.
+     */
+    public function resyncStock(Request $request)
+    {
+        return DB::transaction(function () {
+            // Variants ─────────────────────────────────────────────────────
+            $variantImports = DB::table('stock_imports')
+                ->whereNotNull('product_variant_id')
+                ->groupBy('product_variant_id')
+                ->selectRaw('product_variant_id, SUM(quantity) AS imported')
+                ->pluck('imported', 'product_variant_id');
+
+            $variantShipped = DB::table('order_items')
+                ->join('orders', 'orders.id', '=', 'order_items.order_id')
+                ->where('orders.status', Order::STATUS_SHIPPED)
+                ->groupBy('order_items.product_variant_id')
+                ->selectRaw('order_items.product_variant_id, SUM(order_items.quantity) AS shipped')
+                ->pluck('shipped', 'product_variant_id');
+
+            $variantIds = $variantImports->keys()->merge($variantShipped->keys())->unique();
+            $variantsTouched = 0;
+            foreach ($variantIds as $vid) {
+                $imported = (int) ($variantImports[$vid] ?? 0);
+                $shipped  = (int) ($variantShipped[$vid] ?? 0);
+                ProductVariant::where('id', $vid)->update(['stock' => $imported - $shipped]);
+                $variantsTouched++;
+            }
+
+            // Accessories ──────────────────────────────────────────────────
+            // Shipped count comes from the pivot — the migration backfilled
+            // legacy single-accessory rows into the pivot, so this covers
+            // both multi-accessory and pre-multi orders uniformly.
+            $accessoryImports = DB::table('stock_imports')
+                ->whereNotNull('accessory_price_id')
+                ->groupBy('accessory_price_id')
+                ->selectRaw('accessory_price_id, SUM(quantity) AS imported')
+                ->pluck('imported', 'accessory_price_id');
+
+            $accessoryShipped = DB::table('order_item_accessories as oia')
+                ->join('order_items as oi', 'oi.id', '=', 'oia.order_item_id')
+                ->join('orders as o', 'o.id', '=', 'oi.order_id')
+                ->where('o.status', Order::STATUS_SHIPPED)
+                ->groupBy('oia.accessory_price_id')
+                ->selectRaw('oia.accessory_price_id, SUM(oi.quantity) AS shipped')
+                ->pluck('shipped', 'accessory_price_id');
+
+            $accessoryIds = $accessoryImports->keys()->merge($accessoryShipped->keys())->unique();
+            $accessoriesTouched = 0;
+            foreach ($accessoryIds as $apid) {
+                $imported = (int) ($accessoryImports[$apid] ?? 0);
+                $shipped  = (int) ($accessoryShipped[$apid] ?? 0);
+                AccessoryPrice::where('id', $apid)->update(['stock' => $imported - $shipped]);
+                $accessoriesTouched++;
+            }
+
+            // Mark all SHIPPED orders as accounted-for so future re-saves
+            // don't re-trigger decrementStockForShipment().
+            $ordersMarked = Order::where('status', Order::STATUS_SHIPPED)
+                ->where('stock_decremented', false)
+                ->update(['stock_decremented' => true]);
+
+            return response()->json([
+                'message' => 'Stock resynced from history',
+                'variants_updated'   => $variantsTouched,
+                'accessories_updated'=> $accessoriesTouched,
+                'orders_marked'      => $ordersMarked,
+            ]);
         });
     }
 
