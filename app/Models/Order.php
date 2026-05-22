@@ -83,14 +83,21 @@ class Order extends Model
     {
         if ($this->stock_decremented) return;
 
+        // Load accessoryPrices to resolve their parent accessory_id; physical
+        // stock is now tracked on `accessories.stock` (shared across tiers),
+        // so an item with multiple tier-priced accessories of the same group
+        // still consumes from one pool.
         $this->loadMissing('items.accessoryPrices');
         foreach ($this->items as $item) {
             $qty = max(1, (int) ($item->quantity ?? 1));
             if ($item->product_variant_id) {
                 ProductVariant::where('id', $item->product_variant_id)->decrement('stock', $qty);
             }
-            foreach ($item->accessoryPrices as $acc) {
-                AccessoryPrice::where('id', $acc->id)->decrement('stock', $qty);
+            // Dedupe accessory_id within the item so picking 2 tier-prices of
+            // the same accessory in one item only deducts once.
+            $accessoryIds = $item->accessoryPrices->pluck('accessory_id')->filter()->unique();
+            foreach ($accessoryIds as $aid) {
+                Accessory::where('id', $aid)->decrement('stock', $qty);
             }
         }
         $this->stock_decremented = true;

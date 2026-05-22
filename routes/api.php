@@ -137,6 +137,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Wallet
     Route::get('/wallet/balance', [WalletController::class, 'balance']);
     Route::get('/wallet/transactions', [WalletController::class, 'transactions']);
+    Route::get('/wallet/transactions/export', [WalletController::class, 'exportTransactions']);
     // Deposit submit + edit are accessible to seller (own pending only) and admin.
     Route::post('/wallet/deposit', [WalletController::class, 'deposit']);
     Route::put('/wallet/deposit/{transaction}', [WalletController::class, 'updateDeposit']);

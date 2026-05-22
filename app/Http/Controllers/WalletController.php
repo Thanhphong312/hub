@@ -37,6 +37,89 @@ class WalletController extends Controller
         return response()->json($transactions);
     }
 
+    /**
+     * GET /api/wallet/transactions/export — stream CSV of transactions
+     * matching the same filters as `transactions()`. Useful for accounting:
+     * select tab = "Paid" + date range, hit Export, hand the file to finance.
+     *
+     * Streamed so even tens of thousands of rows don't OOM PHP. Filters mirror
+     * `transactions()` 1:1 — sellers see only their own rows (server-enforced),
+     * admin can optionally filter by user_id.
+     */
+    public function exportTransactions(Request $request)
+    {
+        $user = $request->user();
+        $query = WalletTransaction::with(['order:id,system_id,ref_id,total_cost', 'user:id,name,email']);
+
+        if ($user->hasRole('seller')) {
+            $query->where('user_id', $user->id);
+        }
+        if ($request->filled('user_id') && !$user->hasRole('seller')) {
+            $query->where('user_id', $request->user_id);
+        }
+        if ($request->filled('type')) {
+            $query->where('type', $request->type);
+        }
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('created_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('created_at', '<=', $request->date_to);
+        }
+
+        $headers = [
+            'id', 'created_at', 'user_name', 'user_email',
+            'type', 'status', 'method',
+            'transaction_id', 'order_system_id', 'order_ref_id',
+            'amount', 'balance_before', 'balance_after',
+            'note',
+        ];
+
+        $type = $request->get('type', 'all');
+        $filename = "wallet_{$type}_" . now()->format('Ymd_His') . '.csv';
+
+        $callback = function () use ($query, $headers) {
+            $fh = fopen('php://output', 'w');
+            // UTF-8 BOM for Excel
+            fwrite($fh, "\xEF\xBB\xBF");
+            fputcsv($fh, $headers);
+
+            // chunkById streams without holding everything in memory.
+            $query->orderBy('id', 'desc')->chunkById(500, function ($rows) use ($fh) {
+                foreach ($rows as $t) {
+                    fputcsv($fh, [
+                        $t->id,
+                        optional($t->created_at)->format('Y-m-d H:i:s'),
+                        $t->user?->name ?? '',
+                        $t->user?->email ?? '',
+                        $t->type,
+                        $t->status,
+                        $t->method ?? '',
+                        $t->transaction_id ?? '',
+                        $t->order?->system_id ?? $t->order_system_id ?? '',
+                        $t->order?->ref_id ?? '',
+                        // Keep sign (paid/refund are stored negative/positive
+                        // — accountants want to see direction).
+                        number_format((float) $t->amount, 2, '.', ''),
+                        $t->balance_before !== null ? number_format((float) $t->balance_before, 2, '.', '') : '',
+                        $t->balance_after  !== null ? number_format((float) $t->balance_after,  2, '.', '') : '',
+                        $t->note ?? '',
+                    ]);
+                }
+            });
+
+            fclose($fh);
+        };
+
+        return response()->stream($callback, 200, [
+            'Content-Type'        => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+        ]);
+    }
+
     public function deposit(Request $request)
     {
         $request->validate([

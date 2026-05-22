@@ -8,7 +8,11 @@ class StockImport extends Model
 {
     protected $fillable = [
         'product_variant_id',
+        // accessory_price_id kept for legacy audit on rows imported before
+        // stock was unified per-accessory; accessory_id is the source of
+        // truth for new imports.
         'accessory_price_id',
+        'accessory_id',
         'quantity',
         'price_mode',
         'unit_price',
@@ -40,6 +44,11 @@ class StockImport extends Model
     public function accessoryPrice()
     {
         return $this->belongsTo(AccessoryPrice::class);
+    }
+
+    public function accessory()
+    {
+        return $this->belongsTo(Accessory::class);
     }
 
     public function importer()
