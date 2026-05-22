@@ -150,6 +150,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(CheckRole::class . ':admin')->group(function () {
         Route::get('/inventory/stock', [InventoryController::class, 'stock']);
         Route::post('/inventory/resync', [InventoryController::class, 'resyncStock']);
+        Route::get('/inventory/imports/template', [InventoryController::class, 'exportTemplate']);
+        Route::post('/inventory/imports/bulk', [InventoryController::class, 'importCsv']);
         Route::get('/inventory/imports', [InventoryController::class, 'index']);
         Route::post('/inventory/imports', [InventoryController::class, 'store']);
         Route::delete('/inventory/imports/{import}', [InventoryController::class, 'destroy']);

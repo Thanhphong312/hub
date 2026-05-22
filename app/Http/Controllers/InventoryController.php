@@ -213,6 +213,225 @@ class InventoryController extends Controller
         });
     }
 
+    /**
+     * GET /api/inventory/imports/template — download a CSV pre-listing every
+     * existing variant + accessory_price row as a reference, with empty
+     * quantity / price columns for admin to fill in then re-upload via
+     * `POST /api/inventory/imports/bulk`.
+     *
+     * Header order MUST match the import parser below. See README/inventory.md.
+     */
+    public function exportTemplate()
+    {
+        $headers = [
+            'target_type',       // 'variant' | 'accessory'
+            'sku_or_code',       // product_variants.sku or accessory_prices.accessory_code
+            'tier_id',           // required for accessory (which tier row to bump); blank for variant
+            'price_mode',        // 'per_item' | 'per_package'
+            'quantity',          // per_item only; per_package leaves blank (auto = size * count)
+            'package_size',      // per_package only — units per pkg
+            'package_count',     // per_package only — number of pkgs
+            'unit_price',        // per_item = $/unit, per_package = $/pkg
+            'notes',
+            // Reference-only columns (parser ignores) — to help operator
+            // identify the right row when scanning the template.
+            'ref_product_name',
+            'ref_variant_label',
+            'ref_tier_name',
+            'ref_current_stock',
+        ];
+
+        $variants = \App\Models\ProductVariant::with('product:id,name')
+            ->orderBy('product_id')->orderBy('id')->get();
+        $accessories = \App\Models\AccessoryPrice::with('accessory:id,name,product_id', 'accessory.product:id,name', 'tier:id,name')
+            ->orderBy('accessory_id')->orderBy('tier_id')->get();
+
+        $filename = 'inventory_import_template_' . now()->format('Ymd_His') . '.csv';
+
+        $callback = function () use ($headers, $variants, $accessories) {
+            $fh = fopen('php://output', 'w');
+            // UTF-8 BOM so Excel opens Vietnamese correctly.
+            fwrite($fh, "\xEF\xBB\xBF");
+            fputcsv($fh, $headers);
+
+            // Variants
+            foreach ($variants as $v) {
+                $label = trim(implode(' / ', array_filter([$v->color, $v->size, $v->paper_type])));
+                if ($label === '') $label = $v->sku ?? "#{$v->id}";
+                fputcsv($fh, [
+                    'variant',
+                    $v->sku ?? '',
+                    '',                  // tier_id N/A for variant
+                    '',                  // price_mode — fill in
+                    '',                  // quantity
+                    '', '', '',          // package_*, unit_price
+                    '',                  // notes
+                    $v->product?->name ?? '',
+                    $label,
+                    '',
+                    (int) ($v->stock ?? 0),
+                ]);
+            }
+
+            // Accessories
+            foreach ($accessories as $a) {
+                $accName = $a->accessory?->name ?? 'Accessory';
+                $tierName = $a->tier?->name ?? "tier {$a->tier_id}";
+                $styleNote = $a->style ? " ({$a->style})" : '';
+                fputcsv($fh, [
+                    'accessory',
+                    $a->accessory_code ?? '',
+                    $a->tier_id,
+                    '',
+                    '',
+                    '', '', '',
+                    '',
+                    $a->accessory?->product?->name ?? '',
+                    $accName . $styleNote,
+                    $tierName,
+                    (int) ($a->stock ?? 0),
+                ]);
+            }
+
+            fclose($fh);
+        };
+
+        return response()->stream($callback, 200, [
+            'Content-Type'        => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+        ]);
+    }
+
+    /**
+     * POST /api/inventory/imports/bulk — upload the filled template. Each row
+     * with non-empty price_mode becomes 1 stock_imports row + bumps target
+     * stock. Empty rows are skipped (so the template stays small to fill).
+     *
+     * Validation: same rules as single store(). Per-row errors are collected
+     * and returned in the response so the operator can fix and re-upload only
+     * the failing rows.
+     */
+    public function importCsv(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:csv,txt|max:5120',
+        ]);
+
+        $path = $request->file('file')->getPathname();
+        $rows = array_map('str_getcsv', file($path));
+        if (empty($rows)) {
+            return response()->json(['message' => 'Empty file'], 422);
+        }
+
+        $header = array_map(fn ($h) => trim((string) $h), array_shift($rows));
+        // Strip UTF-8 BOM from first header cell if Excel added it.
+        if (!empty($header)) $header[0] = preg_replace('/^\xEF\xBB\xBF/', '', $header[0]);
+
+        $required = ['target_type', 'sku_or_code', 'price_mode', 'unit_price'];
+        foreach ($required as $col) {
+            if (!in_array($col, $header, true)) {
+                return response()->json(['message' => "Missing required column: {$col}"], 422);
+            }
+        }
+
+        $created  = 0;
+        $skipped  = 0;
+        $errors   = [];
+        $imports  = [];
+
+        DB::transaction(function () use ($rows, $header, $request, &$created, &$skipped, &$errors, &$imports) {
+            foreach ($rows as $i => $row) {
+                $lineNum = $i + 2;
+                if (count($row) < count($header)) {
+                    // pad to avoid array_combine warning
+                    $row = array_pad($row, count($header), '');
+                }
+                $row = array_slice($row, 0, count($header));
+                $data = array_combine($header, $row);
+                $data = array_map(fn ($v) => is_string($v) ? trim($v) : $v, $data);
+
+                $mode = strtolower($data['price_mode'] ?? '');
+                if ($mode === '') { $skipped++; continue; } // empty reference row
+
+                $targetType = strtolower($data['target_type'] ?? '');
+                $skuOrCode  = $data['sku_or_code'] ?? '';
+                if ($skuOrCode === '') {
+                    $errors[] = "Line {$lineNum}: missing sku_or_code"; continue;
+                }
+
+                // Resolve target.
+                $variantId = null;
+                $accessoryPriceId = null;
+                if ($targetType === 'variant') {
+                    $variant = \App\Models\ProductVariant::where('sku', $skuOrCode)->first();
+                    if (!$variant) { $errors[] = "Line {$lineNum}: variant sku '{$skuOrCode}' not found"; continue; }
+                    $variantId = $variant->id;
+                } elseif ($targetType === 'accessory') {
+                    $tierId = isset($data['tier_id']) && $data['tier_id'] !== '' ? (int) $data['tier_id'] : null;
+                    if (!$tierId) { $errors[] = "Line {$lineNum}: tier_id required for accessory"; continue; }
+                    $ap = \App\Models\AccessoryPrice::where('accessory_code', $skuOrCode)
+                        ->where('tier_id', $tierId)
+                        ->first();
+                    if (!$ap) { $errors[] = "Line {$lineNum}: accessory code '{$skuOrCode}' tier {$tierId} not found"; continue; }
+                    $accessoryPriceId = $ap->id;
+                } else {
+                    $errors[] = "Line {$lineNum}: target_type must be 'variant' or 'accessory'"; continue;
+                }
+
+                // Resolve qty + total based on price_mode.
+                $unitPrice = (float) ($data['unit_price'] ?? 0);
+                if ($unitPrice < 0) { $errors[] = "Line {$lineNum}: unit_price negative"; continue; }
+
+                if ($mode === StockImport::MODE_PER_PACKAGE) {
+                    $pkgSize  = (int) ($data['package_size'] ?? 0);
+                    $pkgCount = (int) ($data['package_count'] ?? 0);
+                    if ($pkgSize < 1 || $pkgCount < 1) {
+                        $errors[] = "Line {$lineNum}: per_package needs package_size + package_count >= 1"; continue;
+                    }
+                    $quantity = $pkgSize * $pkgCount;
+                    $totalCost = round($unitPrice * $pkgCount, 2);
+                } elseif ($mode === StockImport::MODE_PER_ITEM) {
+                    $quantity = (int) ($data['quantity'] ?? 0);
+                    if ($quantity < 1) { $errors[] = "Line {$lineNum}: per_item needs quantity >= 1"; continue; }
+                    $pkgSize = null; $pkgCount = null;
+                    $totalCost = round($unitPrice * $quantity, 2);
+                } else {
+                    $errors[] = "Line {$lineNum}: price_mode must be 'per_item' or 'per_package'"; continue;
+                }
+
+                $import = StockImport::create([
+                    'product_variant_id' => $variantId,
+                    'accessory_price_id' => $accessoryPriceId,
+                    'quantity'      => $quantity,
+                    'price_mode'    => $mode,
+                    'unit_price'    => $unitPrice,
+                    'package_size'  => $pkgSize,
+                    'package_count' => $pkgCount,
+                    'total_cost'    => $totalCost,
+                    'notes'         => $data['notes'] ?? null,
+                    'imported_by_user_id' => $request->user()->id,
+                    'imported_at'   => now(),
+                ]);
+                if ($variantId) {
+                    \App\Models\ProductVariant::where('id', $variantId)->increment('stock', $quantity);
+                } else {
+                    \App\Models\AccessoryPrice::where('id', $accessoryPriceId)->increment('stock', $quantity);
+                }
+                $imports[] = $import->id;
+                $created++;
+            }
+        });
+
+        return response()->json([
+            'message' => "{$created} import(s) created, {$skipped} skipped, " . count($errors) . " errors",
+            'created' => $created,
+            'skipped' => $skipped,
+            'error_count' => count($errors),
+            'errors' => $errors,
+            'import_ids' => $imports,
+        ]);
+    }
+
     // GET /api/inventory/stock — flat list of on-hand stock for variants + accessory prices.
     // Used by the inventory page's "Current Stock" tab.
     public function stock(Request $request)
