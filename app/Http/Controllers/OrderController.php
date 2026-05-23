@@ -146,6 +146,17 @@ class OrderController extends Controller
         return response()->json($orders);
     }
 
+    /**
+     * @OA\Get(
+     *     path="/orders/{order}",
+     *     tags={"Orders"},
+     *     summary="Get order",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="order", in="path", required=true, @OA\Schema(type="integer"), example=123),
+     *     @OA\Response(response=200, description="OK"),
+     *     @OA\Response(response=404, description="Not found")
+     * )
+     */
     public function show(Request $request, Order $order)
     {
         $hideQr = $this->shouldHideQrMetas($request->user());
@@ -1322,6 +1333,18 @@ class OrderController extends Controller
         ]);
     }
 
+    /**
+     * @OA\Post(
+     *     path="/orders/{order}/pay",
+     *     tags={"Orders"},
+     *     summary="Pay order from wallet",
+     *     description="Trừ (total_cost - paid_cost) khỏi ví seller. Idempotent: đơn đã paid trả 400.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="order", in="path", required=true, @OA\Schema(type="integer"), example=123),
+     *     @OA\Response(response=200, description="Paid"),
+     *     @OA\Response(response=400, description="Already paid or insufficient wallet")
+     * )
+     */
     public function pay(Request $request, Order $order)
     {
         $user = $order->user;
@@ -1455,6 +1478,24 @@ class OrderController extends Controller
         });
     }
 
+    /**
+     * @OA\Post(
+     *     path="/orders/bulk-pay",
+     *     tags={"Orders"},
+     *     summary="Bulk pay orders from wallet",
+     *     description="Pay nhiều đơn cùng lúc từ ví owner. Atomic — nếu owner thiếu ví, abort toàn batch không trừ ai.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             required={"order_ids"},
+     *             @OA\Property(property="order_ids", type="array", @OA\Items(type="integer"), example={123,124,125})
+     *         )
+     *     ),
+     *     @OA\Response(response=200, description="Paid"),
+     *     @OA\Response(response=400, description="Insufficient wallet or all paid")
+     * )
+     */
     public function bulkPay(Request $request)
     {
         $request->validate([
@@ -1545,6 +1586,29 @@ class OrderController extends Controller
         });
     }
 
+    /**
+     * @OA\Post(
+     *     path="/orders/import-csv",
+     *     tags={"Orders"},
+     *     summary="Import orders from CSV",
+     *     description="Upload CSV để tạo nhiều đơn 1 lần. Download template tại GET /orders/export-csv-template. Hỗ trợ multi-accessory qua cột accessory_code (comma/pipe separated).",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\MediaType(
+     *             mediaType="multipart/form-data",
+     *             @OA\Schema(
+     *                 required={"file"},
+     *                 @OA\Property(property="file",   type="string", format="binary", description="CSV file"),
+     *                 @OA\Property(property="force",  type="boolean", default=false, description="Bỏ qua check 409 duplicate ref_id"),
+     *                 @OA\Property(property="rename", type="boolean", default=false, description="Auto thêm suffix _r_1 nếu trùng")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=200, description="Import result"),
+     *     @OA\Response(response=409, description="Duplicate ref_id detected")
+     * )
+     */
     public function importCsv(Request $request)
     {
         $request->validate(['file' => 'required|file|mimes:csv,txt']);
@@ -1815,6 +1879,20 @@ class OrderController extends Controller
         ]);
     }
 
+    /**
+     * @OA\Get(
+     *     path="/orders/export",
+     *     tags={"Orders"},
+     *     summary="Export orders to CSV",
+     *     description="Streamed CSV với cùng filter như GET /orders. Hoặc truyền order_ids để export riêng các đơn đã chọn.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="status",     in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="date_from",  in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="date_to",    in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="order_ids",  in="query", description="Comma-separated", @OA\Schema(type="string"), example="123,124,125"),
+     *     @OA\Response(response=200, description="CSV file", @OA\MediaType(mediaType="text/csv"))
+     * )
+     */
     public function exportOrders(Request $request)
     {
         $query = Order::with(['items.productVariant', 'address', 'user']);

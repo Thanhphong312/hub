@@ -136,6 +136,28 @@ class WalletController extends Controller
         ]);
     }
 
+    /**
+     * @OA\Post(
+     *     path="/wallet/deposit",
+     *     tags={"Wallet"},
+     *     summary="Submit deposit request",
+     *     description="Tạo deposit request (status=pending). Admin sẽ approve qua /wallet/deposit/{id}/approve để cộng tiền vào ví. Seller tự deposit vào ví của chính mình; admin có thể deposit cho user khác qua user_id.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             required={"amount","method","transaction_id"},
+     *             @OA\Property(property="user_id",        type="integer", example=2, description="Admin only — target user. Seller auto = self."),
+     *             @OA\Property(property="amount",         type="number",  example=100.50, minimum=0.01),
+     *             @OA\Property(property="method",         type="string",  enum={"paypal","pingpong"}),
+     *             @OA\Property(property="transaction_id", type="string",  example="PP-9F87B342K"),
+     *             @OA\Property(property="note",           type="string",  example="Top-up via PayPal")
+     *         )
+     *     ),
+     *     @OA\Response(response=200, description="Deposit pending approval"),
+     *     @OA\Response(response=422, description="Validation error (duplicate transaction_id, etc.)")
+     * )
+     */
     public function deposit(Request $request)
     {
         $request->validate([
@@ -272,6 +294,23 @@ class WalletController extends Controller
         });
     }
 
+    /**
+     * @OA\Get(
+     *     path="/wallet/balance",
+     *     tags={"Wallet"},
+     *     summary="Get wallet balance + lifetime totals",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Response(response=200, description="Balance summary",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="wallet",            type="number", example=523.50),
+     *             @OA\Property(property="total_deposited",   type="number", example=2000.00),
+     *             @OA\Property(property="total_paid",        type="number", example=1476.50),
+     *             @OA\Property(property="total_refunded",    type="number", example=0.00),
+     *             @OA\Property(property="pending_deposits",  type="number", example=100.00)
+     *         )
+     *     )
+     * )
+     */
     public function balance(Request $request)
     {
         $user = $request->user();
