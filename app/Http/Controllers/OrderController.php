@@ -14,32 +14,28 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-/**
- * @group Orders
- *
- * CRUD đơn hàng cho seller/admin/support. Auth: Sanctum Bearer token.
- * Các route /fulfill (dùng X-API-KEY) nằm trong group "Public API (X-API-KEY)".
- */
 class OrderController extends Controller
 {
     /**
-     * List orders
-     *
-     * Paginated + filter theo status, ship_type, ref_id, system_id, tracking_id,
-     * date range, paid. Seller chỉ thấy đơn của mình.
-     *
-     * @authenticated
-     * @queryParam status int Status code 0–7. Example: 6
-     * @queryParam ship_type string `tiktok_ship` hoặc `seller_ship`. Example: tiktok_ship
-     * @queryParam ref_id string Tìm contains. Example: TIKTOK-1234
-     * @queryParam system_id string Tìm contains.
-     * @queryParam tracking_id string Tìm contains.
-     * @queryParam date_from string YYYY-MM-DD.
-     * @queryParam date_to string YYYY-MM-DD.
-     * @queryParam paid string `paid` hoặc `unpaid`.
-     * @queryParam user_id int (admin only) Filter theo owner.
-     * @queryParam page int Page. Example: 1
-     * @queryParam per_page int Default 20. Example: 50
+     * @OA\Get(
+     *     path="/orders",
+     *     tags={"Orders"},
+     *     summary="List orders",
+     *     description="Paginated + filter status / ship_type / ref_id / date range / paid. Seller chỉ thấy đơn của mình.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="status",      in="query", description="Status 0–7 (6=shipped)", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="ship_type",   in="query", @OA\Schema(type="string", enum={"tiktok_ship","seller_ship"})),
+     *     @OA\Parameter(name="ref_id",      in="query", description="Contains match", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="system_id",   in="query", description="Contains match", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="tracking_id", in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="date_from",   in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="date_to",     in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="paid",        in="query", @OA\Schema(type="string", enum={"paid","unpaid"})),
+     *     @OA\Parameter(name="user_id",     in="query", description="Admin only — filter by owner", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="page",        in="query", @OA\Schema(type="integer", default=1)),
+     *     @OA\Parameter(name="per_page",    in="query", @OA\Schema(type="integer", default=20)),
+     *     @OA\Response(response=200, description="Paginated list")
+     * )
      */
     public function index(Request $request)
     {
@@ -261,53 +257,57 @@ class OrderController extends Controller
     }
 
     /**
-     * Create order (Sanctum)
-     *
-     * Tạo 1 đơn mới. Phải gửi 1 trong 2: `shipping_label` URL HOẶC `address` đầy đủ.
-     * Items hỗ trợ multi-accessory qua `accessory_ids[]` (mảng id của
-     * `accessory_prices.id` — server tự dedupe theo accessory parent).
-     *
-     * @authenticated
-     * @bodyParam ref_id string required ID đơn nội bộ (unique per seller). Example: TIKTOK-1234567
-     * @bodyParam shipping_label string URL carrier label (Drive/B2). Nếu có thì không cần address. Example: https://drive.google.com/file/d/ABC/view
-     * @bodyParam address object Bắt buộc nếu KHÔNG có shipping_label.
-     * @bodyParam address.first_name string Example: John
-     * @bodyParam address.last_name string Example: Doe
-     * @bodyParam address.address_1 string Example: 123 Main St
-     * @bodyParam address.address_2 string Example: Apt 5
-     * @bodyParam address.city string Example: Boston
-     * @bodyParam address.state string Example: MA
-     * @bodyParam address.zipcode string Example: 02101
-     * @bodyParam address.country string Example: US
-     * @bodyParam items object[] required Mảng items (tối thiểu 1).
-     * @bodyParam items[].product_variant_id int required ID của product_variants. Example: 42
-     * @bodyParam items[].accessory_ids int[] Mảng accessory_prices.id. Example: [18,19]
-     * @bodyParam items[].accessory_item_id int (legacy single-acc, alternative to accessory_ids). Example: 18
-     * @bodyParam items[].quantity int Default 1. Example: 2
-     * @bodyParam items[].mockup_front string URL.
-     * @bodyParam items[].mockup_back string URL.
-     * @bodyParam items[].order_type int 0=Greeting Card, 1=Pass Sleeve. Example: 0
-     * @bodyParam items[].metas object[] Custom meta key/value.
-     * @bodyParam items[].metas[].key string `front|back|left|right|neck|special`. Example: front
-     * @bodyParam items[].metas[].value string URL ảnh source.
-     * @bodyParam force boolean Bỏ qua check 409 duplicate ref_id. Example: false
-     * @bodyParam rename boolean Auto thêm suffix `_r_1` nếu trùng. Example: false
-     *
-     * @response 201 {
-     *   "message": "Order created",
-     *   "order": {
-     *     "id": 123, "system_id": "GC0000123", "ref_id": "TIKTOK-1234567",
-     *     "status": 0, "total_cost": "24.50", "items": []
-     *   }
-     * }
-     * @response 409 scenario="duplicate ref_id" {
-     *   "message": "Duplicate ref_id",
-     *   "duplicates": ["TIKTOK-1234567"]
-     * }
-     * @response 422 scenario="validation" {
-     *   "message": "The ref id field is required.",
-     *   "errors": {"ref_id": ["The ref id field is required."]}
-     * }
+     * @OA\Post(
+     *     path="/orders",
+     *     tags={"Orders"},
+     *     summary="Create order (Sanctum)",
+     *     description="Tạo 1 đơn mới. Phải gửi 1 trong 2: `shipping_label` URL HOẶC `address` đầy đủ. Items hỗ trợ multi-accessory qua `accessory_ids[]`.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             required={"ref_id","items"},
+     *             @OA\Property(property="ref_id", type="string", example="TIKTOK-1234567", description="ID đơn nội bộ (unique per seller)"),
+     *             @OA\Property(property="shipping_label", type="string", example="https://drive.google.com/file/d/ABC/view", description="URL carrier label. Nếu có thì không cần address."),
+     *             @OA\Property(
+     *                 property="address", type="object", description="Bắt buộc nếu KHÔNG có shipping_label.",
+     *                 @OA\Property(property="first_name", type="string", example="John"),
+     *                 @OA\Property(property="last_name",  type="string", example="Doe"),
+     *                 @OA\Property(property="address_1",  type="string", example="123 Main St"),
+     *                 @OA\Property(property="address_2",  type="string", example="Apt 5"),
+     *                 @OA\Property(property="city",       type="string", example="Boston"),
+     *                 @OA\Property(property="state",      type="string", example="MA"),
+     *                 @OA\Property(property="zipcode",    type="string", example="02101"),
+     *                 @OA\Property(property="country",    type="string", example="US")
+     *             ),
+     *             @OA\Property(
+     *                 property="items", type="array", minItems=1,
+     *                 @OA\Items(
+     *                     required={"product_variant_id"},
+     *                     @OA\Property(property="product_variant_id", type="integer", example=42),
+     *                     @OA\Property(property="accessory_ids",      type="array", @OA\Items(type="integer"), example={18,19}, description="Mảng accessory_prices.id (multi-acc)"),
+     *                     @OA\Property(property="accessory_item_id",  type="integer", example=18, description="Legacy single-acc"),
+     *                     @OA\Property(property="quantity",           type="integer", default=1, example=2),
+     *                     @OA\Property(property="mockup_front",       type="string", example="https://drive.google.com/file/d/FRONT/view"),
+     *                     @OA\Property(property="mockup_back",        type="string", example="https://drive.google.com/file/d/BACK/view"),
+     *                     @OA\Property(property="order_type",         type="integer", enum={0,1}, default=0, description="0=Greeting Card, 1=Pass Sleeve"),
+     *                     @OA\Property(
+     *                         property="metas", type="array",
+     *                         @OA\Items(
+     *                             @OA\Property(property="key",   type="string", enum={"front","back","left","right","neck","special"}, example="front"),
+     *                             @OA\Property(property="value", type="string", example="https://...")
+     *                         )
+     *                     )
+     *                 )
+     *             ),
+     *             @OA\Property(property="force",  type="boolean", default=false, description="Bỏ qua check 409 duplicate ref_id"),
+     *             @OA\Property(property="rename", type="boolean", default=false, description="Auto thêm suffix `_r_1` nếu trùng")
+     *         )
+     *     ),
+     *     @OA\Response(response=201, description="Order created"),
+     *     @OA\Response(response=409, description="Duplicate ref_id"),
+     *     @OA\Response(response=422, description="Validation error")
+     * )
      */
     public function store(Request $request)
     {
@@ -1913,16 +1913,15 @@ class OrderController extends Controller
      * pass to POST /api/fulfill and what each variant costs.
      */
     /**
-     * List products + variants (Public API — X-API-KEY)
-     *
-     * @group Public API (X-API-KEY)
-     *
-     * Trả về catalog product với tier-scoped prices của caller. Dùng để biết
-     * `product_variant_id` trước khi POST /fulfill.
-     *
-     * @unauthenticated
-     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-     * @response 200 {"data": [{"id": 1, "name": "T-shirt", "variants": [{"id": 42, "sku": "TSHIRT-RED-M", "stock": 100, "prices": []}]}]}
+     * @OA\Get(
+     *     path="/catalog/products",
+     *     tags={"Public API"},
+     *     summary="List products + variants (X-API-KEY)",
+     *     description="Catalog product với tier-scoped prices của caller. Dùng để biết product_variant_id trước khi POST /fulfill.",
+     *     security={{"apiKeyAuth":{}}},
+     *     @OA\Response(response=200, description="OK"),
+     *     @OA\Response(response=401, description="Invalid X-API-KEY")
+     * )
      */
     public function productsByApiKey(Request $request)
     {
@@ -1955,15 +1954,14 @@ class OrderController extends Controller
      * POST /api/fulfill.
      */
     /**
-     * List accessories (Public API — X-API-KEY)
-     *
-     * @group Public API (X-API-KEY)
-     *
-     * Accessory + tier-scoped prices của caller. Dùng để biết
-     * `accessory_ids[]` trước khi POST /fulfill.
-     *
-     * @unauthenticated
-     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+     * @OA\Get(
+     *     path="/catalog/accessories",
+     *     tags={"Public API"},
+     *     summary="List accessories (X-API-KEY)",
+     *     description="Accessory + tier-scoped prices. Dùng để biết accessory_ids[] trước khi POST /fulfill.",
+     *     security={{"apiKeyAuth":{}}},
+     *     @OA\Response(response=200, description="OK")
+     * )
      */
     public function accessoriesByApiKey(Request $request)
     {
@@ -1987,19 +1985,19 @@ class OrderController extends Controller
      * system_id substring, date range, pagination).
      */
     /**
-     * List orders (Public API — X-API-KEY)
-     *
-     * @group Public API (X-API-KEY)
-     *
-     * Liệt kê đơn của caller. Filter giống `GET /orders`.
-     *
-     * @unauthenticated
-     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-     * @queryParam status int
-     * @queryParam ref_id string
-     * @queryParam date_from string YYYY-MM-DD
-     * @queryParam date_to string YYYY-MM-DD
-     * @queryParam per_page int Default 20.
+     * @OA\Get(
+     *     path="/fulfill",
+     *     tags={"Public API"},
+     *     summary="List orders (X-API-KEY)",
+     *     description="Liệt kê đơn của caller. Filter giống GET /orders.",
+     *     security={{"apiKeyAuth":{}}},
+     *     @OA\Parameter(name="status",    in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="ref_id",    in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="date_from", in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="date_to",   in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="per_page",  in="query", @OA\Schema(type="integer", default=20)),
+     *     @OA\Response(response=200, description="Paginated list")
+     * )
      */
     public function indexByApiKey(Request $request)
     {
@@ -2031,15 +2029,16 @@ class OrderController extends Controller
      * either GET /api/fulfill/PS_C123 or GET /api/fulfill/MY-CUSTOM-REF).
      */
     /**
-     * Get order by id or ref_id (Public API — X-API-KEY)
-     *
-     * @group Public API (X-API-KEY)
-     *
-     * Numeric → order.id. String → order.ref_id.
-     *
-     * @unauthenticated
-     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-     * @urlParam idOrRef string required Id hoặc ref_id. Example: SHOP-987
+     * @OA\Get(
+     *     path="/fulfill/{idOrRef}",
+     *     tags={"Public API"},
+     *     summary="Get order (X-API-KEY)",
+     *     description="Numeric → order.id. String → order.ref_id.",
+     *     security={{"apiKeyAuth":{}}},
+     *     @OA\Parameter(name="idOrRef", in="path", required=true, @OA\Schema(type="string"), example="SHOP-987"),
+     *     @OA\Response(response=200, description="OK"),
+     *     @OA\Response(response=404, description="Not found")
+     * )
      */
     public function showByApiKey(Request $request, string $idOrRef)
     {
@@ -2066,30 +2065,33 @@ class OrderController extends Controller
     }
 
     /**
-     * Create order (Public API — X-API-KEY)
-     *
-     * @group Public API (X-API-KEY)
-     *
-     * Tạo đơn từ external system (vd Shopify webhook, custom script). Auth bằng
-     * header `X-API-KEY: bsk_...` thay vì Bearer token. API key lấy từ Profile
-     * page hoặc `GET /me/api-key`.
-     *
-     * Body payload IDENTICAL với `POST /api/orders` (xem Auth → Orders →
-     * Create order). Khác duy nhất là header auth.
-     *
-     * @unauthenticated
-     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-     * @bodyParam ref_id string required ID đơn nội bộ unique per seller. Example: SHOP-987
-     * @bodyParam shipping_label string URL.
-     * @bodyParam address object Required nếu KHÔNG có shipping_label.
-     * @bodyParam items object[] required Mảng items.
-     * @bodyParam items[].product_variant_id int required.
-     * @bodyParam items[].accessory_ids int[] Multi-acc list.
-     * @bodyParam items[].quantity int Default 1.
-     *
-     * @response 201 {"message": "Order created", "order": {"id": 123, "system_id": "GC0000123"}}
-     * @response 401 scenario="missing or wrong X-API-KEY" {"message": "Invalid API key"}
-     * @response 409 scenario="duplicate ref_id" {"message": "Duplicate ref_id", "duplicates": ["SHOP-987"]}
+     * @OA\Post(
+     *     path="/fulfill",
+     *     tags={"Public API"},
+     *     summary="Create order (X-API-KEY)",
+     *     description="Tạo đơn từ external system. Auth bằng header X-API-KEY (lấy từ Profile page hoặc GET /me/api-key). Body payload identical với POST /orders.",
+     *     security={{"apiKeyAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             required={"ref_id","items"},
+     *             @OA\Property(property="ref_id", type="string", example="SHOP-987"),
+     *             @OA\Property(property="shipping_label", type="string", example="https://drive.google.com/file/d/ABC/view"),
+     *             @OA\Property(property="address", type="object", description="Required nếu KHÔNG có shipping_label"),
+     *             @OA\Property(
+     *                 property="items", type="array",
+     *                 @OA\Items(
+     *                     @OA\Property(property="product_variant_id", type="integer", example=42),
+     *                     @OA\Property(property="accessory_ids", type="array", @OA\Items(type="integer"), example={18}),
+     *                     @OA\Property(property="quantity", type="integer", default=1, example=1)
+     *                 )
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=201, description="Order created"),
+     *     @OA\Response(response=401, description="Invalid or missing X-API-KEY"),
+     *     @OA\Response(response=409, description="Duplicate ref_id")
+     * )
      */
     public function fulfillByApiKey(Request $request)
     {
