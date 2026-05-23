@@ -14,8 +14,33 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
+/**
+ * @group Orders
+ *
+ * CRUD đơn hàng cho seller/admin/support. Auth: Sanctum Bearer token.
+ * Các route /fulfill (dùng X-API-KEY) nằm trong group "Public API (X-API-KEY)".
+ */
 class OrderController extends Controller
 {
+    /**
+     * List orders
+     *
+     * Paginated + filter theo status, ship_type, ref_id, system_id, tracking_id,
+     * date range, paid. Seller chỉ thấy đơn của mình.
+     *
+     * @authenticated
+     * @queryParam status int Status code 0–7. Example: 6
+     * @queryParam ship_type string `tiktok_ship` hoặc `seller_ship`. Example: tiktok_ship
+     * @queryParam ref_id string Tìm contains. Example: TIKTOK-1234
+     * @queryParam system_id string Tìm contains.
+     * @queryParam tracking_id string Tìm contains.
+     * @queryParam date_from string YYYY-MM-DD.
+     * @queryParam date_to string YYYY-MM-DD.
+     * @queryParam paid string `paid` hoặc `unpaid`.
+     * @queryParam user_id int (admin only) Filter theo owner.
+     * @queryParam page int Page. Example: 1
+     * @queryParam per_page int Default 20. Example: 50
+     */
     public function index(Request $request)
     {
         $hideQr = $this->shouldHideQrMetas($request->user());
@@ -235,6 +260,55 @@ class OrderController extends Controller
         return (float) $orderedValid->sum('price');
     }
 
+    /**
+     * Create order (Sanctum)
+     *
+     * Tạo 1 đơn mới. Phải gửi 1 trong 2: `shipping_label` URL HOẶC `address` đầy đủ.
+     * Items hỗ trợ multi-accessory qua `accessory_ids[]` (mảng id của
+     * `accessory_prices.id` — server tự dedupe theo accessory parent).
+     *
+     * @authenticated
+     * @bodyParam ref_id string required ID đơn nội bộ (unique per seller). Example: TIKTOK-1234567
+     * @bodyParam shipping_label string URL carrier label (Drive/B2). Nếu có thì không cần address. Example: https://drive.google.com/file/d/ABC/view
+     * @bodyParam address object Bắt buộc nếu KHÔNG có shipping_label.
+     * @bodyParam address.first_name string Example: John
+     * @bodyParam address.last_name string Example: Doe
+     * @bodyParam address.address_1 string Example: 123 Main St
+     * @bodyParam address.address_2 string Example: Apt 5
+     * @bodyParam address.city string Example: Boston
+     * @bodyParam address.state string Example: MA
+     * @bodyParam address.zipcode string Example: 02101
+     * @bodyParam address.country string Example: US
+     * @bodyParam items object[] required Mảng items (tối thiểu 1).
+     * @bodyParam items[].product_variant_id int required ID của product_variants. Example: 42
+     * @bodyParam items[].accessory_ids int[] Mảng accessory_prices.id. Example: [18,19]
+     * @bodyParam items[].accessory_item_id int (legacy single-acc, alternative to accessory_ids). Example: 18
+     * @bodyParam items[].quantity int Default 1. Example: 2
+     * @bodyParam items[].mockup_front string URL.
+     * @bodyParam items[].mockup_back string URL.
+     * @bodyParam items[].order_type int 0=Greeting Card, 1=Pass Sleeve. Example: 0
+     * @bodyParam items[].metas object[] Custom meta key/value.
+     * @bodyParam items[].metas[].key string `front|back|left|right|neck|special`. Example: front
+     * @bodyParam items[].metas[].value string URL ảnh source.
+     * @bodyParam force boolean Bỏ qua check 409 duplicate ref_id. Example: false
+     * @bodyParam rename boolean Auto thêm suffix `_r_1` nếu trùng. Example: false
+     *
+     * @response 201 {
+     *   "message": "Order created",
+     *   "order": {
+     *     "id": 123, "system_id": "GC0000123", "ref_id": "TIKTOK-1234567",
+     *     "status": 0, "total_cost": "24.50", "items": []
+     *   }
+     * }
+     * @response 409 scenario="duplicate ref_id" {
+     *   "message": "Duplicate ref_id",
+     *   "duplicates": ["TIKTOK-1234567"]
+     * }
+     * @response 422 scenario="validation" {
+     *   "message": "The ref id field is required.",
+     *   "errors": {"ref_id": ["The ref id field is required."]}
+     * }
+     */
     public function store(Request $request)
     {
         $hasLabel = !empty($request->shipping_label);
@@ -1838,6 +1912,18 @@ class OrderController extends Controller
      * tier prices. External systems use this to know which SKUs they can
      * pass to POST /api/fulfill and what each variant costs.
      */
+    /**
+     * List products + variants (Public API — X-API-KEY)
+     *
+     * @group Public API (X-API-KEY)
+     *
+     * Trả về catalog product với tier-scoped prices của caller. Dùng để biết
+     * `product_variant_id` trước khi POST /fulfill.
+     *
+     * @unauthenticated
+     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+     * @response 200 {"data": [{"id": 1, "name": "T-shirt", "variants": [{"id": 42, "sku": "TSHIRT-RED-M", "stock": 100, "prices": []}]}]}
+     */
     public function productsByApiKey(Request $request)
     {
         $user = $request->get('api_user');
@@ -1868,6 +1954,17 @@ class OrderController extends Controller
      * accessory_code values the seller can pass when creating orders via
      * POST /api/fulfill.
      */
+    /**
+     * List accessories (Public API — X-API-KEY)
+     *
+     * @group Public API (X-API-KEY)
+     *
+     * Accessory + tier-scoped prices của caller. Dùng để biết
+     * `accessory_ids[]` trước khi POST /fulfill.
+     *
+     * @unauthenticated
+     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+     */
     public function accessoriesByApiKey(Request $request)
     {
         $user = $request->get('api_user');
@@ -1888,6 +1985,21 @@ class OrderController extends Controller
      * Public API: list orders for the API key's user. Supports the same
      * filters as the desktop app (status, ref_id substring, ref_ids list,
      * system_id substring, date range, pagination).
+     */
+    /**
+     * List orders (Public API — X-API-KEY)
+     *
+     * @group Public API (X-API-KEY)
+     *
+     * Liệt kê đơn của caller. Filter giống `GET /orders`.
+     *
+     * @unauthenticated
+     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+     * @queryParam status int
+     * @queryParam ref_id string
+     * @queryParam date_from string YYYY-MM-DD
+     * @queryParam date_to string YYYY-MM-DD
+     * @queryParam per_page int Default 20.
      */
     public function indexByApiKey(Request $request)
     {
@@ -1918,6 +2030,17 @@ class OrderController extends Controller
      * Looks up by system_id first, then ref_id (so external sellers can call
      * either GET /api/fulfill/PS_C123 or GET /api/fulfill/MY-CUSTOM-REF).
      */
+    /**
+     * Get order by id or ref_id (Public API — X-API-KEY)
+     *
+     * @group Public API (X-API-KEY)
+     *
+     * Numeric → order.id. String → order.ref_id.
+     *
+     * @unauthenticated
+     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+     * @urlParam idOrRef string required Id hoặc ref_id. Example: SHOP-987
+     */
     public function showByApiKey(Request $request, string $idOrRef)
     {
         $user = $request->get('api_user');
@@ -1942,6 +2065,32 @@ class OrderController extends Controller
         return response()->json(['order' => $order]);
     }
 
+    /**
+     * Create order (Public API — X-API-KEY)
+     *
+     * @group Public API (X-API-KEY)
+     *
+     * Tạo đơn từ external system (vd Shopify webhook, custom script). Auth bằng
+     * header `X-API-KEY: bsk_...` thay vì Bearer token. API key lấy từ Profile
+     * page hoặc `GET /me/api-key`.
+     *
+     * Body payload IDENTICAL với `POST /api/orders` (xem Auth → Orders →
+     * Create order). Khác duy nhất là header auth.
+     *
+     * @unauthenticated
+     * @header X-API-KEY bsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+     * @bodyParam ref_id string required ID đơn nội bộ unique per seller. Example: SHOP-987
+     * @bodyParam shipping_label string URL.
+     * @bodyParam address object Required nếu KHÔNG có shipping_label.
+     * @bodyParam items object[] required Mảng items.
+     * @bodyParam items[].product_variant_id int required.
+     * @bodyParam items[].accessory_ids int[] Multi-acc list.
+     * @bodyParam items[].quantity int Default 1.
+     *
+     * @response 201 {"message": "Order created", "order": {"id": 123, "system_id": "GC0000123"}}
+     * @response 401 scenario="missing or wrong X-API-KEY" {"message": "Invalid API key"}
+     * @response 409 scenario="duplicate ref_id" {"message": "Duplicate ref_id", "duplicates": ["SHOP-987"]}
+     */
     public function fulfillByApiKey(Request $request)
     {
         $user = $request->get('api_user');

@@ -10,8 +10,23 @@ use App\Models\ProductVariantPrice;
 use App\Models\Tier;
 use Illuminate\Http\Request;
 
+/**
+ * @group Products
+ *
+ * Catalog management. Read endpoints mở cho mọi user đã login; write
+ * (POST/PUT/DELETE) chỉ admin.
+ */
 class ProductController extends Controller
 {
+    /**
+     * List products
+     *
+     * @authenticated
+     * @queryParam search string Tìm theo name.
+     * @queryParam status int 1=active, 0=inactive.
+     * @queryParam style string.
+     * @queryParam per_page int Default 20.
+     */
     public function index(Request $request)
     {
         $query = Product::with('variants.prices.tier', 'accessories.prices.tier');

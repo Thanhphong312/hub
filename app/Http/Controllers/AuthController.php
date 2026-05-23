@@ -7,8 +7,41 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
+/**
+ * @group Auth
+ *
+ * Đăng nhập, đăng xuất, đổi mật khẩu, profile.
+ */
 class AuthController extends Controller
 {
+    /**
+     * Login (Sanctum)
+     *
+     * Trả về `token` Sanctum + thông tin user (role + permissions + tier).
+     * Mọi route khác (trừ /fulfill + /catalog) cần header
+     * `Authorization: Bearer <token>`.
+     *
+     * @unauthenticated
+     * @bodyParam email string required Email tài khoản. Example: admin@bullstart.com
+     * @bodyParam password string required Mật khẩu. Example: password
+     *
+     * @response 200 {
+     *   "token": "1|abcdef...",
+     *   "user": {
+     *     "id": 1,
+     *     "name": "Admin",
+     *     "email": "admin@bullstart.com",
+     *     "role": {"slug": "admin", "name": "Admin", "permissions": []},
+     *     "tier": {"id": 1, "name": "Tier 1"},
+     *     "wallet": "1000.00"
+     *   }
+     * }
+     * @response 422 scenario="bad credentials" {
+     *   "message": "The provided credentials are incorrect.",
+     *   "errors": {"email": ["The provided credentials are incorrect."]}
+     * }
+     * @response 403 scenario="account disabled" {"message": "Account is inactive"}
+     */
     public function login(Request $request)
     {
         $request->validate([
@@ -48,6 +81,17 @@ class AuthController extends Controller
         return response()->json(['message' => 'All sessions logged out']);
     }
 
+    /**
+     * Get current user
+     *
+     * Trả về user + role/permissions/tier + wallet hiện tại.
+     *
+     * @authenticated
+     * @response 200 {
+     *   "user": {"id": 1, "name": "Admin", "email": "admin@bullstart.com", "role": {}, "tier": {}},
+     *   "wallet": "1000.00"
+     * }
+     */
     public function me(Request $request)
     {
         $user = $request->user()->load('role.permissions', 'tier');

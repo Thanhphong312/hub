@@ -7,8 +7,24 @@ use App\Models\WalletTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * @group Wallet
+ *
+ * Balance, deposits (manual + VNPay), paid history, refunds.
+ */
 class WalletController extends Controller
 {
+    /**
+     * List transactions
+     *
+     * @authenticated
+     * @queryParam type string `deposit`, `paid`, `refund`. Example: paid
+     * @queryParam user_id int (admin only) Filter theo owner.
+     * @queryParam date_from string YYYY-MM-DD.
+     * @queryParam date_to string YYYY-MM-DD.
+     * @queryParam page int
+     * @queryParam per_page int Default 20.
+     */
     public function transactions(Request $request)
     {
         $user = $request->user();
