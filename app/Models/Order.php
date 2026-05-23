@@ -100,6 +100,11 @@ class Order extends Model
                 Accessory::where('id', $aid)->decrement('stock', $qty);
             }
         }
+
+        // Per-order label consumption: 1 shipped order = 1 label paper, no
+        // matter how many items the order has. Only fires if a default-label
+        // supply is configured.
+        Supply::where('is_default_label', true)->decrement('stock', 1);
         $this->stock_decremented = true;
         $this->saveQuietly();
     }

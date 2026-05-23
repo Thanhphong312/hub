@@ -13,6 +13,7 @@ class StockImport extends Model
         // truth for new imports.
         'accessory_price_id',
         'accessory_id',
+        'supply_id',
         'quantity',
         'price_mode',
         'unit_price',
@@ -49,6 +50,11 @@ class StockImport extends Model
     public function accessory()
     {
         return $this->belongsTo(Accessory::class);
+    }
+
+    public function supply()
+    {
+        return $this->belongsTo(Supply::class);
     }
 
     public function importer()

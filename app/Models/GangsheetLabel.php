@@ -12,6 +12,8 @@ class GangsheetLabel extends Model
         'name',
         'line_id',
         'order_ids',
+        'merged_from_label_ids',
+        'file_url',
         'orders_count',
         'total_items_qty',
         'status',
@@ -22,6 +24,7 @@ class GangsheetLabel extends Model
     {
         return [
             'order_ids' => 'array',
+            'merged_from_label_ids' => 'array',
             'completed_at' => 'datetime',
         ];
     }

@@ -7,6 +7,7 @@ use App\Models\AccessoryPrice;
 use App\Models\Order;
 use App\Models\ProductVariant;
 use App\Models\StockImport;
+use App\Models\Supply;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -20,6 +21,7 @@ class InventoryController extends Controller
             // New unified target: accessory (one stock pool per accessory).
             'accessory:id,name,product_id',
             'accessory.product:id,name',
+            'supply:id,name,code',
             // Legacy: rows imported before per-accessory unification still
             // carry accessory_price_id. Load for display only.
             'accessoryPrice.accessory:id,name,product_id',
@@ -37,6 +39,7 @@ class InventoryController extends Controller
                     $w->whereNotNull('accessory_id')->orWhereNotNull('accessory_price_id');
                 });
             }
+            if ($request->target === 'supply') $q->whereNotNull('supply_id');
         }
         if ($request->filled('product_variant_id')) {
             $q->where('product_variant_id', (int) $request->product_variant_id);
@@ -53,7 +56,8 @@ class InventoryController extends Controller
     // POST /api/inventory/imports — record a new stock import and bump on-hand stock.
     // Target is exactly one of:
     //   - { product_variant_id }   → bumps product_variants.stock
-    //   - { accessory_id }         → bumps accessories.stock (NEW — unified across tiers)
+    //   - { accessory_id }         → bumps accessories.stock (unified across tiers)
+    //   - { supply_id }            → bumps supplies.stock (consumables like label paper)
     //   - { accessory_price_id }   → legacy alias; auto-resolved to accessory_id
     // Price mode:
     //   - per_item:    unit_price * quantity = total_cost
@@ -64,6 +68,7 @@ class InventoryController extends Controller
         $request->validate([
             'product_variant_id' => 'nullable|exists:product_variants,id',
             'accessory_id'       => 'nullable|exists:accessories,id',
+            'supply_id'          => 'nullable|exists:supplies,id',
             'accessory_price_id' => 'nullable|exists:accessory_prices,id',
             'price_mode'   => 'required|in:per_item,per_package',
             'quantity'     => 'nullable|integer|min:1',
@@ -76,6 +81,7 @@ class InventoryController extends Controller
 
         $variantId        = $request->product_variant_id;
         $accessoryId      = $request->accessory_id;
+        $supplyId         = $request->supply_id;
         $accessoryPriceId = $request->accessory_price_id;
 
         // Resolve legacy accessory_price_id → accessory_id so the rest of the
@@ -84,9 +90,9 @@ class InventoryController extends Controller
             $accessoryId = AccessoryPrice::where('id', $accessoryPriceId)->value('accessory_id');
         }
 
-        $targetCount = ($variantId ? 1 : 0) + ($accessoryId ? 1 : 0);
+        $targetCount = ($variantId ? 1 : 0) + ($accessoryId ? 1 : 0) + ($supplyId ? 1 : 0);
         if ($targetCount !== 1) {
-            return response()->json(['message' => 'Provide exactly one of product_variant_id or accessory_id'], 422);
+            return response()->json(['message' => 'Provide exactly one of product_variant_id, accessory_id, or supply_id'], 422);
         }
 
         $mode = $request->price_mode;
@@ -108,10 +114,11 @@ class InventoryController extends Controller
             $totalCost = round((float) $request->unit_price * $quantity, 2);
         }
 
-        return DB::transaction(function () use ($request, $variantId, $accessoryId, $accessoryPriceId, $mode, $quantity, $packageSize, $packageCount, $totalCost) {
+        return DB::transaction(function () use ($request, $variantId, $accessoryId, $supplyId, $accessoryPriceId, $mode, $quantity, $packageSize, $packageCount, $totalCost) {
             $import = StockImport::create([
                 'product_variant_id' => $variantId,
                 'accessory_id'       => $accessoryId,
+                'supply_id'          => $supplyId,
                 'accessory_price_id' => $accessoryPriceId, // null for new flow, retained if caller sent legacy
                 'quantity'      => $quantity,
                 'price_mode'    => $mode,
@@ -126,8 +133,10 @@ class InventoryController extends Controller
 
             if ($variantId) {
                 ProductVariant::where('id', $variantId)->increment('stock', $quantity);
-            } else {
+            } elseif ($accessoryId) {
                 Accessory::where('id', $accessoryId)->increment('stock', $quantity);
+            } else {
+                Supply::where('id', $supplyId)->increment('stock', $quantity);
             }
 
             return response()->json([
@@ -136,6 +145,7 @@ class InventoryController extends Controller
                     'productVariant.product:id,name',
                     'accessory:id,name,product_id',
                     'accessory.product:id,name',
+                    'supply:id,name,code',
                     'accessoryPrice.accessory:id,name,product_id',
                     'accessoryPrice.accessory.product:id,name',
                     'accessoryPrice.tier:id,name',
@@ -154,6 +164,8 @@ class InventoryController extends Controller
                 ProductVariant::where('id', $import->product_variant_id)->decrement('stock', $import->quantity);
             } elseif ($import->accessory_id) {
                 Accessory::where('id', $import->accessory_id)->decrement('stock', $import->quantity);
+            } elseif ($import->supply_id) {
+                Supply::where('id', $import->supply_id)->decrement('stock', $import->quantity);
             } elseif ($import->accessory_price_id) {
                 // Legacy row predating per-accessory stock unification.
                 // Resolve to parent accessory and decrement there.
@@ -247,6 +259,27 @@ class InventoryController extends Controller
                 $accessoriesTouched++;
             }
 
+            // Supplies ─────────────────────────────────────────────────────
+            // Each supply: stock = Σ imports.quantity for this supply_id − N
+            // where N is the count of shipped orders ONLY for the default
+            // label supply (because that's the one that gets decremented on
+            // ship). Non-default supplies just mirror their imports.
+            $supplyImports = DB::table('stock_imports')
+                ->whereNotNull('supply_id')
+                ->groupBy('supply_id')
+                ->selectRaw('supply_id, SUM(quantity) AS imported')
+                ->pluck('imported', 'supply_id');
+
+            $shippedOrderCount = (int) Order::where('status', Order::STATUS_SHIPPED)->count();
+
+            $suppliesTouched = 0;
+            foreach (Supply::all() as $supply) {
+                $imported = (int) ($supplyImports[$supply->id] ?? 0);
+                $consumed = $supply->is_default_label ? $shippedOrderCount : 0;
+                $supply->update(['stock' => $imported - $consumed]);
+                $suppliesTouched++;
+            }
+
             // Mark all SHIPPED orders as accounted-for so future re-saves
             // don't re-trigger decrementStockForShipment().
             $ordersMarked = Order::where('status', Order::STATUS_SHIPPED)
@@ -257,6 +290,7 @@ class InventoryController extends Controller
                 'message' => 'Stock resynced from history',
                 'variants_updated'   => $variantsTouched,
                 'accessories_updated'=> $accessoriesTouched,
+                'supplies_updated'   => $suppliesTouched,
                 'orders_marked'      => $ordersMarked,
             ]);
         });
@@ -536,9 +570,23 @@ class InventoryController extends Controller
                 ];
             });
 
+        $supplies = Supply::orderByDesc('is_default_label')->orderBy('id')
+            ->get()
+            ->map(fn ($s) => [
+                'kind'                => 'supply',
+                'id'                  => $s->id,
+                'product_name'        => null,
+                'sku'                 => $s->code,
+                'label'               => $s->name . ($s->is_default_label ? ' (default label)' : ''),
+                'stock'               => (int) $s->stock,
+                'is_default_label'    => (bool) $s->is_default_label,
+                'low_stock_threshold' => $s->low_stock_threshold,
+            ]);
+
         return response()->json([
             'variants'    => $variants,
             'accessories' => $accessories,
+            'supplies'    => $supplies,
         ]);
     }
 }
