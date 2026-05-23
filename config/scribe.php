@@ -1,10 +1,5 @@
 <?php
 
-use Knuckles\Scribe\Extracting\Strategies;
-use Knuckles\Scribe\Config\Defaults;
-use function Knuckles\Scribe\Config\removeStrategies;
-use function Knuckles\Scribe\Config\configureStrategy;
-
 /**
  * Scribe config tailored to BullStart.
  *
@@ -150,18 +145,9 @@ MD,
         ],
     ],
 
-    'strategies' => [
-        'metadata' => Defaults::METADATA_STRATEGIES,
-        'urlParameters' => Defaults::URL_PARAMETERS_STRATEGIES,
-        'queryParameters' => Defaults::QUERY_PARAMETERS_STRATEGIES,
-        'headers' => Defaults::HEADERS_STRATEGIES,
-        'bodyParameters' => Defaults::BODY_PARAMETERS_STRATEGIES,
-        'responses' => configureStrategy(
-            Defaults::RESPONSES_STRATEGIES,
-            Strategies\Responses\ResponseCalls::withSettings(only: [])
-        ),
-        'responseFields' => Defaults::RESPONSE_FIELDS_STRATEGIES,
-    ],
+    // Scribe ships sane default `strategies` — letting it stay null/omitted
+    // means we use defaults. We disabled live response calls already via
+    // `routes[].apply.response_calls.methods = []` above, which is enough.
 
     'database_connections_to_transact' => [config('database.default')],
 
