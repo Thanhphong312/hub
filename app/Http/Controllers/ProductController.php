@@ -52,6 +52,111 @@ class ProductController extends Controller
         ]);
     }
 
+    /**
+     * @OA\Get(
+     *     path="/variants",
+     *     tags={"Products"},
+     *     summary="Search product variants",
+     *     description="Flat list of variants with filters. Use this to look up `product_variant_id` for POST /orders.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="sku",         in="query", description="Exact SKU match", @OA\Schema(type="string"), example="TSHIRT-RED-M"),
+     *     @OA\Parameter(name="product_id",  in="query", @OA\Schema(type="integer"), example=1),
+     *     @OA\Parameter(name="product_name",in="query", description="Contains match on product name", @OA\Schema(type="string"), example="Greeting"),
+     *     @OA\Parameter(name="color",       in="query", description="Exact match", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="size",        in="query", description="Exact match", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="paper_type",  in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="status",      in="query", description="1=active, 0=inactive", @OA\Schema(type="integer", enum={0,1})),
+     *     @OA\Parameter(name="per_page",    in="query", @OA\Schema(type="integer", default=50)),
+     *     @OA\Response(response=200, description="Paginated variants",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="data", type="array",
+     *                 @OA\Items(
+     *                     @OA\Property(property="id",          type="integer", example=42),
+     *                     @OA\Property(property="sku",         type="string",  example="TSHIRT-RED-M"),
+     *                     @OA\Property(property="color",       type="string",  example="Red"),
+     *                     @OA\Property(property="size",        type="string",  example="M"),
+     *                     @OA\Property(property="paper_type",  type="string",  nullable=true),
+     *                     @OA\Property(property="stock",       type="integer", example=100),
+     *                     @OA\Property(property="product",     type="object", @OA\Property(property="id",type="integer"), @OA\Property(property="name",type="string"))
+     *                 )
+     *             )
+     *         )
+     *     )
+     * )
+     */
+    public function searchVariants(Request $request)
+    {
+        $q = \App\Models\ProductVariant::with('product:id,name,line_id', 'prices.tier:id,name');
+
+        if ($request->filled('sku'))         $q->where('sku', $request->sku);
+        if ($request->filled('product_id'))  $q->where('product_id', (int) $request->product_id);
+        if ($request->filled('color'))       $q->where('color', $request->color);
+        if ($request->filled('size'))        $q->where('size', $request->size);
+        if ($request->filled('paper_type'))  $q->where('paper_type', $request->paper_type);
+        if ($request->has('status') && $request->status !== '') $q->where('status', (int) $request->status);
+
+        if ($request->filled('product_name')) {
+            $q->whereHas('product', fn ($w) => $w->where('name', 'like', '%' . $request->product_name . '%'));
+        }
+
+        return response()->json($q->orderBy('product_id')->orderBy('id')->paginate($request->get('per_page', 50)));
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/accessories",
+     *     tags={"Products"},
+     *     summary="Search accessories (with tier-scoped prices)",
+     *     description="Flat list of accessories. Use this to look up `accessory_ids[]` for POST /orders. Returns accessory_prices scoped to caller's tier — chỉ pick `accessory_prices.id` cùng tier seller mới hợp lệ.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="product_id", in="query", @OA\Schema(type="integer"), example=1),
+     *     @OA\Parameter(name="name",       in="query", description="Contains match on accessory name", @OA\Schema(type="string"), example="Envelope"),
+     *     @OA\Parameter(name="code",       in="query", description="Exact match on any accessory_price.accessory_code", @OA\Schema(type="string"), example="W"),
+     *     @OA\Response(response=200, description="Accessories with prices",
+     *         @OA\JsonContent(
+     *             type="array",
+     *             @OA\Items(
+     *                 @OA\Property(property="id",         type="integer", example=5),
+     *                 @OA\Property(property="name",       type="string",  example="Envelope"),
+     *                 @OA\Property(property="product_id", type="integer", example=1),
+     *                 @OA\Property(property="stock",      type="integer", example=200),
+     *                 @OA\Property(property="prices", type="array",
+     *                     @OA\Items(
+     *                         @OA\Property(property="id",             type="integer", example=18, description="accessory_price_id — pass into accessory_ids[]"),
+     *                         @OA\Property(property="style",          type="string",  example="White"),
+     *                         @OA\Property(property="accessory_code", type="string",  example="W"),
+     *                         @OA\Property(property="price",          type="number",  example=0.50),
+     *                         @OA\Property(property="tier_id",        type="integer", example=1)
+     *                     )
+     *                 )
+     *             )
+     *         )
+     *     )
+     * )
+     */
+    public function searchAccessories(Request $request)
+    {
+        $callerTierId = $request->user()?->tier_id;
+
+        $q = \App\Models\Accessory::with([
+            'product:id,name,line_id',
+            // Scope prices to caller's tier — accessory_ids[] from a different
+            // tier won't validate when creating an order.
+            'prices' => fn ($pq) => $callerTierId
+                ? $pq->where('tier_id', $callerTierId)
+                : $pq,
+            'prices.tier:id,name',
+        ]);
+
+        if ($request->filled('product_id')) $q->where('product_id', (int) $request->product_id);
+        if ($request->filled('name'))       $q->where('name', 'like', '%' . $request->name . '%');
+        if ($request->filled('code')) {
+            $q->whereHas('prices', fn ($w) => $w->where('accessory_code', $request->code));
+        }
+
+        return response()->json($q->orderBy('product_id')->orderBy('id')->get());
+    }
+
     public function store(Request $request)
     {
         $request->validate([

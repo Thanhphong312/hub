@@ -78,6 +78,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Products (read for all)
     Route::get('/products', [ProductController::class, 'index']);
+    // Cross-product flat search — useful when seller knows SKU but not product.
+    Route::get('/variants', [ProductController::class, 'searchVariants']);
+    Route::get('/accessories', [ProductController::class, 'searchAccessories']);
     Route::get('/products/{product}', [ProductController::class, 'show']);
     Route::get('/products/{product}/variants', [ProductController::class, 'variants']);
     Route::get('/products/{product}/prices', [ProductController::class, 'prices']);
