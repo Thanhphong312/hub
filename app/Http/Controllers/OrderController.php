@@ -157,6 +157,41 @@ class OrderController extends Controller
      *     @OA\Response(response=404, description="Not found")
      * )
      */
+    /**
+     * GET /api/orders/{order}/convert-label-blob — server-side fetch of the
+     * order's convert_label image. Returns raw image bytes with the original
+     * content-type, so the Electron renderer can embed it in a merged PDF
+     * without browser CORS issues against B2.
+     *
+     * Auth: any logged-in user who can view the order. Sellers limited to
+     * their own (same scoping as show()).
+     */
+    public function convertLabelBlob(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if ($user?->hasRole('seller') && $order->user_id !== $user->id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if (empty($order->convert_label)) {
+            return response()->json(['message' => 'Order has no convert_label'], 404);
+        }
+
+        try {
+            $res = \Illuminate\Support\Facades\Http::timeout(15)->get($order->convert_label);
+            if (!$res->ok()) {
+                return response()->json([
+                    'message' => "Upstream returned HTTP {$res->status()}",
+                ], 502);
+            }
+            return response($res->body(), 200, [
+                'Content-Type'  => $res->header('Content-Type') ?: 'image/jpeg',
+                'Cache-Control' => 'public, max-age=300',
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 502);
+        }
+    }
+
     public function show(Request $request, Order $order)
     {
         $hideQr = $this->shouldHideQrMetas($request->user());

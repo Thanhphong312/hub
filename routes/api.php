@@ -76,6 +76,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
     Route::put('/order-items/{item}/accessories', [OrderController::class, 'updateItemAccessories']);
 
+    // Server-side proxy for fetching convert_label image bytes — bypasses
+    // browser CORS when Electron renderer needs to embed labels into a
+    // merged PDF. See mergedLabelBuilder.jsx.
+    Route::get('/orders/{order}/convert-label-blob', [OrderController::class, 'convertLabelBlob']);
+
     // Products (read for all)
     Route::get('/products', [ProductController::class, 'index']);
     // Cross-product flat search — useful when seller knows SKU but not product.
