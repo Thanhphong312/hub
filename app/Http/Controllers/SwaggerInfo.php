@@ -46,6 +46,11 @@ Seller chỉ được tự set status `5` (onhold) hoặc `7` (cancelled) cho đ
  *     description="Production"
  * )
  *
+ * @OA\Server(
+ *     url="https://develop.bullstart.us/api",
+ *     description="Develop"
+ * )
+ *
  * @OA\SecurityScheme(
  *     securityScheme="bearerAuth",
  *     type="http",
