@@ -34,6 +34,8 @@ class GangsheetLabelController extends Controller
         $gangsheetLabel->load('creator:id,name', 'gangsheet:id,filename,file_url');
         $orderIds = $gangsheetLabel->order_ids ?? [];
 
+        // NOTE: makeVisible() is a Model/Collection method — not on Builder.
+        // Apply it ONCE on the result collection after ->get().
         $orders = empty($orderIds)
             ? collect()
             : Order::whereIn('id', $orderIds)
@@ -41,7 +43,6 @@ class GangsheetLabelController extends Controller
                     'items:id,order_id,product_variant_id,quantity',
                     'user:id,name',
                 ])
-                ->makeVisible('convert_label')
                 ->select('id', 'system_id', 'ref_id', 'user_id', 'status',
                          'shipping_label', 'convert_label', 'tracking_id', 'completed_time')
                 ->orderBy('id', 'asc')
