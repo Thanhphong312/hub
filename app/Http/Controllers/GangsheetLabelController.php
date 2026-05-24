@@ -104,6 +104,26 @@ class GangsheetLabelController extends Controller
     }
 
     /**
+     * POST /api/gangsheet-labels/bulk-delete — xóa nhiều label cùng lúc.
+     * Same semantics as single destroy: row bị xoá nhưng orders/metas giữ
+     * production=true để tránh re-gang nhầm.
+     */
+    public function bulkDestroy(Request $request)
+    {
+        $request->validate([
+            'label_ids' => 'required|array|min:1',
+            'label_ids.*' => 'integer|exists:gangsheet_labels,id',
+        ]);
+
+        $deleted = GangsheetLabel::whereIn('id', $request->label_ids)->delete();
+
+        return response()->json([
+            'message' => "Deleted {$deleted} gangsheet label(s)",
+            'count' => $deleted,
+        ]);
+    }
+
+    /**
      * POST /api/gangsheet-labels/merge — combine N existing gangsheet labels
      * into 1 master record. The child labels stay intact (for audit); the
      * merged record gets order_ids = union of all children, plus

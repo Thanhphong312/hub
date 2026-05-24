@@ -129,6 +129,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // already in a _qr gangsheet. Scanned for bulk complete-all.
         Route::get('/gangsheet-labels', [GangsheetLabelController::class, 'index']);
         Route::post('/gangsheet-labels/merge', [GangsheetLabelController::class, 'merge']);
+        Route::post('/gangsheet-labels/bulk-delete', [GangsheetLabelController::class, 'bulkDestroy']);
         Route::get('/gangsheet-labels/{gangsheetLabel}', [GangsheetLabelController::class, 'show']);
         Route::post('/gangsheet-labels/{gangsheetLabel}/complete-all', [GangsheetLabelController::class, 'completeAll']);
         Route::put('/gangsheet-labels/{gangsheetLabel}/file-url', [GangsheetLabelController::class, 'updateFileUrl']);
