@@ -124,10 +124,13 @@ class GangsheetLabelController extends Controller
     }
 
     /**
-     * POST /api/gangsheet-labels/merge — combine N existing gangsheet labels
-     * into 1 master record. The child labels stay intact (for audit); the
-     * merged record gets order_ids = union of all children, plus
-     * merged_from_label_ids = [child ids].
+     * POST /api/gangsheet-labels/merge — bundle N existing gangsheet labels
+     * (where N >= 1) into 1 master record. Even with 1 selected this is
+     * useful — produces a fresh PDF with all that label's orders + a single
+     * scan QR pointing at the master.
+     *
+     * Child labels stay intact (for audit); the master gets order_ids =
+     * union of all children, plus merged_from_label_ids = [child ids].
      *
      * The desktop app then builds a PDF (page per convert_label + 1 master
      * QR page at the end), uploads to B2, and calls updateFileUrl to save
@@ -136,13 +139,13 @@ class GangsheetLabelController extends Controller
     public function merge(Request $request)
     {
         $request->validate([
-            'label_ids' => 'required|array|min:2',
+            'label_ids' => 'required|array|min:1',
             'label_ids.*' => 'integer|exists:gangsheet_labels,id',
         ]);
 
         $labels = GangsheetLabel::whereIn('id', $request->label_ids)->get();
-        if ($labels->count() < 2) {
-            return response()->json(['message' => 'Need at least 2 existing labels to merge'], 422);
+        if ($labels->isEmpty()) {
+            return response()->json(['message' => 'No matching labels found'], 422);
         }
 
         // Union of all order ids across children, preserve order, dedupe.
