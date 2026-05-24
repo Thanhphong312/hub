@@ -19,13 +19,18 @@ use Illuminate\Http\Request;
 class ProductController extends Controller
 {
     /**
-     * List products
-     *
-     * @authenticated
-     * @queryParam search string Tìm theo name.
-     * @queryParam status int 1=active, 0=inactive.
-     * @queryParam style string.
-     * @queryParam per_page int Default 20.
+     * @OA\Get(
+     *     path="/products",
+     *     tags={"Products"},
+     *     summary="List products",
+     *     description="Paginated list với variants + tier prices + accessories nested. Dùng khi muốn browse cả catalog 1 lần. Để tìm variant theo SKU, dùng GET /variants nhanh hơn.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="search",   in="query", description="Contains match on product name", @OA\Schema(type="string"), example="Greeting"),
+     *     @OA\Parameter(name="status",   in="query", description="1=active, 0=inactive", @OA\Schema(type="integer", enum={0,1})),
+     *     @OA\Parameter(name="style",    in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="per_page", in="query", @OA\Schema(type="integer", default=20)),
+     *     @OA\Response(response=200, description="Paginated products with variants + accessories")
+     * )
      */
     public function index(Request $request)
     {
@@ -45,6 +50,29 @@ class ProductController extends Controller
         return response()->json($products);
     }
 
+    /**
+     * @OA\Get(
+     *     path="/products/{product}",
+     *     tags={"Products"},
+     *     summary="Get product (with variants + accessories + tier prices)",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="product", in="path", required=true, @OA\Schema(type="integer"), example=1),
+     *     @OA\Response(response=200, description="Product full detail",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="product", type="object",
+     *                 @OA\Property(property="id",        type="integer", example=1),
+     *                 @OA\Property(property="name",      type="string",  example="Greeting Card"),
+     *                 @OA\Property(property="style",     type="string"),
+     *                 @OA\Property(property="line_id",   type="string",  example="GC"),
+     *                 @OA\Property(property="status",    type="integer", example=1),
+     *                 @OA\Property(property="variants",  type="array", @OA\Items(type="object")),
+     *                 @OA\Property(property="accessories", type="array", @OA\Items(type="object"))
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=404, description="Not found")
+     * )
+     */
     public function show(Product $product)
     {
         return response()->json([
@@ -188,7 +216,19 @@ class ProductController extends Controller
         return response()->json(['message' => 'Product deleted']);
     }
 
-    // List variants for a product
+    /**
+     * @OA\Get(
+     *     path="/products/{product}/variants",
+     *     tags={"Products"},
+     *     summary="List variants of one product",
+     *     description="Khi đã biết product_id, lấy nhanh list variants. Để cross-product search dùng GET /variants.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="product", in="path", required=true, @OA\Schema(type="integer"), example=1),
+     *     @OA\Parameter(name="color",   in="query", @OA\Schema(type="string"), example="Red"),
+     *     @OA\Parameter(name="size",    in="query", @OA\Schema(type="string"), example="M"),
+     *     @OA\Response(response=200, description="Variants array (with tier-scoped prices)")
+     * )
+     */
     public function variants(Product $product, Request $request)
     {
         $query = $product->variants()->with('prices.tier');
@@ -258,7 +298,18 @@ class ProductController extends Controller
         return response()->json(['message' => 'Variant deleted']);
     }
 
-    // List prices for a product
+    /**
+     * @OA\Get(
+     *     path="/products/{product}/prices",
+     *     tags={"Products"},
+     *     summary="List variant prices for a product",
+     *     description="Flat list price rows (1 row per variant × tier × key). Key = `base_cost`, `label_fee`, `shipping_cost`, `addition_fee`, `2nd_fee`.",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="product", in="path", required=true, @OA\Schema(type="integer"), example=1),
+     *     @OA\Parameter(name="tier_id", in="query", description="Filter by tier", @OA\Schema(type="integer"), example=1),
+     *     @OA\Response(response=200, description="Prices array")
+     * )
+     */
     public function prices(Product $product, Request $request)
     {
         $query = ProductVariantPrice::whereHas('variant', function ($q) use ($product) {
