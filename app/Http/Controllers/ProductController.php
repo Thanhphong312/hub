@@ -19,6 +19,23 @@ use Illuminate\Http\Request;
 class ProductController extends Controller
 {
     /**
+     * Scope an eager-loaded `prices` relation to caller's tier ONLY when
+     * the caller is a seller — admin/support keep seeing all tiers so they
+     * can manage pricing. Used as the closure for `with(['... .prices' => …])`.
+     */
+    private function tierScope(Request $request): \Closure
+    {
+        $user = $request->user();
+        $isSeller = $user?->role?->slug === 'seller';
+        $tierId   = $user?->tier_id;
+        return function ($query) use ($isSeller, $tierId) {
+            if ($isSeller && $tierId) {
+                $query->where('tier_id', $tierId);
+            }
+        };
+    }
+
+    /**
      * @OA\Get(
      *     path="/products",
      *     tags={"Products"},
@@ -34,7 +51,13 @@ class ProductController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Product::with('variants.prices.tier', 'accessories.prices.tier');
+        $scope = $this->tierScope($request);
+        $query = Product::with([
+            'variants.prices' => $scope,
+            'variants.prices.tier',
+            'accessories.prices' => $scope,
+            'accessories.prices.tier',
+        ]);
 
         if ($request->has('search')) {
             $query->where('name', 'like', '%' . $request->search . '%');
@@ -73,10 +96,16 @@ class ProductController extends Controller
      *     @OA\Response(response=404, description="Not found")
      * )
      */
-    public function show(Product $product)
+    public function show(Product $product, Request $request)
     {
+        $scope = $this->tierScope($request);
         return response()->json([
-            'product' => $product->load('variants.prices.tier', 'accessories.prices.tier'),
+            'product' => $product->load([
+                'variants.prices' => $scope,
+                'variants.prices.tier',
+                'accessories.prices' => $scope,
+                'accessories.prices.tier',
+            ]),
         ]);
     }
 
@@ -114,7 +143,12 @@ class ProductController extends Controller
      */
     public function searchVariants(Request $request)
     {
-        $q = \App\Models\ProductVariant::with('product:id,name,line_id', 'prices.tier:id,name');
+        $scope = $this->tierScope($request);
+        $q = \App\Models\ProductVariant::with([
+            'product:id,name,line_id',
+            'prices' => $scope,
+            'prices.tier:id,name',
+        ]);
 
         if ($request->filled('sku'))         $q->where('sku', $request->sku);
         if ($request->filled('product_id'))  $q->where('product_id', (int) $request->product_id);
@@ -164,15 +198,12 @@ class ProductController extends Controller
      */
     public function searchAccessories(Request $request)
     {
-        $callerTierId = $request->user()?->tier_id;
-
+        // Same scoping rule as the other read endpoints: seller → own tier,
+        // admin/support → all tiers (so they can audit pricing).
+        $scope = $this->tierScope($request);
         $q = \App\Models\Accessory::with([
             'product:id,name,line_id',
-            // Scope prices to caller's tier — accessory_ids[] from a different
-            // tier won't validate when creating an order.
-            'prices' => fn ($pq) => $callerTierId
-                ? $pq->where('tier_id', $callerTierId)
-                : $pq,
+            'prices' => $scope,
             'prices.tier:id,name',
         ]);
 
@@ -231,7 +262,8 @@ class ProductController extends Controller
      */
     public function variants(Product $product, Request $request)
     {
-        $query = $product->variants()->with('prices.tier');
+        $scope = $this->tierScope($request);
+        $query = $product->variants()->with(['prices' => $scope, 'prices.tier']);
 
         if ($request->has('color')) {
             $query->where('color', $request->color);
@@ -316,7 +348,12 @@ class ProductController extends Controller
             $q->where('product_id', $product->id);
         })->with(['variant', 'tier']);
 
-        if ($request->has('tier_id')) {
+        // Seller scoped to own tier; admin/support can pass tier_id explicitly
+        // or see all rows.
+        $user = $request->user();
+        if ($user?->role?->slug === 'seller' && $user->tier_id) {
+            $query->where('tier_id', $user->tier_id);
+        } elseif ($request->filled('tier_id')) {
             $query->where('tier_id', $request->tier_id);
         }
 
