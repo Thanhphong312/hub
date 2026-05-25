@@ -119,11 +119,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/conversion/order/{order}/convert-label', [ConversionController::class, 'uploadConvertLabel']);
     Route::get('/conversion/label-lookup/{idOrSystemId}', [ConversionController::class, 'lookupLabelTarget']);
 
+    // Shared upload credentials for OrderCreate B2 uploads (mockups, shipping
+    // label, meta values). Any authenticated user — including sellers — gets
+    // the per-day folder so they can upload directly from the desktop app.
+    Route::get('/gangsheets/storage-credentials', [GangsheetController::class, 'storageCredentials']);
+
     // Gangsheet (admin/support only)
     Route::middleware(CheckRole::class . ':admin,support')->group(function () {
         Route::get('/gangsheets/pending-orders', [GangsheetController::class, 'pendingOrders']);
         Route::post('/gangsheets/lookup-orders', [GangsheetController::class, 'lookupOrders']);
-        Route::get('/gangsheets/storage-credentials', [GangsheetController::class, 'storageCredentials']);
         Route::get('/gangsheets', [GangsheetController::class, 'index']);
         Route::post('/gangsheets', [GangsheetController::class, 'store']);
         Route::post('/gangsheets/bulk-delete', [GangsheetController::class, 'bulkDestroy']);

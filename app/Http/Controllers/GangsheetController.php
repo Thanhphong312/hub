@@ -117,9 +117,10 @@ class GangsheetController extends Controller
     }
 
     /**
-     * Hand the desktop app the B2 credentials so it can upload the gangsheet
-     * PDF directly. Hub never touches the file. Restricted to admin/support
-     * routes — the route group already enforces that.
+     * Hand the desktop app the B2 credentials so it can upload directly. Used
+     * by gangsheet builder (admin) and OrderCreate upload buttons (any auth
+     * user, incl. sellers). Folder is date-scoped; per-feature subfolders are
+     * appended client-side.
      */
     public function storageCredentials(Request $request)
     {
