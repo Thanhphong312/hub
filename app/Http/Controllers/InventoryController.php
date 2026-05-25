@@ -338,8 +338,32 @@ class InventoryController extends Controller
             fwrite($fh, "\xEF\xBB\xBF");
             fputcsv($fh, $headers);
 
-            // Variants
+            // Variants — grouped by product. Insert a blank row + section
+            // header row between products so operator sees clear groups in
+            // Excel. Importer skips rows with empty price_mode, so neither
+            // the blank nor section-header row affects parsing.
+            $lastProductId = null;
             foreach ($variants as $v) {
+                $productId = $v->product_id;
+                if ($productId !== $lastProductId) {
+                    // Blank divider (not the first time)
+                    if ($lastProductId !== null) {
+                        fputcsv($fh, array_fill(0, count($headers), ''));
+                    }
+                    // Group header row (ignored by importer — price_mode empty)
+                    fputcsv($fh, [
+                        '',  // target_type empty
+                        '',  // sku_or_code empty
+                        '',  // price_mode empty → row skipped on import
+                        '', '', '', '', '',
+                        '── PRODUCT: ' . ($v->product?->name ?? "#{$productId}") . ' ──',
+                        '',
+                        '',
+                        '',
+                    ]);
+                    $lastProductId = $productId;
+                }
+
                 $label = trim(implode(' / ', array_filter([$v->color, $v->size, $v->paper_type])));
                 if ($label === '') $label = $v->sku ?? "#{$v->id}";
                 fputcsv($fh, [
@@ -356,7 +380,18 @@ class InventoryController extends Controller
                 ]);
             }
 
-            // Accessories (1 row per accessory, unified stock)
+            // Visual gap before accessory section
+            if ($variants->isNotEmpty()) {
+                fputcsv($fh, array_fill(0, count($headers), ''));
+            }
+            fputcsv($fh, [
+                '', '', '',
+                '', '', '', '', '',
+                '════════ ACCESSORIES ════════',
+                '', '', '',
+            ]);
+
+            // Accessories — flat (no per-product grouping, no blank rows)
             foreach ($accessories as $a) {
                 $codes = $a->prices->pluck('accessory_code')->filter()->unique()->values()->all();
                 $codesRef = implode(' / ', $codes);
