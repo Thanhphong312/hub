@@ -73,37 +73,21 @@ class Order extends Model
     }
 
     /**
-     * Decrement product_variants.stock and accessory_prices.stock for every
-     * item in this order. Idempotent: the `stock_decremented` flag prevents
-     * double-deduction when the same order transitions to SHIPPED twice (e.g.
-     * re-saving an already-shipped order). Caller is responsible for wrapping
-     * this in a DB::transaction if it's part of a larger update.
+     * Stock bookkeeping on ship:
+     *  - Label paper (default-label supply) still decrements 1 per shipped
+     *    order — that physical consumption is tied 1:1 to a ship event.
+     *  - Variant / accessory_price stock is NOT touched here anymore. Per
+     *    operator decision (2026-05-27), variant + accessory inventory is
+     *    import-only for now; the deduction model will be reworked later
+     *    so each ship event records the chosen accessory_price separately.
+     *
+     * Idempotent via the `stock_decremented` flag so re-saving a shipped
+     * order doesn't double-tick the label-paper count.
      */
     public function decrementStockForShipment(): void
     {
         if ($this->stock_decremented) return;
 
-        // Load accessoryPrices to resolve their parent accessory_id; physical
-        // stock is now tracked on `accessories.stock` (shared across tiers),
-        // so an item with multiple tier-priced accessories of the same group
-        // still consumes from one pool.
-        $this->loadMissing('items.accessoryPrices');
-        foreach ($this->items as $item) {
-            $qty = max(1, (int) ($item->quantity ?? 1));
-            if ($item->product_variant_id) {
-                ProductVariant::where('id', $item->product_variant_id)->decrement('stock', $qty);
-            }
-            // Dedupe accessory_id within the item so picking 2 tier-prices of
-            // the same accessory in one item only deducts once.
-            $accessoryIds = $item->accessoryPrices->pluck('accessory_id')->filter()->unique();
-            foreach ($accessoryIds as $aid) {
-                Accessory::where('id', $aid)->decrement('stock', $qty);
-            }
-        }
-
-        // Per-order label consumption: 1 shipped order = 1 label paper, no
-        // matter how many items the order has. Only fires if a default-label
-        // supply is configured.
         Supply::where('is_default_label', true)->decrement('stock', 1);
         $this->stock_decremented = true;
         $this->saveQuietly();

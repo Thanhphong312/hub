@@ -56,13 +56,10 @@ class InventoryController extends Controller
     // POST /api/inventory/imports — record a new stock import and bump on-hand stock.
     // Target is exactly one of:
     //   - { product_variant_id }   → bumps product_variants.stock
-    //   - { accessory_id }         → bumps accessories.stock (unified across tiers)
-    //   - { supply_id }            → bumps supplies.stock (consumables like label paper)
-    //   - { accessory_price_id }   → legacy alias; auto-resolved to accessory_id
-    // Price mode:
-    //   - per_item:    unit_price * quantity = total_cost
-    //   - per_package: package_size * package_count = quantity (overrides supplied qty);
-    //                  unit_price holds the price per package; total_cost = unit_price * package_count.
+    //   - { accessory_price_id }   → bumps accessory_prices.stock (per-code)
+    //   - { accessory_id }         → legacy: resolves to FIRST accessory_price of that accessory
+    //   - { supply_id }            → bumps supplies.stock
+    // Price mode same as before.
     public function store(Request $request)
     {
         $request->validate([
@@ -80,19 +77,28 @@ class InventoryController extends Controller
         ]);
 
         $variantId        = $request->product_variant_id;
-        $accessoryId      = $request->accessory_id;
         $supplyId         = $request->supply_id;
         $accessoryPriceId = $request->accessory_price_id;
+        $accessoryId      = $request->accessory_id;
 
-        // Resolve legacy accessory_price_id → accessory_id so the rest of the
-        // pipeline only deals with the unified target.
-        if ($accessoryPriceId && !$accessoryId) {
+        // Legacy callers may pass only accessory_id (pre-unshare). Auto-resolve
+        // to the FIRST accessory_price row of that accessory so the import
+        // lands somewhere visible; operator can rebalance afterwards.
+        if (!$accessoryPriceId && $accessoryId) {
+            $accessoryPriceId = AccessoryPrice::where('accessory_id', $accessoryId)
+                ->orderBy('id')->value('id');
+            if (!$accessoryPriceId) {
+                return response()->json(['message' => 'Accessory has no price rows to attribute stock to'], 422);
+            }
+        }
+        if ($accessoryPriceId) {
+            // Always keep accessory_id in sync for legacy joins / history filters.
             $accessoryId = AccessoryPrice::where('id', $accessoryPriceId)->value('accessory_id');
         }
 
-        $targetCount = ($variantId ? 1 : 0) + ($accessoryId ? 1 : 0) + ($supplyId ? 1 : 0);
+        $targetCount = ($variantId ? 1 : 0) + ($accessoryPriceId ? 1 : 0) + ($supplyId ? 1 : 0);
         if ($targetCount !== 1) {
-            return response()->json(['message' => 'Provide exactly one of product_variant_id, accessory_id, or supply_id'], 422);
+            return response()->json(['message' => 'Provide exactly one of product_variant_id, accessory_price_id (or accessory_id), or supply_id'], 422);
         }
 
         $mode = $request->price_mode;
@@ -114,12 +120,12 @@ class InventoryController extends Controller
             $totalCost = round((float) $request->unit_price * $quantity, 2);
         }
 
-        return DB::transaction(function () use ($request, $variantId, $accessoryId, $supplyId, $accessoryPriceId, $mode, $quantity, $packageSize, $packageCount, $totalCost) {
+        return DB::transaction(function () use ($request, $variantId, $accessoryId, $accessoryPriceId, $supplyId, $mode, $quantity, $packageSize, $packageCount, $totalCost) {
             $import = StockImport::create([
                 'product_variant_id' => $variantId,
-                'accessory_id'       => $accessoryId,
+                'accessory_id'       => $accessoryId,        // historical filter convenience
+                'accessory_price_id' => $accessoryPriceId,   // source of truth target
                 'supply_id'          => $supplyId,
-                'accessory_price_id' => $accessoryPriceId, // null for new flow, retained if caller sent legacy
                 'quantity'      => $quantity,
                 'price_mode'    => $mode,
                 'unit_price'    => $request->unit_price,
@@ -133,8 +139,8 @@ class InventoryController extends Controller
 
             if ($variantId) {
                 ProductVariant::where('id', $variantId)->increment('stock', $quantity);
-            } elseif ($accessoryId) {
-                Accessory::where('id', $accessoryId)->increment('stock', $quantity);
+            } elseif ($accessoryPriceId) {
+                AccessoryPrice::where('id', $accessoryPriceId)->increment('stock', $quantity);
             } else {
                 Supply::where('id', $supplyId)->increment('stock', $quantity);
             }
@@ -162,15 +168,16 @@ class InventoryController extends Controller
         return DB::transaction(function () use ($import) {
             if ($import->product_variant_id) {
                 ProductVariant::where('id', $import->product_variant_id)->decrement('stock', $import->quantity);
-            } elseif ($import->accessory_id) {
-                Accessory::where('id', $import->accessory_id)->decrement('stock', $import->quantity);
+            } elseif ($import->accessory_price_id) {
+                AccessoryPrice::where('id', $import->accessory_price_id)->decrement('stock', $import->quantity);
             } elseif ($import->supply_id) {
                 Supply::where('id', $import->supply_id)->decrement('stock', $import->quantity);
-            } elseif ($import->accessory_price_id) {
-                // Legacy row predating per-accessory stock unification.
-                // Resolve to parent accessory and decrement there.
-                $accId = AccessoryPrice::where('id', $import->accessory_price_id)->value('accessory_id');
-                if ($accId) Accessory::where('id', $accId)->decrement('stock', $import->quantity);
+            } elseif ($import->accessory_id) {
+                // Legacy import row without per-code attribution. Decrement
+                // off the first accessory_price row of that accessory.
+                $priceId = AccessoryPrice::where('accessory_id', $import->accessory_id)
+                    ->orderBy('id')->value('id');
+                if ($priceId) AccessoryPrice::where('id', $priceId)->decrement('stock', $import->quantity);
             }
             $import->delete();
             return response()->json(['message' => 'Stock import deleted; stock adjusted back']);
@@ -178,15 +185,18 @@ class InventoryController extends Controller
     }
 
     /**
-     * POST /api/inventory/resync — recompute every variant + accessory stock
-     * from history: `stock = SUM(imports.quantity) - SUM(shipped_orders × item.qty)`.
+     * POST /api/inventory/resync — recompute on-hand stock from import history.
      *
-     * Used after upgrading installs that have historical shipped orders, since
-     * those didn't decrement stock at ship-time (the feature didn't exist yet).
-     * Also flips `orders.stock_decremented = true` on every SHIPPED order so
-     * future re-saves of the same order don't trigger a phantom decrement.
+     * Per operator decision (2026-05-27), variant + accessory stock is now
+     * import-only — shipments do NOT reduce stock until the new
+     * per-accessory-code deduction model lands. So:
+     *   product_variants.stock  = SUM(stock_imports.quantity)
+     *   accessory_prices.stock  = SUM(stock_imports.quantity per accessory_price_id)
      *
-     * Idempotent: running it twice gives the same result.
+     * Supplies keep their existing behavior (label paper decrements once per
+     * shipped order).
+     *
+     * Idempotent.
      */
     public function resyncStock(Request $request)
     {
@@ -198,66 +208,51 @@ class InventoryController extends Controller
                 ->selectRaw('product_variant_id, SUM(quantity) AS imported')
                 ->pluck('imported', 'product_variant_id');
 
-            $variantShipped = DB::table('order_items')
-                ->join('orders', 'orders.id', '=', 'order_items.order_id')
-                ->where('orders.status', Order::STATUS_SHIPPED)
-                ->groupBy('order_items.product_variant_id')
-                ->selectRaw('order_items.product_variant_id, SUM(order_items.quantity) AS shipped')
-                ->pluck('shipped', 'product_variant_id');
-
-            $variantIds = $variantImports->keys()->merge($variantShipped->keys())->unique();
             $variantsTouched = 0;
-            foreach ($variantIds as $vid) {
-                $imported = (int) ($variantImports[$vid] ?? 0);
-                $shipped  = (int) ($variantShipped[$vid] ?? 0);
-                ProductVariant::where('id', $vid)->update(['stock' => $imported - $shipped]);
+            foreach ($variantImports as $vid => $imported) {
+                ProductVariant::where('id', $vid)->update(['stock' => (int) $imported]);
                 $variantsTouched++;
             }
+            // Zero out variants with no imports so deleted-then-resynced data is clean.
+            ProductVariant::whereNotIn('id', $variantImports->keys())->update(['stock' => 0]);
 
             // Accessories ──────────────────────────────────────────────────
-            // Stock is now per-accessory (unified across tiers). Sum imports
-            // from BOTH the new `accessory_id` column AND legacy rows that
-            // only have `accessory_price_id` (resolve via accessory_prices).
-            $accessoryImportsDirect = DB::table('stock_imports')
+            // Per-accessory_price now. Sum direct rows (accessory_price_id
+            // populated). Re-attribute legacy rows that only have accessory_id
+            // to the first accessory_price of that accessory.
+            $directImports = DB::table('stock_imports')
+                ->whereNotNull('accessory_price_id')
+                ->groupBy('accessory_price_id')
+                ->selectRaw('accessory_price_id, SUM(quantity) AS imported')
+                ->pluck('imported', 'accessory_price_id');
+
+            $legacyByAccessory = DB::table('stock_imports')
                 ->whereNotNull('accessory_id')
+                ->whereNull('accessory_price_id')
                 ->groupBy('accessory_id')
                 ->selectRaw('accessory_id, SUM(quantity) AS imported')
                 ->pluck('imported', 'accessory_id');
 
-            $accessoryImportsLegacy = DB::table('stock_imports as si')
-                ->join('accessory_prices as ap', 'ap.id', '=', 'si.accessory_price_id')
-                ->whereNotNull('si.accessory_price_id')
-                ->whereNull('si.accessory_id')
-                ->groupBy('ap.accessory_id')
-                ->selectRaw('ap.accessory_id, SUM(si.quantity) AS imported')
-                ->pluck('imported', 'accessory_id');
+            // Map each legacy accessory_id → first accessory_price_id.
+            $firstPrice = DB::table('accessory_prices')
+                ->select('accessory_id', DB::raw('MIN(id) AS first_id'))
+                ->groupBy('accessory_id')
+                ->pluck('first_id', 'accessory_id');
 
-            // Shipped: pivot points at accessory_price → resolve to accessory.
-            // Dedupe pivot rows within the same item that share an accessory
-            // group so 2 tier-prices of the same accessory in one item only
-            // deduct once (matches Order::decrementStockForShipment).
-            $accessoryShipped = DB::table('order_item_accessories as oia')
-                ->join('accessory_prices as ap', 'ap.id', '=', 'oia.accessory_price_id')
-                ->join('order_items as oi', 'oi.id', '=', 'oia.order_item_id')
-                ->join('orders as o', 'o.id', '=', 'oi.order_id')
-                ->where('o.status', Order::STATUS_SHIPPED)
-                ->groupBy('ap.accessory_id')
-                ->selectRaw('ap.accessory_id, SUM(oi.quantity) AS shipped')
-                ->pluck('shipped', 'accessory_id');
+            $merged = $directImports->mapWithKeys(fn ($v, $k) => [(int) $k => (int) $v])->all();
+            foreach ($legacyByAccessory as $aid => $qty) {
+                $pid = $firstPrice[$aid] ?? null;
+                if (!$pid) continue;
+                $merged[(int) $pid] = ($merged[(int) $pid] ?? 0) + (int) $qty;
+            }
 
-            // Merge direct + legacy imports per accessory_id.
-            $allAccessoryIds = $accessoryImportsDirect->keys()
-                ->merge($accessoryImportsLegacy->keys())
-                ->merge($accessoryShipped->keys())
-                ->unique();
             $accessoriesTouched = 0;
-            foreach ($allAccessoryIds as $aid) {
-                $imported = (int) ($accessoryImportsDirect[$aid] ?? 0)
-                          + (int) ($accessoryImportsLegacy[$aid] ?? 0);
-                $shipped  = (int) ($accessoryShipped[$aid] ?? 0);
-                Accessory::where('id', $aid)->update(['stock' => $imported - $shipped]);
+            foreach ($merged as $pid => $imported) {
+                AccessoryPrice::where('id', $pid)->update(['stock' => $imported]);
                 $accessoriesTouched++;
             }
+            // Zero accessory_prices that have no imports.
+            AccessoryPrice::whereNotIn('id', array_keys($merged))->update(['stock' => 0]);
 
             // Supplies ─────────────────────────────────────────────────────
             // Each supply: stock = Σ imports.quantity for this supply_id − N
@@ -325,9 +320,10 @@ class InventoryController extends Controller
 
         $variants = \App\Models\ProductVariant::with('product:id,name')
             ->orderBy('product_id')->orderBy('id')->get();
-        // Accessories grouped by product (matches variant section ergonomics).
-        $accessories = Accessory::with('product:id,name', 'prices:id,accessory_id,accessory_code')
-            ->orderBy('product_id')->orderBy('id')->get();
+        // Per-code accessory rows. Each accessory_price (= one choice like
+        // envelope White vs Red) is its own template row with its own stock.
+        $accessoryPrices = AccessoryPrice::with('accessory.product:id,name')
+            ->orderBy('accessory_id')->orderBy('id')->get();
         // Supplies (label paper, packaging, etc.) — flat, default-label first.
         $supplies = Supply::orderByDesc('is_default_label')->orderBy('id')->get();
 
@@ -339,7 +335,7 @@ class InventoryController extends Controller
             fputcsv($fh, ['', '', '', '', '', '', '', '', $title, '', '', '']);
         };
 
-        $callback = function () use ($headers, $variants, $accessories, $supplies, $writeSectionHeader) {
+        $callback = function () use ($headers, $variants, $accessoryPrices, $supplies, $writeSectionHeader) {
             $fh = fopen('php://output', 'w');
             fwrite($fh, "\xEF\xBB\xBF");
             fputcsv($fh, $headers);
@@ -377,29 +373,25 @@ class InventoryController extends Controller
                 ]);
             }
 
-            // ── Accessories section — FLAT, no per-product grouping. ──
-            // (Previous attempt grouped by product like variants; operator
-            // preferred a single flat block so all accessories stay together.)
-            if ($accessories->isNotEmpty()) {
+            // ── Accessories section — FLAT, one row per accessory_price
+            //     (per code / choice). Each code carries its own stock pool.
+            if ($accessoryPrices->isNotEmpty()) {
                 fputcsv($fh, array_fill(0, count($headers), ''));
                 $writeSectionHeader($fh, count($headers), '════════ ACCESSORIES ════════');
 
-                foreach ($accessories as $a) {
-                    $codes = $a->prices->pluck('accessory_code')->filter()->unique()->values()->all();
-                    $codesRef = implode(' / ', $codes);
-                    $skuOrCode = (count($codes) === 1) ? $codes[0] : (string) $a->id;
-
+                foreach ($accessoryPrices as $p) {
+                    $code = $p->accessory_code ?? (string) $p->id;
                     fputcsv($fh, [
                         'accessory',
-                        $skuOrCode,
+                        $code,
                         '',
                         '',
                         '', '', '',
                         '',
-                        $a->product?->name ?? '',
-                        $a->name,
-                        $codesRef,
-                        (int) ($a->stock ?? 0),
+                        $p->accessory?->product?->name ?? '',
+                        $p->accessory?->name . ($p->style ? " ({$p->style})" : ''),
+                        '',
+                        (int) ($p->stock ?? 0),
                     ]);
                 }
             }
@@ -500,28 +492,30 @@ class InventoryController extends Controller
                 //   - accessory.id (numeric), OR
                 //   - any accessory_prices.accessory_code that maps to one
                 //     unique accessory_id (we collapse tier dups).
-                $variantId   = null;
-                $accessoryId = null;
-                $supplyId    = null;
+                $variantId        = null;
+                $accessoryPriceId = null;
+                $supplyId         = null;
                 if ($targetType === 'variant') {
                     $variant = \App\Models\ProductVariant::where('sku', $skuOrCode)->first();
                     if (!$variant) { $errors[] = "Line {$lineNum}: variant sku '{$skuOrCode}' not found"; continue; }
                     $variantId = $variant->id;
                 } elseif ($targetType === 'accessory') {
+                    // Per-code stock: sku_or_code is the accessory_code (unique
+                    // per accessory_prices row) or the row id directly.
                     if (ctype_digit((string) $skuOrCode)) {
-                        $exists = Accessory::where('id', (int) $skuOrCode)->exists();
-                        if (!$exists) { $errors[] = "Line {$lineNum}: accessory id '{$skuOrCode}' not found"; continue; }
-                        $accessoryId = (int) $skuOrCode;
+                        $exists = AccessoryPrice::where('id', (int) $skuOrCode)->exists();
+                        if (!$exists) { $errors[] = "Line {$lineNum}: accessory_price id '{$skuOrCode}' not found"; continue; }
+                        $accessoryPriceId = (int) $skuOrCode;
                     } else {
-                        $accIds = AccessoryPrice::where('accessory_code', $skuOrCode)
-                            ->distinct()->pluck('accessory_id')->all();
-                        if (count($accIds) === 0) {
+                        $priceIds = AccessoryPrice::where('accessory_code', $skuOrCode)
+                            ->distinct()->pluck('id')->all();
+                        if (count($priceIds) === 0) {
                             $errors[] = "Line {$lineNum}: accessory code '{$skuOrCode}' not found"; continue;
                         }
-                        if (count($accIds) > 1) {
-                            $errors[] = "Line {$lineNum}: accessory code '{$skuOrCode}' maps to multiple accessories — use numeric id instead"; continue;
+                        if (count($priceIds) > 1) {
+                            $errors[] = "Line {$lineNum}: accessory code '{$skuOrCode}' maps to multiple price rows — use numeric id instead"; continue;
                         }
-                        $accessoryId = (int) $accIds[0];
+                        $accessoryPriceId = (int) $priceIds[0];
                     }
                 } elseif ($targetType === 'supply') {
                     // sku_or_code resolves by exact match on supplies.code first,
@@ -558,9 +552,14 @@ class InventoryController extends Controller
                     $errors[] = "Line {$lineNum}: price_mode must be 'per_item' or 'per_package'"; continue;
                 }
 
+                $accessoryIdSync = $accessoryPriceId
+                    ? AccessoryPrice::where('id', $accessoryPriceId)->value('accessory_id')
+                    : null;
+
                 $import = StockImport::create([
                     'product_variant_id' => $variantId,
-                    'accessory_id'       => $accessoryId,
+                    'accessory_id'       => $accessoryIdSync,    // history/back-compat
+                    'accessory_price_id' => $accessoryPriceId,   // per-code target
                     'supply_id'          => $supplyId,
                     'quantity'      => $quantity,
                     'price_mode'    => $mode,
@@ -574,8 +573,8 @@ class InventoryController extends Controller
                 ]);
                 if ($variantId) {
                     ProductVariant::where('id', $variantId)->increment('stock', $quantity);
-                } elseif ($accessoryId) {
-                    Accessory::where('id', $accessoryId)->increment('stock', $quantity);
+                } elseif ($accessoryPriceId) {
+                    AccessoryPrice::where('id', $accessoryPriceId)->increment('stock', $quantity);
                 } else {
                     Supply::where('id', $supplyId)->increment('stock', $quantity);
                 }
@@ -611,25 +610,19 @@ class InventoryController extends Controller
                 'stock'        => (int) $v->stock,
             ]);
 
-        // Accessory stock is now per-accessory (unified across tiers). Pull
-        // codes from accessory_prices for display reference. We return the
-        // codes as an ARRAY (not joined) so the Inventory UI can expand each
-        // accessory into one visual row per code while still treating them
-        // as a single stock pool.
-        $accessories = Accessory::with('product:id,name', 'prices:id,accessory_id,accessory_code')
-            ->select('id', 'product_id', 'name', 'stock')
-            ->orderBy('product_id')->orderBy('id')
+        // Accessory stock is per-code (one row per accessory_prices row).
+        $accessories = AccessoryPrice::with('accessory.product:id,name', 'accessory:id,name,product_id')
+            ->orderBy('accessory_id')->orderBy('id')
             ->get()
-            ->map(function ($a) {
-                $codes = $a->prices->pluck('accessory_code')->filter()->unique()->values()->all();
+            ->map(function ($p) {
                 return [
                     'kind'         => 'accessory',
-                    'id'           => $a->id,
-                    'product_name' => $a->product?->name,
-                    'sku'          => implode(' / ', $codes), // legacy joined string for compat
-                    'codes'        => $codes,                  // array — UI splits to per-code rows
-                    'label'        => $a->name,
-                    'stock'        => (int) $a->stock,
+                    'id'           => $p->id,                              // accessory_price.id
+                    'accessory_id' => $p->accessory_id,
+                    'product_name' => $p->accessory?->product?->name,
+                    'sku'          => $p->accessory_code ?? (string) $p->id,
+                    'label'        => trim(($p->accessory?->name ?? '') . ($p->style ? " ({$p->style})" : '')),
+                    'stock'        => (int) $p->stock,
                 ];
             });
 
