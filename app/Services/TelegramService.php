@@ -159,16 +159,23 @@ class TelegramService
 
     private function buildOrderReportText(Carbon $from, Carbon $to): string
     {
-        $orders = Order::whereBetween('created_at', [$from, $to])->get([
-            'id', 'status', 'total_cost', 'paid_cost', 'shipping_cost', 'print_cost',
-        ]);
+        // Only report the open / in-progress statuses (0..5). Shipped (6)
+        // and cancelled (7) are excluded — admin asked to keep the daily
+        // digest focused on orders that still need work.
+        $reportedStatuses = [
+            Order::STATUS_NEW_ORDER,
+            Order::STATUS_PROCESSING,
+            Order::STATUS_WRONGSIZE,
+            Order::STATUS_FIXED,
+            Order::STATUS_REPRINT,
+            Order::STATUS_ONHOLD,
+        ];
 
-        $total      = $orders->count();
-        $totalValue = $orders->sum('total_cost');
-        $paid       = $orders->filter(fn ($o) => (float) $o->paid_cost >= (float) $o->total_cost && $total > 0);
-        $unpaid     = $orders->filter(fn ($o) => (float) $o->paid_cost <  (float) $o->total_cost);
-
-        $byStatus = $orders->groupBy('status')->map->count();
+        $counts = Order::whereBetween('created_at', [$from, $to])
+            ->whereIn('status', $reportedStatuses)
+            ->selectRaw('status, COUNT(*) AS c')
+            ->groupBy('status')
+            ->pluck('c', 'status');
 
         $rangeLabel = $from->isSameDay($to)
             ? $from->format('M j, Y')
@@ -178,15 +185,11 @@ class TelegramService
         $lines[] = '<b>📊 BullStart Orders Report</b>';
         $lines[] = "📅 {$rangeLabel}";
         $lines[] = '';
-        $lines[] = "📦 Total: <b>{$total}</b> · 💵 \${$totalValue}";
-        $lines[] = '✅ Paid: ' . $paid->count() . ' · ⏳ Unpaid: ' . $unpaid->count();
-        if ($total > 0) {
-            $lines[] = '';
-            $lines[] = '<b>By status</b>';
-            foreach ($byStatus as $st => $count) {
-                $name = Order::STATUS_MAP[$st] ?? "status {$st}";
-                $lines[] = "  • {$name}: {$count}";
-            }
+        $lines[] = '<b>By status</b>';
+        foreach ($reportedStatuses as $st) {
+            $name = Order::STATUS_MAP[$st] ?? "status {$st}";
+            $count = (int) ($counts[$st] ?? 0);
+            $lines[] = "  • {$name}: {$count}";
         }
         return implode("\n", $lines);
     }
