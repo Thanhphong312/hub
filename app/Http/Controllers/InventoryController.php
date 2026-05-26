@@ -307,8 +307,8 @@ class InventoryController extends Controller
     public function exportTemplate()
     {
         $headers = [
-            'target_type',       // 'variant' | 'accessory'
-            'sku_or_code',       // product_variants.sku or accessory id / unique accessory_code
+            'target_type',       // 'variant' | 'accessory' | 'supply'
+            'sku_or_code',       // variants.sku · accessory id/code · supplies.code or id
             'price_mode',        // 'per_item' | 'per_package'
             'quantity',          // per_item only; per_package leaves blank (auto = size * count)
             'package_size',      // per_package only — units per pkg
@@ -325,42 +325,39 @@ class InventoryController extends Controller
 
         $variants = \App\Models\ProductVariant::with('product:id,name')
             ->orderBy('product_id')->orderBy('id')->get();
-        // Accessories: 1 row per accessory (unified stock), with codes from
-        // any tier-price as a reference.
+        // Accessories grouped by product (matches variant section ergonomics).
         $accessories = Accessory::with('product:id,name', 'prices:id,accessory_id,accessory_code')
             ->orderBy('product_id')->orderBy('id')->get();
+        // Supplies (label paper, packaging, etc.) — flat, default-label first.
+        $supplies = Supply::orderByDesc('is_default_label')->orderBy('id')->get();
 
         $filename = 'inventory_import_template_' . now()->format('Ymd_His') . '.csv';
 
-        $callback = function () use ($headers, $variants, $accessories) {
+        $writeSectionHeader = function ($fh, $headerCount, $title) {
+            // price_mode (col 3) empty → importer skips. All other cells empty
+            // except ref_product_name which carries the divider text.
+            fputcsv($fh, ['', '', '', '', '', '', '', '', $title, '', '', '']);
+        };
+
+        $callback = function () use ($headers, $variants, $accessories, $supplies, $writeSectionHeader) {
             $fh = fopen('php://output', 'w');
-            // UTF-8 BOM so Excel opens Vietnamese correctly.
             fwrite($fh, "\xEF\xBB\xBF");
             fputcsv($fh, $headers);
 
-            // Variants — grouped by product. Insert a blank row + section
-            // header row between products so operator sees clear groups in
-            // Excel. Importer skips rows with empty price_mode, so neither
-            // the blank nor section-header row affects parsing.
+            $writeSectionHeader($fh, count($headers), '════════ PRODUCT VARIANTS ════════');
+
+            // Variants — grouped by product with blank divider + per-product
+            // header row between groups. price_mode empty on the divider rows
+            // means the importer ignores them.
             $lastProductId = null;
             foreach ($variants as $v) {
                 $productId = $v->product_id;
                 if ($productId !== $lastProductId) {
-                    // Blank divider (not the first time)
                     if ($lastProductId !== null) {
                         fputcsv($fh, array_fill(0, count($headers), ''));
                     }
-                    // Group header row (ignored by importer — price_mode empty)
-                    fputcsv($fh, [
-                        '',  // target_type empty
-                        '',  // sku_or_code empty
-                        '',  // price_mode empty → row skipped on import
-                        '', '', '', '', '',
-                        '── PRODUCT: ' . ($v->product?->name ?? "#{$productId}") . ' ──',
-                        '',
-                        '',
-                        '',
-                    ]);
+                    $writeSectionHeader($fh, count($headers),
+                        '── PRODUCT: ' . ($v->product?->name ?? "#{$productId}") . ' ──');
                     $lastProductId = $productId;
                 }
 
@@ -369,51 +366,75 @@ class InventoryController extends Controller
                 fputcsv($fh, [
                     'variant',
                     $v->sku ?? '',
-                    '',                  // price_mode — fill in
-                    '',                  // quantity
-                    '', '', '',          // package_*, unit_price
-                    '',                  // notes
+                    '',
+                    '',
+                    '', '', '',
+                    '',
                     $v->product?->name ?? '',
                     $label,
-                    '',                  // codes_any_tier — N/A for variant
+                    '',
                     (int) ($v->stock ?? 0),
                 ]);
             }
 
-            // Visual gap before accessory section
-            if ($variants->isNotEmpty()) {
+            // ── Accessories section — grouped by product the same way ──
+            if ($accessories->isNotEmpty()) {
                 fputcsv($fh, array_fill(0, count($headers), ''));
-            }
-            fputcsv($fh, [
-                '', '', '',
-                '', '', '', '', '',
-                '════════ ACCESSORIES ════════',
-                '', '', '',
-            ]);
+                $writeSectionHeader($fh, count($headers), '════════ ACCESSORIES ════════');
 
-            // Accessories — flat (no per-product grouping, no blank rows)
-            foreach ($accessories as $a) {
-                $codes = $a->prices->pluck('accessory_code')->filter()->unique()->values()->all();
-                $codesRef = implode(' / ', $codes);
-                // Prefer a unique non-empty code as `sku_or_code` so re-uploads
-                // work without operator picking an id manually. Fall back to
-                // numeric id when codes are ambiguous (multi-accessory-codes
-                // sharing a single string).
-                $skuOrCode = (count($codes) === 1)
-                    ? $codes[0]
-                    : (string) $a->id;
-                fputcsv($fh, [
-                    'accessory',
-                    $skuOrCode,
-                    '',                  // price_mode — fill in
-                    '',                  // quantity
-                    '', '', '',          // package_*, unit_price
-                    '',                  // notes
-                    $a->product?->name ?? '',
-                    $a->name,
-                    $codesRef,           // ref list of codes across tiers
-                    (int) ($a->stock ?? 0),
-                ]);
+                $lastAccProductId = null;
+                foreach ($accessories as $a) {
+                    $productId = $a->product_id;
+                    if ($productId !== $lastAccProductId) {
+                        if ($lastAccProductId !== null) {
+                            fputcsv($fh, array_fill(0, count($headers), ''));
+                        }
+                        $writeSectionHeader($fh, count($headers),
+                            '── PRODUCT: ' . ($a->product?->name ?? "#{$productId}") . ' ── (accessories)');
+                        $lastAccProductId = $productId;
+                    }
+
+                    $codes = $a->prices->pluck('accessory_code')->filter()->unique()->values()->all();
+                    $codesRef = implode(' / ', $codes);
+                    $skuOrCode = (count($codes) === 1) ? $codes[0] : (string) $a->id;
+
+                    fputcsv($fh, [
+                        'accessory',
+                        $skuOrCode,
+                        '',
+                        '',
+                        '', '', '',
+                        '',
+                        $a->product?->name ?? '',
+                        $a->name,
+                        $codesRef,
+                        (int) ($a->stock ?? 0),
+                    ]);
+                }
+            }
+
+            // ── Supplies (consumables — label paper, packaging, etc.) ──
+            // Section is always present so operator knows the row exists even
+            // when stock=0. Default-label row floats to the top.
+            if ($supplies->isNotEmpty()) {
+                fputcsv($fh, array_fill(0, count($headers), ''));
+                $writeSectionHeader($fh, count($headers), '════════ SUPPLIES (label paper / consumables) ════════');
+
+                foreach ($supplies as $s) {
+                    $tag = $s->is_default_label ? ' (default label)' : '';
+                    fputcsv($fh, [
+                        'supply',
+                        $s->code ?: (string) $s->id,
+                        '',
+                        '',
+                        '', '', '',
+                        '',
+                        '',                       // supplies have no product
+                        $s->name . $tag,
+                        $s->code ?? '',
+                        (int) ($s->stock ?? 0),
+                    ]);
+                }
             }
 
             fclose($fh);
@@ -490,13 +511,13 @@ class InventoryController extends Controller
                 //     unique accessory_id (we collapse tier dups).
                 $variantId   = null;
                 $accessoryId = null;
+                $supplyId    = null;
                 if ($targetType === 'variant') {
                     $variant = \App\Models\ProductVariant::where('sku', $skuOrCode)->first();
                     if (!$variant) { $errors[] = "Line {$lineNum}: variant sku '{$skuOrCode}' not found"; continue; }
                     $variantId = $variant->id;
                 } elseif ($targetType === 'accessory') {
                     if (ctype_digit((string) $skuOrCode)) {
-                        // Numeric → accessory id directly.
                         $exists = Accessory::where('id', (int) $skuOrCode)->exists();
                         if (!$exists) { $errors[] = "Line {$lineNum}: accessory id '{$skuOrCode}' not found"; continue; }
                         $accessoryId = (int) $skuOrCode;
@@ -511,8 +532,18 @@ class InventoryController extends Controller
                         }
                         $accessoryId = (int) $accIds[0];
                     }
+                } elseif ($targetType === 'supply') {
+                    // sku_or_code resolves by exact match on supplies.code first,
+                    // falling back to numeric id. Codes are case-insensitive to
+                    // forgive Excel auto-uppercase.
+                    $supply = Supply::whereRaw('LOWER(code) = ?', [strtolower((string) $skuOrCode)])->first();
+                    if (!$supply && ctype_digit((string) $skuOrCode)) {
+                        $supply = Supply::find((int) $skuOrCode);
+                    }
+                    if (!$supply) { $errors[] = "Line {$lineNum}: supply code/id '{$skuOrCode}' not found"; continue; }
+                    $supplyId = $supply->id;
                 } else {
-                    $errors[] = "Line {$lineNum}: target_type must be 'variant' or 'accessory'"; continue;
+                    $errors[] = "Line {$lineNum}: target_type must be 'variant', 'accessory' or 'supply'"; continue;
                 }
 
                 // Resolve qty + total based on price_mode.
@@ -539,6 +570,7 @@ class InventoryController extends Controller
                 $import = StockImport::create([
                     'product_variant_id' => $variantId,
                     'accessory_id'       => $accessoryId,
+                    'supply_id'          => $supplyId,
                     'quantity'      => $quantity,
                     'price_mode'    => $mode,
                     'unit_price'    => $unitPrice,
@@ -551,8 +583,10 @@ class InventoryController extends Controller
                 ]);
                 if ($variantId) {
                     ProductVariant::where('id', $variantId)->increment('stock', $quantity);
-                } else {
+                } elseif ($accessoryId) {
                     Accessory::where('id', $accessoryId)->increment('stock', $quantity);
+                } else {
+                    Supply::where('id', $supplyId)->increment('stock', $quantity);
                 }
                 $imports[] = $import->id;
                 $created++;
