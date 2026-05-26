@@ -612,8 +612,10 @@ class InventoryController extends Controller
             ]);
 
         // Accessory stock is now per-accessory (unified across tiers). Pull
-        // codes from accessory_prices for display reference (concatenate
-        // unique codes so the operator can still spot-search by code).
+        // codes from accessory_prices for display reference. We return the
+        // codes as an ARRAY (not joined) so the Inventory UI can expand each
+        // accessory into one visual row per code while still treating them
+        // as a single stock pool.
         $accessories = Accessory::with('product:id,name', 'prices:id,accessory_id,accessory_code')
             ->select('id', 'product_id', 'name', 'stock')
             ->orderBy('product_id')->orderBy('id')
@@ -624,7 +626,8 @@ class InventoryController extends Controller
                     'kind'         => 'accessory',
                     'id'           => $a->id,
                     'product_name' => $a->product?->name,
-                    'sku'          => implode(' / ', $codes), // codes reference (any tier)
+                    'sku'          => implode(' / ', $codes), // legacy joined string for compat
+                    'codes'        => $codes,                  // array — UI splits to per-code rows
                     'label'        => $a->name,
                     'stock'        => (int) $a->stock,
                 ];
