@@ -1883,6 +1883,139 @@ class OrderController extends Controller
         return $response;
     }
 
+    /**
+     * GET /api/orders/invoice-data — aggregate selected/filtered orders into
+     * the JSON payload the desktop app needs to render a commercial invoice
+     * PDF. Same filter shape as exportOrders. PDF rendering happens in the
+     * Electron renderer (jsPDF), so this endpoint never produces a binary —
+     * just the structured data.
+     *
+     * Aggregation key: (product_id, paper_type). One invoice line per
+     * product+material combo, summing quantity across all matched orders.
+     */
+    public function invoiceData(Request $request)
+    {
+        $query = Order::with([
+            'items.productVariant.product',
+            'user:id,name,email',
+        ]);
+
+        if ($request->user()->hasRole('seller')) {
+            $query->where('user_id', $request->user()->id);
+        } elseif ($request->filled('user_id')) {
+            $query->where('user_id', $request->user_id);
+        }
+
+        if ($request->filled('status'))      $query->where('status', $request->status);
+        if ($request->filled('date_from'))   $query->whereDate('created_at', '>=', $request->date_from);
+        if ($request->filled('date_to'))     $query->whereDate('created_at', '<=', $request->date_to);
+        if ($request->filled('ref_id'))      $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
+        if ($request->filled('system_id'))   $query->where('system_id', 'like', '%' . $request->system_id . '%');
+        if ($request->filled('tracking_id')) $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
+        if ($request->filled('ref_ids')) {
+            $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
+            $query->whereIn('ref_id', array_values(array_unique(array_map('trim', $list))));
+        }
+        if ($request->filled('order_ids')) {
+            $ids = is_array($request->order_ids)
+                ? $request->order_ids
+                : preg_split('/[\s,]+/', (string) $request->order_ids, -1, PREG_SPLIT_NO_EMPTY);
+            $query->whereIn('id', array_map('intval', $ids));
+        }
+        if ($request->filled('paid')) {
+            if ($request->paid === 'paid')   $query->whereColumn('paid_cost', '>=', 'total_cost');
+            if ($request->paid === 'unpaid') $query->whereColumn('paid_cost', '<', 'total_cost');
+        }
+
+        $orders = $query->orderBy('id', 'asc')->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'No orders matched the filter'], 404);
+        }
+
+        // Group items across all matched orders by (product_id, paper_type).
+        // Each bucket sums quantity + subtotal so the invoice shows one row
+        // per product+material rather than one per order.
+        $buckets = [];
+        foreach ($orders as $order) {
+            foreach ($order->items as $item) {
+                $variant = $item->productVariant;
+                if (!$variant) continue;
+                $product = $variant->product;
+                $material = trim((string) ($variant->paper_type ?? ''));
+                $key = ($product?->id ?? 0) . '|' . $material;
+                if (!isset($buckets[$key])) {
+                    $buckets[$key] = [
+                        'product_id'    => $product?->id,
+                        'sku'           => $variant->sku,
+                        'product_name'  => trim(($product?->name ?? 'Item') . ' - Print on Demand'),
+                        // No `brand` column yet — fall back to product.style
+                        // (currently free-form) so admin can set it via the
+                        // product edit page without a migration.
+                        'brand'         => trim((string) ($product?->style ?? '')),
+                        'materials'     => $material,
+                        'total_items'   => 0,
+                        'subtotal'      => 0.0,
+                    ];
+                }
+                $qty = max(1, (int) $item->quantity);
+                $buckets[$key]['total_items'] += $qty;
+                $buckets[$key]['subtotal']    += (float) $item->price * $qty;
+            }
+        }
+
+        // Compute unit print_cost per bucket (subtotal / total_items, rounded).
+        $lineItems = [];
+        $i = 1;
+        foreach ($buckets as $row) {
+            $unit = $row['total_items'] > 0 ? $row['subtotal'] / $row['total_items'] : 0;
+            $lineItems[] = [
+                'item'         => $i++,
+                'sku'          => $row['sku'],
+                'product_name' => $row['product_name'],
+                'brand'        => $row['brand'],
+                'materials'    => $row['materials'],
+                'total_items'  => $row['total_items'],
+                'print_cost'   => round($unit, 2),
+                'subtotal'     => round($row['subtotal'], 2),
+            ];
+        }
+
+        $printTotal    = round($orders->sum('print_cost'), 2);
+        $shippingTotal = round($orders->sum('shipping_cost'), 2);
+        $grandTotal    = round($printTotal + $shippingTotal, 2);
+
+        $customer = $orders->first()->user;
+        // Invoice # — simple, stable per generation. {customerInitials}{YYMMDDHHmm}
+        $initials = strtoupper(substr(preg_replace('/[^A-Za-z]/', '', $customer->name ?? 'INV'), 0, 2)) ?: 'INV';
+        $invoiceNumber = $initials . now()->format('ymdHi');
+
+        $dates = $orders->pluck('created_at');
+        $dateFrom = $dates->min()?->format('M j Y');
+        $dateTo   = $dates->max()?->format('M j Y');
+        $dateLabel = ($dateFrom === $dateTo) ? $dateFrom : "{$dateFrom} – {$dateTo}";
+
+        return response()->json([
+            'invoice_number' => $invoiceNumber,
+            'date_label'     => $dateLabel,
+            'date_from'      => $dates->min()?->toDateString(),
+            'date_to'        => $dates->max()?->toDateString(),
+            'customer'       => [
+                'id'    => $customer?->id,
+                'name'  => $customer?->name,
+                'email' => $customer?->email,
+            ],
+            'line_items' => $lineItems,
+            'totals' => [
+                'print_cost'    => $printTotal,
+                'shipping_cost' => $shippingTotal,
+                'total'         => $grandTotal,
+            ],
+            'order_count' => $orders->count(),
+            'order_ids'   => $orders->pluck('id')->all(),
+        ]);
+    }
+
     public function exportCsvTemplate()
     {
         $headers = [
