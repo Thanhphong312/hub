@@ -198,5 +198,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/tiers', [SettingController::class, 'storeTier']);
         Route::put('/tiers/{tier}', [SettingController::class, 'updateTier']);
         Route::delete('/tiers/{tier}', [SettingController::class, 'destroyTier']);
+
+        Route::get('/invoice-payment',  [SettingController::class, 'getInvoicePayment']);
+        Route::put('/invoice-payment',  [SettingController::class, 'updateInvoicePayment']);
     });
 });

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppSetting;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\Tier;
@@ -108,5 +109,57 @@ class SettingController extends Controller
         }
         $tier->delete();
         return response()->json(['message' => 'Tier deleted']);
+    }
+
+    // ----------------------------------------------------------------------
+    // Invoice payment info — shown on the commercial invoice PDF. Two
+    // variants today (PingPong = USD international transfer, VNPay = VND
+    // QR transfer); admin edits both in the Settings → Invoice Payment tab.
+    // ----------------------------------------------------------------------
+
+    public function getInvoicePayment()
+    {
+        return response()->json([
+            'pingpong' => AppSetting::getJson('invoice_pingpong', [
+                'account_name'   => '',
+                'account_number' => '',
+                'bank_name'      => '',
+                'swift_code'     => '',
+                'bank_address'   => '',
+                'notes'          => '',
+            ]),
+            'vnpay' => AppSetting::getJson('invoice_vnpay', [
+                'qr_url'         => '',
+                'account_name'   => '',
+                'account_number' => '',
+                'bank_name'      => '',
+                'notes'          => '',
+            ]),
+        ]);
+    }
+
+    public function updateInvoicePayment(Request $request)
+    {
+        $data = $request->validate([
+            'pingpong' => 'sometimes|array',
+            'pingpong.account_name'   => 'nullable|string|max:200',
+            'pingpong.account_number' => 'nullable|string|max:64',
+            'pingpong.bank_name'      => 'nullable|string|max:200',
+            'pingpong.swift_code'     => 'nullable|string|max:32',
+            'pingpong.bank_address'   => 'nullable|string|max:500',
+            'pingpong.notes'          => 'nullable|string|max:500',
+
+            'vnpay' => 'sometimes|array',
+            'vnpay.qr_url'         => 'nullable|url|max:1024',
+            'vnpay.account_name'   => 'nullable|string|max:200',
+            'vnpay.account_number' => 'nullable|string|max:64',
+            'vnpay.bank_name'      => 'nullable|string|max:200',
+            'vnpay.notes'          => 'nullable|string|max:500',
+        ]);
+
+        if (isset($data['pingpong'])) AppSetting::setJson('invoice_pingpong', $data['pingpong']);
+        if (isset($data['vnpay']))    AppSetting::setJson('invoice_vnpay',    $data['vnpay']);
+
+        return $this->getInvoicePayment();
     }
 }

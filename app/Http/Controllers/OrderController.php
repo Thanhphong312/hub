@@ -2013,6 +2013,13 @@ class OrderController extends Controller
             ],
             'order_count' => $orders->count(),
             'order_ids'   => $orders->pluck('id')->all(),
+            // Payment info — the renderer picks pingpong or vnpay depending
+            // on which button the admin clicked. Always include both so the
+            // app doesn't need a second round-trip when switching variants.
+            'payment_settings' => [
+                'pingpong' => \App\Models\AppSetting::getJson('invoice_pingpong', []),
+                'vnpay'    => \App\Models\AppSetting::getJson('invoice_vnpay', []),
+            ],
         ]);
     }
 
