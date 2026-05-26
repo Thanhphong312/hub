@@ -377,23 +377,14 @@ class InventoryController extends Controller
                 ]);
             }
 
-            // ── Accessories section — grouped by product the same way ──
+            // ── Accessories section — FLAT, no per-product grouping. ──
+            // (Previous attempt grouped by product like variants; operator
+            // preferred a single flat block so all accessories stay together.)
             if ($accessories->isNotEmpty()) {
                 fputcsv($fh, array_fill(0, count($headers), ''));
                 $writeSectionHeader($fh, count($headers), '════════ ACCESSORIES ════════');
 
-                $lastAccProductId = null;
                 foreach ($accessories as $a) {
-                    $productId = $a->product_id;
-                    if ($productId !== $lastAccProductId) {
-                        if ($lastAccProductId !== null) {
-                            fputcsv($fh, array_fill(0, count($headers), ''));
-                        }
-                        $writeSectionHeader($fh, count($headers),
-                            '── PRODUCT: ' . ($a->product?->name ?? "#{$productId}") . ' ── (accessories)');
-                        $lastAccProductId = $productId;
-                    }
-
                     $codes = $a->prices->pluck('accessory_code')->filter()->unique()->values()->all();
                     $codesRef = implode(' / ', $codes);
                     $skuOrCode = (count($codes) === 1) ? $codes[0] : (string) $a->id;
