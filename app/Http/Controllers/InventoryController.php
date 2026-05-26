@@ -13,6 +13,22 @@ use Illuminate\Support\Facades\DB;
 
 class InventoryController extends Controller
 {
+    /**
+     * Resolve any accessory_price.id to the canonical price-id of its
+     * (accessory_id, accessory_code) group. Stock is consolidated on that
+     * canonical row, so all reads/writes funnel through it.
+     */
+    private function canonicalAccessoryPriceId(int $priceId): ?int
+    {
+        $row = AccessoryPrice::where('id', $priceId)->first(['accessory_id', 'accessory_code']);
+        if (!$row) return null;
+        $q = AccessoryPrice::where('accessory_id', $row->accessory_id);
+        $row->accessory_code === null
+            ? $q->whereNull('accessory_code')
+            : $q->where('accessory_code', $row->accessory_code);
+        return (int) $q->orderBy('id')->value('id');
+    }
+
     // GET /api/inventory/imports — paginated history of every stock import.
     public function index(Request $request)
     {
@@ -140,7 +156,10 @@ class InventoryController extends Controller
             if ($variantId) {
                 ProductVariant::where('id', $variantId)->increment('stock', $quantity);
             } elseif ($accessoryPriceId) {
-                AccessoryPrice::where('id', $accessoryPriceId)->increment('stock', $quantity);
+                // Write to the canonical row of the (accessory_id, accessory_code)
+                // group so all tier rows of the same code share one pool.
+                $canonical = $this->canonicalAccessoryPriceId($accessoryPriceId) ?? $accessoryPriceId;
+                AccessoryPrice::where('id', $canonical)->increment('stock', $quantity);
             } else {
                 Supply::where('id', $supplyId)->increment('stock', $quantity);
             }
@@ -169,12 +188,12 @@ class InventoryController extends Controller
             if ($import->product_variant_id) {
                 ProductVariant::where('id', $import->product_variant_id)->decrement('stock', $import->quantity);
             } elseif ($import->accessory_price_id) {
-                AccessoryPrice::where('id', $import->accessory_price_id)->decrement('stock', $import->quantity);
+                $canonical = $this->canonicalAccessoryPriceId($import->accessory_price_id) ?? $import->accessory_price_id;
+                AccessoryPrice::where('id', $canonical)->decrement('stock', $import->quantity);
             } elseif ($import->supply_id) {
                 Supply::where('id', $import->supply_id)->decrement('stock', $import->quantity);
             } elseif ($import->accessory_id) {
-                // Legacy import row without per-code attribution. Decrement
-                // off the first accessory_price row of that accessory.
+                // Legacy row — decrement first accessory_price of that accessory.
                 $priceId = AccessoryPrice::where('accessory_id', $import->accessory_id)
                     ->orderBy('id')->value('id');
                 if ($priceId) AccessoryPrice::where('id', $priceId)->decrement('stock', $import->quantity);
@@ -217,42 +236,59 @@ class InventoryController extends Controller
             ProductVariant::whereNotIn('id', $variantImports->keys())->update(['stock' => 0]);
 
             // Accessories ──────────────────────────────────────────────────
-            // Per-accessory_price now. Sum direct rows (accessory_price_id
-            // populated). Re-attribute legacy rows that only have accessory_id
-            // to the first accessory_price of that accessory.
-            $directImports = DB::table('stock_imports')
-                ->whereNotNull('accessory_price_id')
-                ->groupBy('accessory_price_id')
-                ->selectRaw('accessory_price_id, SUM(quantity) AS imported')
-                ->pluck('imported', 'accessory_price_id');
+            // Stock is per-code now. For every (accessory_id, accessory_code)
+            // group, sum imports from ALL accessory_price_id rows in that
+            // group, then write the total onto the canonical row (lowest id)
+            // and zero the rest.
+            $direct = DB::table('stock_imports as si')
+                ->join('accessory_prices as ap', 'ap.id', '=', 'si.accessory_price_id')
+                ->whereNotNull('si.accessory_price_id')
+                ->groupBy('ap.accessory_id', 'ap.accessory_code')
+                ->selectRaw('ap.accessory_id, ap.accessory_code, SUM(si.quantity) AS imported')
+                ->get();
 
-            $legacyByAccessory = DB::table('stock_imports')
-                ->whereNotNull('accessory_id')
-                ->whereNull('accessory_price_id')
-                ->groupBy('accessory_id')
-                ->selectRaw('accessory_id, SUM(quantity) AS imported')
-                ->pluck('imported', 'accessory_id');
+            // Legacy rows: stock_imports.accessory_id without accessory_price_id.
+            // Attribute to the FIRST accessory_code of that accessory.
+            $legacy = DB::table('stock_imports as si')
+                ->join('accessory_prices as ap', function ($j) {
+                    $j->on('ap.accessory_id', '=', 'si.accessory_id')
+                      ->whereRaw('ap.id = (SELECT MIN(id) FROM accessory_prices WHERE accessory_id = si.accessory_id)');
+                })
+                ->whereNotNull('si.accessory_id')
+                ->whereNull('si.accessory_price_id')
+                ->groupBy('ap.accessory_id', 'ap.accessory_code')
+                ->selectRaw('ap.accessory_id, ap.accessory_code, SUM(si.quantity) AS imported')
+                ->get();
 
-            // Map each legacy accessory_id → first accessory_price_id.
-            $firstPrice = DB::table('accessory_prices')
-                ->select('accessory_id', DB::raw('MIN(id) AS first_id'))
-                ->groupBy('accessory_id')
-                ->pluck('first_id', 'accessory_id');
-
-            $merged = $directImports->mapWithKeys(fn ($v, $k) => [(int) $k => (int) $v])->all();
-            foreach ($legacyByAccessory as $aid => $qty) {
-                $pid = $firstPrice[$aid] ?? null;
-                if (!$pid) continue;
-                $merged[(int) $pid] = ($merged[(int) $pid] ?? 0) + (int) $qty;
+            // Merge into a single map keyed by "accessory_id|code".
+            $perGroup = [];
+            foreach ($direct as $r) {
+                $perGroup[$r->accessory_id . '|' . ($r->accessory_code ?? '')] = [
+                    'accessory_id' => $r->accessory_id,
+                    'code'         => $r->accessory_code,
+                    'imported'     => (int) $r->imported,
+                ];
+            }
+            foreach ($legacy as $r) {
+                $k = $r->accessory_id . '|' . ($r->accessory_code ?? '');
+                if (!isset($perGroup[$k])) {
+                    $perGroup[$k] = ['accessory_id' => $r->accessory_id, 'code' => $r->accessory_code, 'imported' => 0];
+                }
+                $perGroup[$k]['imported'] += (int) $r->imported;
             }
 
+            // Reset every accessory_price.stock to 0, then write the sum onto
+            // each group's canonical row.
+            AccessoryPrice::query()->update(['stock' => 0]);
             $accessoriesTouched = 0;
-            foreach ($merged as $pid => $imported) {
-                AccessoryPrice::where('id', $pid)->update(['stock' => $imported]);
+            foreach ($perGroup as $g) {
+                $q = AccessoryPrice::where('accessory_id', $g['accessory_id']);
+                $g['code'] === null ? $q->whereNull('accessory_code') : $q->where('accessory_code', $g['code']);
+                $canonicalId = $q->orderBy('id')->value('id');
+                if (!$canonicalId) continue;
+                AccessoryPrice::where('id', $canonicalId)->update(['stock' => $g['imported']]);
                 $accessoriesTouched++;
             }
-            // Zero accessory_prices that have no imports.
-            AccessoryPrice::whereNotIn('id', array_keys($merged))->update(['stock' => 0]);
 
             // Supplies ─────────────────────────────────────────────────────
             // Each supply: stock = Σ imports.quantity for this supply_id − N
@@ -320,10 +356,14 @@ class InventoryController extends Controller
 
         $variants = \App\Models\ProductVariant::with('product:id,name')
             ->orderBy('product_id')->orderBy('id')->get();
-        // Per-code accessory rows. Each accessory_price (= one choice like
-        // envelope White vs Red) is its own template row with its own stock.
-        $accessoryPrices = AccessoryPrice::with('accessory.product:id,name')
-            ->orderBy('accessory_id')->orderBy('id')->get();
+        // Per-code accessory rows. Group accessory_prices by
+        // (accessory_id, accessory_code) so each choice appears once even
+        // when there are multiple tier rows sharing the same code.
+        $accessoryRows = AccessoryPrice::with('accessory.product:id,name')
+            ->orderBy('accessory_id')->orderBy('id')
+            ->get()
+            ->groupBy(fn ($p) => $p->accessory_id . '|' . ($p->accessory_code ?? ''))
+            ->map(fn ($group) => $group->first()); // canonical row carries the stock
         // Supplies (label paper, packaging, etc.) — flat, default-label first.
         $supplies = Supply::orderByDesc('is_default_label')->orderBy('id')->get();
 
@@ -335,7 +375,7 @@ class InventoryController extends Controller
             fputcsv($fh, ['', '', '', '', '', '', '', '', $title, '', '', '']);
         };
 
-        $callback = function () use ($headers, $variants, $accessoryPrices, $supplies, $writeSectionHeader) {
+        $callback = function () use ($headers, $variants, $accessoryRows, $supplies, $writeSectionHeader) {
             $fh = fopen('php://output', 'w');
             fwrite($fh, "\xEF\xBB\xBF");
             fputcsv($fh, $headers);
@@ -373,13 +413,14 @@ class InventoryController extends Controller
                 ]);
             }
 
-            // ── Accessories section — FLAT, one row per accessory_price
-            //     (per code / choice). Each code carries its own stock pool.
-            if ($accessoryPrices->isNotEmpty()) {
+            // ── Accessories section — FLAT, one row per (accessory, code).
+            //     Tier rows sharing the same code collapse to a single row
+            //     because stock is pooled per code, not per tier.
+            if ($accessoryRows->isNotEmpty()) {
                 fputcsv($fh, array_fill(0, count($headers), ''));
                 $writeSectionHeader($fh, count($headers), '════════ ACCESSORIES ════════');
 
-                foreach ($accessoryPrices as $p) {
+                foreach ($accessoryRows as $p) {
                     $code = $p->accessory_code ?? (string) $p->id;
                     fputcsv($fh, [
                         'accessory',
@@ -389,9 +430,9 @@ class InventoryController extends Controller
                         '', '', '',
                         '',
                         $p->accessory?->product?->name ?? '',
-                        $p->accessory?->name . ($p->style ? " ({$p->style})" : ''),
+                        $p->accessory?->name ?? '',
                         '',
-                        (int) ($p->stock ?? 0),
+                        max(0, (int) ($p->stock ?? 0)),
                     ]);
                 }
             }
@@ -607,24 +648,30 @@ class InventoryController extends Controller
                 'product_name' => $v->product?->name,
                 'sku'          => $v->sku,
                 'label'        => trim(implode(' / ', array_filter([$v->color, $v->size, $v->paper_type]))) ?: ($v->sku ?? "Variant #{$v->id}"),
-                'stock'        => (int) $v->stock,
+                'stock'        => max(0, (int) $v->stock),       // import-only — no negatives
             ]);
 
-        // Accessory stock is per-code (one row per accessory_prices row).
+        // Accessory stock is per-code. Group accessory_prices by
+        // (accessory_id, accessory_code) — multiple tier rows of the same
+        // code share one stock pool that lives on the canonical row, so we
+        // emit one display row per group.
         $accessories = AccessoryPrice::with('accessory.product:id,name', 'accessory:id,name,product_id')
             ->orderBy('accessory_id')->orderBy('id')
             ->get()
-            ->map(function ($p) {
+            ->groupBy(fn ($p) => $p->accessory_id . '|' . ($p->accessory_code ?? ''))
+            ->map(function ($group) {
+                $canonical = $group->first();
                 return [
                     'kind'         => 'accessory',
-                    'id'           => $p->id,                              // accessory_price.id
-                    'accessory_id' => $p->accessory_id,
-                    'product_name' => $p->accessory?->product?->name,
-                    'sku'          => $p->accessory_code ?? (string) $p->id,
-                    'label'        => trim(($p->accessory?->name ?? '') . ($p->style ? " ({$p->style})" : '')),
-                    'stock'        => (int) $p->stock,
+                    'id'           => $canonical->id,                     // canonical accessory_price.id
+                    'accessory_id' => $canonical->accessory_id,
+                    'product_name' => $canonical->accessory?->product?->name,
+                    'sku'          => $canonical->accessory_code ?? (string) $canonical->id,
+                    'label'        => $canonical->accessory?->name ?? '',
+                    'stock'        => max(0, (int) $canonical->stock),    // clamp negatives — stock is import-only
                 ];
-            });
+            })
+            ->values();
 
         $supplies = Supply::orderByDesc('is_default_label')->orderBy('id')
             ->get()
