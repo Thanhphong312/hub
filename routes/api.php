@@ -9,6 +9,7 @@ use App\Http\Controllers\GangsheetLabelController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\SettingController;
+use App\Http\Controllers\TelegramController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WalletController;
 use App\Http\Middleware\CheckApiKey;
@@ -201,5 +202,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/invoice-payment',  [SettingController::class, 'getInvoicePayment']);
         Route::put('/invoice-payment',  [SettingController::class, 'updateInvoicePayment']);
+
+        Route::get('/telegram',         [TelegramController::class, 'getSettings']);
+        Route::put('/telegram',         [TelegramController::class, 'updateSettings']);
+        Route::get('/telegram/groups',  [TelegramController::class, 'discoverGroups']);
+        Route::post('/telegram/test',   [TelegramController::class, 'test']);
+        Route::post('/telegram/report', [TelegramController::class, 'report']);
     });
 });
