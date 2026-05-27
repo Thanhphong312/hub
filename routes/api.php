@@ -10,6 +10,7 @@ use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\SettingController;
 use App\Http\Controllers\TelegramController;
+use App\Http\Controllers\UploadController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WalletController;
 use App\Http\Middleware\CheckApiKey;
@@ -44,6 +45,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Dashboard
     Route::get('/dashboard', [DashboardController::class, 'index']);
+
+    // Generic B2 upload proxy for browser SPAs (web-bullstart). Desktop apps
+    // upload directly via the Electron main process and skip this.
+    Route::post('/uploads/file', [UploadController::class, 'store']);
 
     // Orders
     Route::get('/orders', [OrderController::class, 'index']);
