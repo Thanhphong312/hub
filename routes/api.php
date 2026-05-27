@@ -208,6 +208,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/invoice-payment',  [SettingController::class, 'getInvoicePayment']);
         Route::put('/invoice-payment',  [SettingController::class, 'updateInvoicePayment']);
 
+        Route::get('/vnpay-merchant', [SettingController::class, 'getVnpayMerchant']);
+        Route::put('/vnpay-merchant', [SettingController::class, 'updateVnpayMerchant']);
+
         Route::get('/telegram',         [TelegramController::class, 'getSettings']);
         Route::put('/telegram',         [TelegramController::class, 'updateSettings']);
         Route::get('/telegram/groups',  [TelegramController::class, 'discoverGroups']);

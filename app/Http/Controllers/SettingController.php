@@ -162,4 +162,56 @@ class SettingController extends Controller
 
         return $this->getInvoicePayment();
     }
+
+    // ----------------------------------------------------------------------
+    // VNPay merchant gateway — credentials + exchange rate. Admin only via
+    // the wrapping route group. hash_secret is sensitive: it's stored in
+    // app_settings but never travels to the renderer outside this endpoint.
+    // VnpayController reads these settings as overrides for config/services.vnpay
+    // so existing env-based installs keep working.
+    // ----------------------------------------------------------------------
+
+    public function getVnpayMerchant()
+    {
+        $merchant = AppSetting::getJson('vnpay_merchant', [
+            'env'         => 'sandbox',
+            'tmn_code'    => '',
+            'hash_secret' => '',
+            'return_url'  => '',
+        ]);
+        $rate = AppSetting::getJson('wallet_exchange_rate', [
+            'vnd_per_usd' => (float) config('services.vnpay.rate'),
+        ]);
+        return response()->json([
+            'merchant' => $merchant,
+            'rate'     => $rate,
+            'fallbacks' => [
+                'tmn_code_env'    => (bool) config('services.vnpay.tmn_code'),
+                'hash_secret_env' => (bool) config('services.vnpay.hash_secret'),
+            ],
+        ]);
+    }
+
+    public function updateVnpayMerchant(Request $request)
+    {
+        $data = $request->validate([
+            'merchant'              => 'sometimes|array',
+            'merchant.env'          => 'nullable|in:sandbox,production',
+            'merchant.tmn_code'     => 'nullable|string|max:64',
+            'merchant.hash_secret'  => 'nullable|string|max:200',
+            'merchant.return_url'   => 'nullable|url|max:500',
+            'rate'                  => 'sometimes|array',
+            'rate.vnd_per_usd'      => 'nullable|numeric|min:1000|max:100000',
+        ]);
+
+        if (isset($data['merchant'])) {
+            $current = AppSetting::getJson('vnpay_merchant', []);
+            AppSetting::setJson('vnpay_merchant', array_merge($current, $data['merchant']));
+        }
+        if (isset($data['rate']['vnd_per_usd'])) {
+            AppSetting::setJson('wallet_exchange_rate', ['vnd_per_usd' => (float) $data['rate']['vnd_per_usd']]);
+        }
+
+        return $this->getVnpayMerchant();
+    }
 }

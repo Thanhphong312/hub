@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppSetting;
 use App\Models\User;
 use App\Models\WalletTransaction;
 use Illuminate\Http\Request;
@@ -11,14 +12,40 @@ use Illuminate\Support\Facades\Log;
 class VnpayController extends Controller
 {
     /**
+     * Read a VNPay setting from the database first (app_settings.vnpay_merchant),
+     * falling back to config('services.vnpay.*') when not set. This lets admin
+     * manage credentials from the Settings UI without touching .env, while
+     * existing env-based installs keep working.
+     */
+    private function setting(string $key)
+    {
+        $merchant = AppSetting::getJson('vnpay_merchant', []);
+        $rate     = AppSetting::getJson('wallet_exchange_rate', []);
+
+        return match ($key) {
+            'tmn_code'    => $merchant['tmn_code']    ?? config('services.vnpay.tmn_code'),
+            'hash_secret' => $merchant['hash_secret'] ?? config('services.vnpay.hash_secret'),
+            'url'         => ($merchant['env'] ?? null) === 'production'
+                                ? 'https://vnpayment.vn/paymentv2/vpcpay.html'
+                                : (($merchant['env'] ?? null) === 'sandbox'
+                                    ? 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html'
+                                    : config('services.vnpay.url')),
+            'return_url'  => $merchant['return_url'] ?: config('services.vnpay.return_url'),
+            'rate'        => (float) ($rate['vnd_per_usd'] ?? config('services.vnpay.rate')),
+            'min_vnd'     => (int) config('services.vnpay.min_vnd'),
+            default       => null,
+        };
+    }
+
+    /**
      * Public — return current VND→USD rate so the seller wallet UI can show a
      * preview of how many USD they'll get for a given VND amount.
      */
     public function rate()
     {
         return response()->json([
-            'vnd_to_usd_rate' => (float) config('services.vnpay.rate'),
-            'min_vnd'         => (int) config('services.vnpay.min_vnd'),
+            'vnd_to_usd_rate' => $this->setting('rate'),
+            'min_vnd'         => $this->setting('min_vnd'),
         ]);
     }
 
@@ -32,13 +59,13 @@ class VnpayController extends Controller
         $user = $request->user();
         if (!$user) return response()->json(['message' => 'Unauthenticated'], 401);
 
-        $minVnd = (int) config('services.vnpay.min_vnd');
+        $minVnd = $this->setting('min_vnd');
         $request->validate([
             'vnd_amount' => "required|numeric|min:{$minVnd}",
         ]);
 
         $vndAmount = (int) round($request->vnd_amount);
-        $rate      = (float) config('services.vnpay.rate');
+        $rate      = $this->setting('rate');
         $usdAmount = round($vndAmount / $rate, 2);
 
         // Unique txn ref — also serves as wallet_transactions.transaction_id
@@ -56,10 +83,10 @@ class VnpayController extends Controller
             'note'           => 'VNPay deposit',
         ]);
 
-        $tmnCode = config('services.vnpay.tmn_code');
-        $hashSecret = config('services.vnpay.hash_secret');
-        $vnpayUrl = config('services.vnpay.url');
-        $returnUrl = config('services.vnpay.return_url');
+        $tmnCode    = $this->setting('tmn_code');
+        $hashSecret = $this->setting('hash_secret');
+        $vnpayUrl   = $this->setting('url');
+        $returnUrl  = $this->setting('return_url');
 
         if (!$tmnCode || !$hashSecret) {
             return response()->json([
@@ -120,7 +147,7 @@ class VnpayController extends Controller
             $hashData[] = $k . '=' . rawurlencode($v);
         }
         $hashData = implode('&', $hashData);
-        $expected = hash_hmac('sha512', $hashData, config('services.vnpay.hash_secret'));
+        $expected = hash_hmac('sha512', $hashData, $this->setting('hash_secret'));
 
         if (!hash_equals($expected, $secureHash)) {
             return response()->json(['RspCode' => '97', 'Message' => 'Invalid signature']);
