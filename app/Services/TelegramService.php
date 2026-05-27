@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\AppSetting;
 use App\Models\Order;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -191,6 +192,39 @@ class TelegramService
             $count = (int) ($counts[$st] ?? 0);
             $lines[] = "  • {$name}: {$count}";
         }
+
+        // ── Per-user backlog (current state, NOT scoped to the date window).
+        // For each user with open new_order or onhold orders we show their
+        // counts plus their tier name as the "team" label.
+        $perUser = DB::table('orders as o')
+            ->join('users as u', 'u.id', '=', 'o.user_id')
+            ->leftJoin('tiers as t', 't.id', '=', 'u.tier_id')
+            ->whereIn('o.status', [Order::STATUS_NEW_ORDER, Order::STATUS_ONHOLD])
+            ->groupBy('u.id', 'u.name', 't.name')
+            ->selectRaw('
+                u.id AS user_id,
+                u.name AS user_name,
+                t.name AS tier_name,
+                SUM(CASE WHEN o.status = ? THEN 1 ELSE 0 END) AS new_count,
+                SUM(CASE WHEN o.status = ? THEN 1 ELSE 0 END) AS onhold_count
+            ', [Order::STATUS_NEW_ORDER, Order::STATUS_ONHOLD])
+            ->orderByDesc('new_count')
+            ->orderByDesc('onhold_count')
+            ->orderBy('u.name')
+            ->get();
+
+        if ($perUser->isNotEmpty()) {
+            $lines[] = '';
+            $lines[] = '<b>By user (open new + onhold — current)</b>';
+            foreach ($perUser as $row) {
+                $newCount    = (int) $row->new_count;
+                $onholdCount = (int) $row->onhold_count;
+                if ($newCount === 0 && $onholdCount === 0) continue; // safety
+                $team = $row->tier_name ? " [{$row->tier_name}]" : '';
+                $lines[] = "  • {$row->user_name}{$team} · 🆕 {$newCount} · ⏸ {$onholdCount}";
+            }
+        }
+
         return implode("\n", $lines);
     }
 }
