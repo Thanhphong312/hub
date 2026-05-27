@@ -195,16 +195,14 @@ class TelegramService
 
         // ── Per-user backlog (current state, NOT scoped to the date window).
         // For each user with open new_order or onhold orders we show their
-        // counts plus their tier name as the "team" label.
+        // counts. Identified by user_id + user name.
         $perUser = DB::table('orders as o')
             ->join('users as u', 'u.id', '=', 'o.user_id')
-            ->leftJoin('tiers as t', 't.id', '=', 'u.tier_id')
             ->whereIn('o.status', [Order::STATUS_NEW_ORDER, Order::STATUS_ONHOLD])
-            ->groupBy('u.id', 'u.name', 't.name')
+            ->groupBy('u.id', 'u.name')
             ->selectRaw('
                 u.id AS user_id,
                 u.name AS user_name,
-                t.name AS tier_name,
                 SUM(CASE WHEN o.status = ? THEN 1 ELSE 0 END) AS new_count,
                 SUM(CASE WHEN o.status = ? THEN 1 ELSE 0 END) AS onhold_count
             ', [Order::STATUS_NEW_ORDER, Order::STATUS_ONHOLD])
@@ -220,8 +218,7 @@ class TelegramService
                 $newCount    = (int) $row->new_count;
                 $onholdCount = (int) $row->onhold_count;
                 if ($newCount === 0 && $onholdCount === 0) continue; // safety
-                $team = $row->tier_name ? " [{$row->tier_name}]" : '';
-                $lines[] = "  • {$row->user_name}{$team} · 🆕 {$newCount} · ⏸ {$onholdCount}";
+                $lines[] = "  • #{$row->user_id} {$row->user_name} · 🆕 {$newCount} · ⏸ {$onholdCount}";
             }
         }
 
