@@ -1388,10 +1388,13 @@ class OrderController extends Controller
             return response()->json(['message' => 'Order already paid'], 400);
         }
 
-        $amountToPay = $order->total_cost - $order->paid_cost;
+        // Round to cents — float math on decimal columns can produce
+        // values like 54.400000000000006 from summing line prices, which
+        // would falsely trip the wallet < amount comparison below.
+        $amountToPay = round((float) ($order->total_cost - $order->paid_cost), 2);
 
-        if ($user->wallet < $amountToPay) {
-            return response()->json(['message' => 'Insufficient wallet balance', 'required' => $amountToPay, 'wallet' => $user->wallet], 400);
+        if (round((float) $user->wallet, 2) < $amountToPay) {
+            return response()->json(['message' => 'Insufficient wallet balance', 'required' => $amountToPay, 'wallet' => (float) $user->wallet], 400);
         }
 
         return DB::transaction(function () use ($user, $order, $amountToPay) {
@@ -1464,14 +1467,14 @@ class OrderController extends Controller
             ->whereColumn('paid_cost', '<', 'total_cost')
             ->get();
 
-        $totalToPay = $orders->sum(fn($o) => max(0, $o->total_cost - $o->paid_cost));
+        $totalToPay = round((float) $orders->sum(fn($o) => max(0, (float) $o->total_cost - (float) $o->paid_cost)), 2);
 
         if ($orders->isEmpty() || $totalToPay <= 0) {
             return response()->json(['message' => 'No unpaid orders to pay', 'count' => 0], 400);
         }
 
         $payer = $targetUserId === $user->id ? $user : \App\Models\User::findOrFail($targetUserId);
-        if ($payer->wallet < $totalToPay) {
+        if (round((float) $payer->wallet, 2) < $totalToPay) {
             return response()->json([
                 'message' => 'Insufficient wallet balance',
                 'required' => $totalToPay,
@@ -1568,8 +1571,8 @@ class OrderController extends Controller
             if (!$owner) {
                 return response()->json(['message' => "Order owner #{$ownerId} not found"], 400);
             }
-            $ownerTotal = $ownerOrders->sum(fn($o) => max(0, $o->total_cost - $o->paid_cost));
-            if ($owner->wallet < $ownerTotal) {
+            $ownerTotal = round((float) $ownerOrders->sum(fn($o) => max(0, (float) $o->total_cost - (float) $o->paid_cost)), 2);
+            if (round((float) $owner->wallet, 2) < $ownerTotal) {
                 return response()->json([
                     'message' => "Insufficient wallet balance for {$owner->name}",
                     'user_id' => $owner->id,
