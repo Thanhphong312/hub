@@ -103,28 +103,29 @@ class WalletController extends Controller
             fwrite($fh, "\xEF\xBB\xBF");
             fputcsv($fh, $headers);
 
-            // chunkById streams without holding everything in memory.
-            $query->orderBy('id', 'desc')->chunkById(500, function ($rows) use ($fh) {
-                foreach ($rows as $t) {
-                    fputcsv($fh, [
-                        $t->id,
-                        optional($t->created_at)->format('Y-m-d H:i:s'),
-                        $t->user?->name ?? '',
-                        $t->user?->email ?? '',
-                        $t->type,
-                        $t->status,
-                        $t->method ?? '',
-                        $t->transaction_id ?? '',
-                        $t->order?->system_id ?? $t->order_system_id ?? '',
-                        $t->order?->ref_id ?? '',
-                        // Keep sign (paid/refund are stored negative/positive
-                        // — accountants want to see direction).
-                        number_format((float) $t->amount, 2, '.', ''),
-                        $t->balance_before !== null ? number_format((float) $t->balance_before, 2, '.', '') : '',
-                        $t->balance_after  !== null ? number_format((float) $t->balance_after,  2, '.', '') : '',
-                        $t->note ?? '',
-                    ]);
-                }
+            // lazy() streams from the DB cursor without preloading or
+            // chunk-paginating, so combining with orderBy('id','desc') is
+            // safe (chunkById conflicts with non-asc-id ordering and could
+            // skip rows at chunk boundaries).
+            $query->orderBy('id', 'desc')->lazy(500)->each(function ($t) use ($fh) {
+                fputcsv($fh, [
+                    $t->id,
+                    optional($t->created_at)->format('Y-m-d H:i:s'),
+                    $t->user?->name ?? '',
+                    $t->user?->email ?? '',
+                    $t->type,
+                    $t->status,
+                    $t->method ?? '',
+                    $t->transaction_id ?? '',
+                    $t->order?->system_id ?? $t->order_system_id ?? '',
+                    $t->order?->ref_id ?? '',
+                    // Keep sign (paid/refund are stored negative/positive
+                    // — accountants want to see direction).
+                    number_format((float) $t->amount, 2, '.', ''),
+                    $t->balance_before !== null ? number_format((float) $t->balance_before, 2, '.', '') : '',
+                    $t->balance_after  !== null ? number_format((float) $t->balance_after,  2, '.', '') : '',
+                    $t->note ?? '',
+                ]);
             });
 
             fclose($fh);
