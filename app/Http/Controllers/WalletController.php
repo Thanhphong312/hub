@@ -296,6 +296,77 @@ class WalletController extends Controller
     }
 
     /**
+     * POST /api/wallet/transactions/bulk-refund-delete (admin only).
+     *
+     * For each selected `paid` transaction:
+     *   1. Credit the user's wallet by |amount| (paid txns are stored as
+     *      negative amounts; refund reverses that direction).
+     *   2. Subtract |amount| from the linked order's paid_cost so the
+     *      order shows as unpaid again. paid_cost can't go below 0.
+     *   3. Delete the original wallet_transactions row entirely.
+     *
+     * Wrapped in a DB::transaction so a single failure rolls back the
+     * whole batch — partial refunds are never persisted.
+     */
+    public function bulkRefundDelete(Request $request)
+    {
+        $request->validate([
+            'transaction_ids'   => 'required|array|min:1',
+            'transaction_ids.*' => 'integer|exists:wallet_transactions,id',
+        ]);
+
+        $txs = WalletTransaction::with('order:id,system_id,paid_cost')
+            ->whereIn('id', $request->transaction_ids)
+            ->lockForUpdate()
+            ->get();
+
+        $errors = [];
+        $refundedCount = 0;
+        $totalRefunded = 0.0;
+
+        DB::transaction(function () use ($txs, &$errors, &$refundedCount, &$totalRefunded) {
+            foreach ($txs as $tx) {
+                if ($tx->type !== 'paid') {
+                    $errors[] = "Tx #{$tx->id}: only `paid` transactions can be refund-deleted (got `{$tx->type}`)";
+                    continue;
+                }
+
+                $amount = abs((float) $tx->amount);
+                if ($amount <= 0) {
+                    $errors[] = "Tx #{$tx->id}: amount is 0, skipping";
+                    continue;
+                }
+
+                $user = \App\Models\User::lockForUpdate()->find($tx->user_id);
+                if (!$user) {
+                    $errors[] = "Tx #{$tx->id}: user #{$tx->user_id} not found";
+                    continue;
+                }
+
+                $user->increment('wallet', $amount);
+
+                if ($tx->order) {
+                    // Clamp paid_cost ≥ 0 to guard against double-refund or
+                    // a stale txn that already had its paid_cost reverted.
+                    $newPaid = max(0, (float) $tx->order->paid_cost - $amount);
+                    $tx->order->update(['paid_cost' => $newPaid]);
+                }
+
+                $tx->delete();
+                $refundedCount++;
+                $totalRefunded += $amount;
+            }
+        });
+
+        return response()->json([
+            'message'         => "Refunded {$refundedCount} transaction(s), total \$" . number_format($totalRefunded, 2),
+            'refunded_count'  => $refundedCount,
+            'total_refunded'  => $totalRefunded,
+            'errors'          => $errors,
+        ]);
+    }
+
+    /**
      * @OA\Get(
      *     path="/wallet/balance",
      *     tags={"Wallet"},
