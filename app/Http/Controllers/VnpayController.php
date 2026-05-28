@@ -121,17 +121,26 @@ class VnpayController extends Controller
             'vnp_CreateDate' => now('Asia/Ho_Chi_Minh')->format('YmdHis'),
         ];
 
+        // Build hashData + query with the SAME urlencode pass (VNPay 2.1.0
+        // demo). The previous code hashed with rawurlencode (space → %20) but
+        // sent the URL via http_build_query (space → +) — VNPay recomputed the
+        // hash over '+' and rejected it as "Sai chữ ký" (code 70). Both must
+        // use urlencode and be built identically.
         ksort($params);
-        $hashData = [];
+        $hashData = '';
+        $query = '';
+        $i = 0;
         foreach ($params as $k => $v) {
-            // Per VNPay docs: rawurlencode keys + values, join with `=` and `&`.
-            $hashData[] = $k . '=' . rawurlencode($v);
+            if ($i === 1) {
+                $hashData .= '&' . urlencode($k) . '=' . urlencode($v);
+            } else {
+                $hashData .= urlencode($k) . '=' . urlencode($v);
+                $i = 1;
+            }
+            $query .= urlencode($k) . '=' . urlencode($v) . '&';
         }
-        $hashData = implode('&', $hashData);
         $secureHash = hash_hmac('sha512', $hashData, $hashSecret);
-
-        $params['vnp_SecureHash'] = $secureHash;
-        $paymentUrl = $vnpayUrl . '?' . http_build_query($params);
+        $paymentUrl = $vnpayUrl . '?' . $query . 'vnp_SecureHash=' . $secureHash;
 
         return response()->json([
             'payment_url'   => $paymentUrl,
@@ -149,16 +158,28 @@ class VnpayController extends Controller
      */
     public function ipn(Request $request)
     {
-        $params = $request->all();
-        $secureHash = $params['vnp_SecureHash'] ?? '';
+        $all = $request->all();
+        $secureHash = $all['vnp_SecureHash'] ?? '';
+
+        // Only vnp_* fields participate in the checksum (VNPay demo). Build the
+        // hash with urlencode, matching how create() signs the outbound URL.
+        $params = [];
+        foreach ($all as $k => $v) {
+            if (str_starts_with($k, 'vnp_')) $params[$k] = $v;
+        }
         unset($params['vnp_SecureHash'], $params['vnp_SecureHashType']);
 
         ksort($params);
-        $hashData = [];
+        $hashData = '';
+        $i = 0;
         foreach ($params as $k => $v) {
-            $hashData[] = $k . '=' . rawurlencode($v);
+            if ($i === 1) {
+                $hashData .= '&' . urlencode($k) . '=' . urlencode($v);
+            } else {
+                $hashData .= urlencode($k) . '=' . urlencode($v);
+                $i = 1;
+            }
         }
-        $hashData = implode('&', $hashData);
         $expected = hash_hmac('sha512', $hashData, $this->setting('hash_secret'));
 
         if (!hash_equals($expected, $secureHash)) {
