@@ -8,6 +8,7 @@ use App\Models\Role;
 use App\Models\Tier;
 use Illuminate\Http\Request;
 
+
 class SettingController extends Controller
 {
     // Roles
@@ -173,35 +174,43 @@ class SettingController extends Controller
 
     public function getVnpayMerchant()
     {
-        $merchant = AppSetting::getJson('vnpay_merchant', [
-            'env'         => 'sandbox',
-            'tmn_code'    => '',
-            'hash_secret' => '',
-            'return_url'  => '',
-        ]);
+        $merchant = AppSetting::getJson('vnpay_merchant', []);
+        $merchant = array_merge([
+            'env'                    => 'sandbox',
+            'sandbox_tmn_code'       => '',
+            'sandbox_hash_secret'    => '',
+            'production_tmn_code'    => '',
+            'production_hash_secret' => '',
+            'return_url'             => '',
+        ], $merchant);
+
         $rate = AppSetting::getJson('wallet_exchange_rate', [
             'vnd_per_usd' => (float) config('services.vnpay.rate'),
         ]);
+
+        // Suggested IPN URL to register in the VNPay merchant portal — derived
+        // from the app URL so the admin can copy it straight out.
+        $base = rtrim(config('app.url') ?: 'https://bullstart.us', '/');
         return response()->json([
             'merchant' => $merchant,
             'rate'     => $rate,
-            'fallbacks' => [
-                'tmn_code_env'    => (bool) config('services.vnpay.tmn_code'),
-                'hash_secret_env' => (bool) config('services.vnpay.hash_secret'),
-            ],
+            'ipn_url'    => $base . '/wallet/vnpay/ipn',
+            'return_url' => $base . '/wallet/vnpay/return',
         ]);
     }
 
     public function updateVnpayMerchant(Request $request)
     {
         $data = $request->validate([
-            'merchant'              => 'sometimes|array',
-            'merchant.env'          => 'nullable|in:sandbox,production',
-            'merchant.tmn_code'     => 'nullable|string|max:64',
-            'merchant.hash_secret'  => 'nullable|string|max:200',
-            'merchant.return_url'   => 'nullable|url|max:500',
-            'rate'                  => 'sometimes|array',
-            'rate.vnd_per_usd'      => 'nullable|numeric|min:1000|max:100000',
+            'merchant'                        => 'sometimes|array',
+            'merchant.env'                    => 'nullable|in:sandbox,production',
+            'merchant.sandbox_tmn_code'       => 'nullable|string|max:64',
+            'merchant.sandbox_hash_secret'    => 'nullable|string|max:200',
+            'merchant.production_tmn_code'    => 'nullable|string|max:64',
+            'merchant.production_hash_secret' => 'nullable|string|max:200',
+            'merchant.return_url'             => 'nullable|url|max:500',
+            'rate'                            => 'sometimes|array',
+            'rate.vnd_per_usd'                => 'nullable|numeric|min:1000|max:100000',
         ]);
 
         if (isset($data['merchant'])) {

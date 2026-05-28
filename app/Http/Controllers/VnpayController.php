@@ -22,17 +22,29 @@ class VnpayController extends Controller
         $merchant = AppSetting::getJson('vnpay_merchant', []);
         $rate     = AppSetting::getJson('wallet_exchange_rate', []);
 
+        // Active environment selects which credential pair is used. Sandbox
+        // and production creds are stored separately so switching env doesn't
+        // wipe the other set. Legacy flat tmn_code/hash_secret still honored
+        // as a fallback.
+        $env = $merchant['env'] ?? 'sandbox';
+        $isProd = $env === 'production';
+        $tmn = $isProd
+            ? ($merchant['production_tmn_code'] ?? null)
+            : ($merchant['sandbox_tmn_code'] ?? null);
+        $secret = $isProd
+            ? ($merchant['production_hash_secret'] ?? null)
+            : ($merchant['sandbox_hash_secret'] ?? null);
+
         return match ($key) {
-            'tmn_code'    => $merchant['tmn_code']    ?? config('services.vnpay.tmn_code'),
-            'hash_secret' => $merchant['hash_secret'] ?? config('services.vnpay.hash_secret'),
-            'url'         => ($merchant['env'] ?? null) === 'production'
+            'tmn_code'    => $tmn ?: ($merchant['tmn_code'] ?? config('services.vnpay.tmn_code')),
+            'hash_secret' => $secret ?: ($merchant['hash_secret'] ?? config('services.vnpay.hash_secret')),
+            'url'         => $isProd
                                 ? 'https://vnpayment.vn/paymentv2/vpcpay.html'
-                                : (($merchant['env'] ?? null) === 'sandbox'
-                                    ? 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html'
-                                    : config('services.vnpay.url')),
+                                : 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html',
             'return_url'  => $merchant['return_url'] ?: config('services.vnpay.return_url'),
             'rate'        => (float) ($rate['vnd_per_usd'] ?? config('services.vnpay.rate')),
             'min_vnd'     => (int) config('services.vnpay.min_vnd'),
+            'env'         => $env,
             default       => null,
         };
     }
