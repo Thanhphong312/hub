@@ -62,8 +62,8 @@ class GangsheetController extends Controller
             'items.productVariant.product:id,name,line_id',
             // Eager-load both legacy single-accessory and multi-pivot so the
             // Compose tab can filter "Scratch Card" by accessory.id, not name.
-            'items.accessoryPrice.accessory:id,name,product_id',
-            'items.accessoryPrices.accessory:id,name,product_id',
+            'items.accessoryPrice.accessory:id,name,product_id,gangsheet_split',
+            'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
         ])
             ->where('production', false)
             ->where('status', '!=', Order::STATUS_SHIPPED)
@@ -99,8 +99,8 @@ class GangsheetController extends Controller
             'items.productVariant.product:id,name,line_id',
             // Eager-load both legacy single-accessory and multi-pivot so the
             // Compose tab can filter "Scratch Card" by accessory.id, not name.
-            'items.accessoryPrice.accessory:id,name,product_id',
-            'items.accessoryPrices.accessory:id,name,product_id',
+            'items.accessoryPrice.accessory:id,name,product_id,gangsheet_split',
+            'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
         ])
             ->whereIn('system_id', $ids)
             ->orderBy('id', 'asc')

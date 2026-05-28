@@ -532,9 +532,15 @@ class ProductController extends Controller
     // Accessories
     public function storeAccessory(Request $request, Product $product)
     {
-        $request->validate(['name' => 'required|string']);
+        $data = $request->validate([
+            'name' => 'required|string',
+            'gangsheet_split' => 'sometimes|boolean',
+        ]);
 
-        $accessory = $product->accessories()->create(['name' => $request->name]);
+        $accessory = $product->accessories()->create([
+            'name' => $data['name'],
+            'gangsheet_split' => $data['gangsheet_split'] ?? true,
+        ]);
         return response()->json([
             'message' => 'Accessory created',
             'accessory' => $accessory->load('prices.tier'),
@@ -543,9 +549,15 @@ class ProductController extends Controller
 
     public function updateAccessory(Request $request, Accessory $accessory)
     {
-        $request->validate(['name' => 'required|string']);
+        $data = $request->validate([
+            'name' => 'required|string',
+            'gangsheet_split' => 'sometimes|boolean',
+        ]);
 
-        $accessory->update(['name' => $request->name]);
+        $accessory->update(array_filter([
+            'name' => $data['name'],
+            'gangsheet_split' => $data['gangsheet_split'] ?? null,
+        ], fn ($v) => $v !== null));
         return response()->json(['message' => 'Accessory updated', 'accessory' => $accessory]);
     }
 
