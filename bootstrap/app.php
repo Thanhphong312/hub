@@ -23,6 +23,13 @@ return Application::configure(basePath: dirname(__DIR__))
             'api_key' => \App\Http\Middleware\CheckApiKey::class,
             'web.portal' => \App\Http\Middleware\EnsureWebPortalAccess::class,
         ]);
+
+        // VNPay calls our IPN endpoint server-to-server with no CSRF token —
+        // exempt it from the web group's CSRF middleware so the POST gets
+        // through. Signature is still verified inside the controller.
+        $middleware->validateCsrfTokens(except: [
+            'wallet/vnpay/ipn',
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->render(function (AuthenticationException $e, Request $request) {
