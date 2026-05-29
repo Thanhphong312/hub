@@ -46,6 +46,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Dashboard
     Route::get('/dashboard', [DashboardController::class, 'index']);
 
+    // Stamp shipping config — any auth user can read (OrderCreate fee preview).
+    Route::get('/settings/stamp-config', [SettingController::class, 'getStampConfig']);
+
     // Generic B2 upload proxy for browser SPAs (web-bullstart). Desktop apps
     // upload directly via the Electron main process and skip this.
     Route::post('/uploads/file', [UploadController::class, 'store']);
@@ -211,6 +214,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/vnpay-merchant', [SettingController::class, 'getVnpayMerchant']);
         Route::put('/vnpay-merchant', [SettingController::class, 'updateVnpayMerchant']);
+        Route::put('/stamp-config', [SettingController::class, 'updateStampConfig']);
 
         Route::get('/telegram',         [TelegramController::class, 'getSettings']);
         Route::put('/telegram',         [TelegramController::class, 'updateSettings']);

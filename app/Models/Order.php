@@ -18,23 +18,37 @@ class Order extends Model
     const SHIP_SELLER = 'seller_ship';   // address only, we generate a label
     const SHIP_STAMP  = 'stamp';         // address only, ship by postage stamp (no tracking)
 
-    // Stamp shipping economics (note "Đơn stamp", 2026-05-28):
-    //   $1 per stamp, 1 stamp covers up to 2 items, + $0.30 handling fee.
-    //   Hard cap 4 items per stamp order — above that the seller must use a
-    //   normal label.
-    const STAMP_FEE            = 1.00;   // per stamp
-    const STAMP_HANDLING_FEE   = 0.30;   // flat per order
-    const STAMP_ITEMS_PER_UNIT = 2;      // items covered by one stamp
-    const STAMP_MAX_ITEMS      = 4;      // limit before forcing a normal label
+    // Stamp shipping economics (note "Đơn stamp"). Defaults below; admin can
+    // override via app_settings.stamp_config (Settings → Stamp).
+    //   base fee covers up to `base_items`; each item beyond that adds `fee`;
+    //   plus a flat `handling_fee`. `max_items` caps a stamp order.
+    const STAMP_FEE          = 1.00;   // per item (base + each extra)
+    const STAMP_HANDLING_FEE = 0.30;   // flat per order
+    const STAMP_BASE_ITEMS   = 2;      // items covered by the base fee
+    const STAMP_MAX_ITEMS    = 4;      // limit before forcing a normal label
+
+    public static function stampConfig(): array
+    {
+        $c = AppSetting::getJson('stamp_config', []);
+        return [
+            'fee'          => (float) ($c['fee']          ?? self::STAMP_FEE),
+            'handling_fee' => (float) ($c['handling_fee'] ?? self::STAMP_HANDLING_FEE),
+            'base_items'   => (int)   ($c['base_items']   ?? self::STAMP_BASE_ITEMS),
+            'max_items'    => (int)   ($c['max_items']    ?? self::STAMP_MAX_ITEMS),
+        ];
+    }
 
     /**
-     * Shipping (handling) fee for a stamp order: ceil(items / 2) stamps × $1
-     * plus the flat $0.30 handling fee. Caller must enforce STAMP_MAX_ITEMS.
+     * Handling fee for a stamp order: base fee (covers base_items) + $fee for
+     * each item beyond base_items + flat handling_fee. Caller enforces max_items.
+     *   e.g. fee=1, base=2, handling=0.30 → 2 items $1.30, 3 items $2.30, 4 $3.30
      */
     public static function stampShippingCost(int $totalQty): float
     {
-        $stamps = (int) ceil(max(1, $totalQty) / self::STAMP_ITEMS_PER_UNIT);
-        return round($stamps * self::STAMP_FEE + self::STAMP_HANDLING_FEE, 2);
+        $c = self::stampConfig();
+        $qty = max(1, $totalQty);
+        $extra = max(0, $qty - $c['base_items']);
+        return round($c['fee'] + $extra * $c['fee'] + $c['handling_fee'], 2);
     }
 
     // convert_label is admin/support-only — hidden by default, controllers call

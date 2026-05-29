@@ -172,6 +172,29 @@ class SettingController extends Controller
     // so existing env-based installs keep working.
     // ----------------------------------------------------------------------
 
+    // ----------------------------------------------------------------------
+    // Stamp shipping config — fee + item limit. GET readable by any auth user
+    // (OrderCreate needs it for the fee preview + limit); PUT admin only.
+    // ----------------------------------------------------------------------
+
+    public function getStampConfig()
+    {
+        return response()->json(\App\Models\Order::stampConfig());
+    }
+
+    public function updateStampConfig(Request $request)
+    {
+        $data = $request->validate([
+            'fee'          => 'nullable|numeric|min:0|max:100',
+            'handling_fee' => 'nullable|numeric|min:0|max:100',
+            'base_items'   => 'nullable|integer|min:1|max:50',
+            'max_items'    => 'nullable|integer|min:1|max:100',
+        ]);
+        $current = AppSetting::getJson('stamp_config', []);
+        AppSetting::setJson('stamp_config', array_merge($current, $data));
+        return response()->json(\App\Models\Order::stampConfig());
+    }
+
     public function getVnpayMerchant()
     {
         $merchant = AppSetting::getJson('vnpay_merchant', []);

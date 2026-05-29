@@ -391,14 +391,15 @@ class OrderController extends Controller
             'address.country' => $hasLabel ? 'nullable|string' : 'required|string',
         ]);
 
-        // Stamp orders are capped at STAMP_MAX_ITEMS — above that the seller
+        // Stamp orders are capped at the configured max — above that the seller
         // must use a normal label. Sum quantities up front so we reject before
         // creating anything.
         if ($byStamp) {
+            $stampMax = Order::stampConfig()['max_items'];
             $stampQty = collect($request->items)->sum(fn ($i) => max(1, (int) ($i['quantity'] ?? 1)));
-            if ($stampQty > Order::STAMP_MAX_ITEMS) {
+            if ($stampQty > $stampMax) {
                 return response()->json([
-                    'message' => 'Ship bằng stamp tối đa ' . Order::STAMP_MAX_ITEMS . ' items. Đơn này ' . $stampQty . ' items — vui lòng dùng label thường.',
+                    'message' => 'Ship bằng stamp tối đa ' . $stampMax . ' items. Đơn này ' . $stampQty . ' items — vui lòng dùng label thường.',
                 ], 422);
             }
         }
@@ -2406,10 +2407,11 @@ class OrderController extends Controller
         ]);
 
         if ($byStamp) {
+            $stampMax = Order::stampConfig()['max_items'];
             $stampQty = collect($request->items)->sum(fn ($i) => max(1, (int) ($i['quantity'] ?? 1)));
-            if ($stampQty > Order::STAMP_MAX_ITEMS) {
+            if ($stampQty > $stampMax) {
                 return response()->json([
-                    'message' => 'Ship by stamp tối đa ' . Order::STAMP_MAX_ITEMS . ' items. Đơn này ' . $stampQty . ' items — dùng label thường.',
+                    'message' => 'Ship by stamp tối đa ' . $stampMax . ' items. Đơn này ' . $stampQty . ' items — dùng label thường.',
                 ], 422);
             }
         }
