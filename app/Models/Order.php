@@ -23,7 +23,7 @@ class Order extends Model
     //   base fee covers up to `base_items`; each item beyond that adds `fee`;
     //   plus a flat `handling_fee`. `max_items` caps a stamp order.
     const STAMP_FEE          = 1.00;   // per item (base + each extra)
-    const STAMP_HANDLING_FEE = 0.30;   // flat per order
+    const STAMP_HANDLING_FEE = 0.00;   // flat per order (no handling by default)
     const STAMP_BASE_ITEMS   = 2;      // items covered by the base fee
     const STAMP_MAX_ITEMS    = 4;      // limit before forcing a normal label
 
