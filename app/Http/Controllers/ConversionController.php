@@ -172,12 +172,47 @@ class ConversionController extends Controller
         }
         $convertLabelPending = $convertLabelPending->map(function ($row) use ($summaries) {
             $row['accessory_summary'] = $summaries[$row['order_id']] ?? '';
+            $row['ship_type'] = Order::SHIP_TIKTOK;
             return $row;
         });
 
+        // Stamp orders: no carrier label — we render a convert_label from the
+        // customer ADDRESS plus a big "STAMP" marker. Same pending criteria
+        // (new_order, no convert_label yet) but keyed off ship_type=stamp.
+        $stampQuery = Order::query()
+            ->with('address')
+            ->where('status', Order::STATUS_NEW_ORDER)
+            ->where('ship_type', Order::SHIP_STAMP)
+            ->where(function ($q) {
+                $q->whereNull('convert_label')->orWhere('convert_label', '');
+            })
+            ->orderBy('id', 'asc');
+        if (!$isStaff) {
+            $stampQuery->where('user_id', $user->id);
+        }
+        $stampPending = $stampQuery->get()->map(function ($o) {
+            return [
+                'order_id'          => $o->id,
+                'system_id'         => $o->system_id,
+                'shipping_label'    => null,
+                'ship_type'         => Order::SHIP_STAMP,
+                'accessory_summary' => $this->computeAccessorySummary($o),
+                'address'           => $o->address ? [
+                    'first_name' => $o->address->first_name,
+                    'last_name'  => $o->address->last_name,
+                    'address_1'  => $o->address->address_1,
+                    'address_2'  => $o->address->address_2,
+                    'city'       => $o->address->city,
+                    'state'      => $o->address->state,
+                    'zipcode'    => $o->address->zipcode,
+                    'country'    => $o->address->country,
+                ] : null,
+            ];
+        })->values();
+
         return response()->json([
             'items' => $result,
-            'convert_label_pending' => $convertLabelPending,
+            'convert_label_pending' => $convertLabelPending->concat($stampPending)->values(),
         ]);
     }
 
@@ -324,12 +359,38 @@ class ConversionController extends Controller
         }
 
         $order = ctype_digit($needle)
-            ? Order::with('items.accessoryPrice')->find((int) $needle)
-            : Order::with('items.accessoryPrice')->where('system_id', $needle)->first();
+            ? Order::with('items.accessoryPrice', 'address')->find((int) $needle)
+            : Order::with('items.accessoryPrice', 'address')->where('system_id', $needle)->first();
 
         if (!$order) {
             return response()->json(['message' => "No order found for \"{$needle}\""], 404);
         }
+
+        // Stamp orders convert from the address (no carrier label).
+        if ($order->ship_type === Order::SHIP_STAMP) {
+            if (!$order->address) {
+                return response()->json(['message' => "Stamp order {$order->system_id} has no address"], 422);
+            }
+            return response()->json([
+                'order_id'          => $order->id,
+                'system_id'         => $order->system_id,
+                'shipping_label'    => null,
+                'ship_type'         => Order::SHIP_STAMP,
+                'accessory_summary' => $this->computeAccessorySummary($order),
+                'status'            => $order->status,
+                'address'           => [
+                    'first_name' => $order->address->first_name,
+                    'last_name'  => $order->address->last_name,
+                    'address_1'  => $order->address->address_1,
+                    'address_2'  => $order->address->address_2,
+                    'city'       => $order->address->city,
+                    'state'      => $order->address->state,
+                    'zipcode'    => $order->address->zipcode,
+                    'country'    => $order->address->country,
+                ],
+            ]);
+        }
+
         if (empty($order->shipping_label)) {
             return response()->json(['message' => "Order {$order->system_id} has no shipping_label"], 422);
         }
@@ -338,6 +399,7 @@ class ConversionController extends Controller
             'order_id' => $order->id,
             'system_id' => $order->system_id,
             'shipping_label' => $order->shipping_label,
+            'ship_type' => $order->ship_type,
             'accessory_summary' => $this->computeAccessorySummary($order),
             'status' => $order->status,
         ]);
