@@ -1748,7 +1748,9 @@ class OrderController extends Controller
                 }
 
                 $quantity = max(1, (int)($data['quantity'] ?? 1));
-                $hasLabel = !empty($data['shipping_label']);
+                // ship_by_stamp column: 1/true/yes/x → stamp order (address-only).
+                $byStamp = in_array(strtolower(trim((string) ($data['ship_by_stamp'] ?? ''))), ['1', 'true', 'yes', 'x', 'stamp'], true);
+                $hasLabel = !$byStamp && !empty($data['shipping_label']);
                 $hasAddress = !empty($data['first_name']) && !empty($data['address_1']) && !empty($data['city']) && !empty($data['zipcode']) && !empty($data['country']);
 
                 $rawRef = !empty($data['ref_id']) ? trim($data['ref_id']) : null;
@@ -1820,7 +1822,7 @@ class OrderController extends Controller
                         'system_id' => $this->generateSystemId(), // temporary
                         'ref_id' => $finalRef,
                         'status' => Order::STATUS_NEW_ORDER,
-                        'ship_type' => $hasLabel ? 'tiktok_ship' : 'seller_ship',
+                        'ship_type' => $byStamp ? Order::SHIP_STAMP : ($hasLabel ? Order::SHIP_TIKTOK : Order::SHIP_SELLER),
                         'shipping_label' => $hasLabel ? $data['shipping_label'] : null,
                     ]);
                     $order->update(['system_id' => $this->buildSystemIdForOrder($order->id, $variantId)]);
@@ -1886,7 +1888,15 @@ class OrderController extends Controller
                     $totalQty += $itQty;
                 }
                 $firstItemVariantId = (int) ($items->first()->product_variant_id ?? $variantId);
-                $shippingCost = $this->computeOrderShipping($firstItemVariantId, $user->tier_id, $orderHasLabel, $totalQty);
+                if ($order->ship_type === Order::SHIP_STAMP) {
+                    $stampMax = Order::stampConfig()['max_items'];
+                    if ($totalQty > $stampMax) {
+                        $errors[] = "Order {$order->system_id}: stamp vượt {$stampMax} thiệp ({$totalQty}) — nên dùng label thường.";
+                    }
+                    $shippingCost = Order::stampShippingCost($totalQty);
+                } else {
+                    $shippingCost = $this->computeOrderShipping($firstItemVariantId, $user->tier_id, $orderHasLabel, $totalQty);
+                }
                 $order->update([
                     'print_cost' => $totalPrint,
                     'shipping_cost' => $shippingCost,
@@ -2076,6 +2086,46 @@ class OrderController extends Controller
         return response()->stream($callback, 200, [
             'Content-Type' => 'text/csv',
             'Content-Disposition' => 'attachment; filename="order_template.csv"',
+        ]);
+    }
+
+    /**
+     * GET /api/orders/export-stamp-csv-template — template for SHIP-BY-STAMP
+     * bulk import. Uses the address columns (no shipping_label) + the
+     * ship_by_stamp flag. importCsv reads the same columns.
+     */
+    public function exportStampCsvTemplate()
+    {
+        $headers = [
+            'ref_id',
+            'sku', 'quantity',
+            'mockup_front', 'mockup_back',
+            'accessory_code',
+            'ship_by_stamp',
+            'first_name', 'last_name', 'address_1', 'address_2', 'city', 'state', 'zipcode', 'country',
+            'meta_front', 'meta_back', 'meta_left', 'meta_right', 'meta_neck', 'meta_special',
+        ];
+
+        $callback = function () use ($headers) {
+            $file = fopen('php://output', 'w');
+            fputcsv($file, $headers);
+            // Example stamp row — ship_by_stamp=1, address filled, no label.
+            // Max items per stamp order is enforced server-side (Settings → Stamp).
+            fputcsv($file, [
+                'STAMP-REF-001',
+                'SKU-RED-S', '1',
+                'https://drive.google.com/file/d/FRONT_ID/view', '',
+                '',
+                '1',
+                'John', 'Doe', '123 Main St', 'Apt 4', 'Austin', 'TX', '78701', 'US',
+                'https://drive.google.com/file/d/META_FRONT_ID/view', '', '', '', '', '',
+            ]);
+            fclose($file);
+        };
+
+        return response()->stream($callback, 200, [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="order_stamp_template.csv"',
         ]);
     }
 
