@@ -44,7 +44,7 @@ class OrderController extends Controller
             ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
-        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
+        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
 
         // Seller chỉ thấy đơn của mình
         if ($request->user()->hasRole('seller')) {
@@ -199,7 +199,7 @@ class OrderController extends Controller
             ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
-        $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
+        $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
         if ($hideQr) {
             $order->makeHidden('production');
         } else {
@@ -367,6 +367,7 @@ class OrderController extends Controller
             'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
+            'items.*.material_id' => 'nullable|exists:materials,id',
             // Legacy single accessory (kept for backward compat — callers may
             // still send it). Multi-accessory uses accessory_ids[] below.
             'items.*.accessory_item_id' => 'nullable|exists:accessory_prices,id',
@@ -451,6 +452,7 @@ class OrderController extends Controller
                 $item = OrderItem::create([
                     'order_id' => $order->id,
                     'product_variant_id' => $itemData['product_variant_id'],
+                    'material_id' => $itemData['material_id'] ?? null,
                     'accessory_item_id' => null, // set by syncItemAccessories below
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
@@ -491,7 +493,7 @@ class OrderController extends Controller
 
             return response()->json([
                 'message' => 'Order created',
-                'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
+                'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
             ], 201);
         });
     }
@@ -536,7 +538,7 @@ class OrderController extends Controller
 
         return response()->json([
             'message' => 'Order updated',
-            'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
+            'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
         ]);
     }
 
@@ -2332,7 +2334,7 @@ class OrderController extends Controller
         $user = $request->get('api_user');
         if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
 
-        $query = Order::with(['items.metas', 'items.productVariant.product', 'items.accessoryPrice', 'address'])
+        $query = Order::with(['items.metas', 'items.productVariant.product', 'items.material', 'items.accessoryPrice', 'address'])
             ->where('user_id', $user->id);
 
         if ($request->filled('status'))    $query->where('status', $request->status);
@@ -2432,6 +2434,7 @@ class OrderController extends Controller
             'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
+            'items.*.material_id' => 'nullable|exists:materials,id',
             // Legacy single accessory (kept for backward compat — callers may
             // still send it). Multi-accessory uses accessory_ids[] below.
             'items.*.accessory_item_id' => 'nullable|exists:accessory_prices,id',
@@ -2501,6 +2504,7 @@ class OrderController extends Controller
                 $item = OrderItem::create([
                     'order_id' => $order->id,
                     'product_variant_id' => $itemData['product_variant_id'],
+                    'material_id' => $itemData['material_id'] ?? null,
                     'accessory_item_id' => null,
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
@@ -2541,7 +2545,7 @@ class OrderController extends Controller
 
             return response()->json([
                 'message' => 'Order created via API key',
-                'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
+                'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
             ], 201);
         });
     }

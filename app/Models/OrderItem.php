@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class OrderItem extends Model
 {
-    protected $fillable = ['order_id', 'mockup_front', 'mockup_back', 'product_variant_id', 'accessory_item_id', 'price', 'quantity', 'order_type'];
+    protected $fillable = ['order_id', 'mockup_front', 'mockup_back', 'product_variant_id', 'material_id', 'accessory_item_id', 'price', 'quantity', 'order_type'];
 
     const TYPE_GREETING_CARD = 0;
     const TYPE_PASS_SLEEVE = 1;
@@ -19,6 +19,11 @@ class OrderItem extends Model
     public function productVariant()
     {
         return $this->belongsTo(ProductVariant::class);
+    }
+
+    public function material()
+    {
+        return $this->belongsTo(Material::class);
     }
 
     // Legacy single-accessory relation. Kept in sync with the first

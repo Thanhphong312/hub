@@ -57,6 +57,7 @@ class ProductController extends Controller
             'variants.prices.tier',
             'accessories.prices' => $scope,
             'accessories.prices.tier',
+            'materials',
         ]);
 
         if ($request->has('search')) {
@@ -105,6 +106,7 @@ class ProductController extends Controller
                 'variants.prices.tier',
                 'accessories.prices' => $scope,
                 'accessories.prices.tier',
+                'materials',
             ]),
         ]);
     }
@@ -565,6 +567,49 @@ class ProductController extends Controller
     {
         $accessory->delete();
         return response()->json(['message' => 'Accessory deleted']);
+    }
+
+    // ---- Materials (chất liệu) — per-product selectable attribute ----
+
+    public function storeMaterial(Request $request, Product $product)
+    {
+        $data = $request->validate([
+            'name'        => 'required|string|max:255',
+            'description' => 'nullable|string|max:1000',
+            'is_default'  => 'sometimes|boolean',
+        ]);
+
+        $material = \App\Models\Material::create([
+            'product_id'  => $product->id,
+            'name'        => $data['name'],
+            'description' => $data['description'] ?? null,
+            'is_default'  => $data['is_default'] ?? false,
+        ]);
+        // Only one default per product.
+        if ($material->is_default) {
+            \App\Models\Material::where('product_id', $product->id)->where('id', '!=', $material->id)->update(['is_default' => false]);
+        }
+        return response()->json(['message' => 'Material created', 'material' => $material], 201);
+    }
+
+    public function updateMaterial(Request $request, \App\Models\Material $material)
+    {
+        $data = $request->validate([
+            'name'        => 'sometimes|string|max:255',
+            'description' => 'nullable|string|max:1000',
+            'is_default'  => 'sometimes|boolean',
+        ]);
+        $material->update($data);
+        if (($data['is_default'] ?? false) === true) {
+            \App\Models\Material::where('product_id', $material->product_id)->where('id', '!=', $material->id)->update(['is_default' => false]);
+        }
+        return response()->json(['message' => 'Material updated', 'material' => $material]);
+    }
+
+    public function destroyMaterial(\App\Models\Material $material)
+    {
+        $material->delete();
+        return response()->json(['message' => 'Material deleted']);
     }
 
     // Accessory prices (per tier, optional style)

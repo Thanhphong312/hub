@@ -122,6 +122,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/accessories/{accessory}/prices', [ProductController::class, 'storeAccessoryPrice']);
         Route::put('/accessory-prices/{price}', [ProductController::class, 'updateAccessoryPrice']);
         Route::delete('/accessory-prices/{price}', [ProductController::class, 'destroyAccessoryPrice']);
+
+        // Materials (chất liệu) — per-product
+        Route::post('/products/{product}/materials', [ProductController::class, 'storeMaterial']);
+        Route::put('/materials/{material}', [ProductController::class, 'updateMaterial']);
+        Route::delete('/materials/{material}', [ProductController::class, 'destroyMaterial']);
     });
 
     // Conversion (only for users with convert=1)
