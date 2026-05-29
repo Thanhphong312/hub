@@ -357,10 +357,14 @@ class OrderController extends Controller
      */
     public function store(Request $request)
     {
-        $hasLabel = !empty($request->shipping_label);
+        $byStamp = $request->boolean('ship_by_stamp');
+        // Stamp orders always use an address (no carrier label), so a label
+        // and stamp are mutually exclusive.
+        $hasLabel = !$byStamp && !empty($request->shipping_label);
 
         $request->validate([
             'ref_id' => 'required|string',
+            'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
             // Legacy single accessory (kept for backward compat — callers may
@@ -387,6 +391,18 @@ class OrderController extends Controller
             'address.country' => $hasLabel ? 'nullable|string' : 'required|string',
         ]);
 
+        // Stamp orders are capped at STAMP_MAX_ITEMS — above that the seller
+        // must use a normal label. Sum quantities up front so we reject before
+        // creating anything.
+        if ($byStamp) {
+            $stampQty = collect($request->items)->sum(fn ($i) => max(1, (int) ($i['quantity'] ?? 1)));
+            if ($stampQty > Order::STAMP_MAX_ITEMS) {
+                return response()->json([
+                    'message' => 'Ship bằng stamp tối đa ' . Order::STAMP_MAX_ITEMS . ' items. Đơn này ' . $stampQty . ' items — vui lòng dùng label thường.',
+                ], 422);
+            }
+        }
+
         $userId = $request->user()->id;
         $rawRefId = $request->ref_id ? trim($request->ref_id) : null;
         $force = $request->boolean('force');
@@ -410,14 +426,14 @@ class OrderController extends Controller
                 : $rawRefId; // user explicitly chose to keep duplicate
         }
 
-        return DB::transaction(function () use ($request, $hasLabel, $finalRefId) {
+        return DB::transaction(function () use ($request, $hasLabel, $byStamp, $finalRefId) {
             $firstVariantId = (int) ($request->items[0]['product_variant_id'] ?? 0) ?: null;
             $order = Order::create([
                 'user_id' => $request->user()->id,
                 'system_id' => $this->generateSystemId(), // temporary, updated after we have order.id
                 'ref_id' => $finalRefId,
                 'status' => Order::STATUS_NEW_ORDER,
-                'ship_type' => $hasLabel ? 'tiktok_ship' : 'seller_ship',
+                'ship_type' => $byStamp ? Order::SHIP_STAMP : ($hasLabel ? Order::SHIP_TIKTOK : Order::SHIP_SELLER),
                 'shipping_label' => $hasLabel ? $request->shipping_label : null,
                 'shipping_cost' => 0,
             ]);
@@ -462,7 +478,9 @@ class OrderController extends Controller
                 Address::create(array_merge($request->address, ['order_id' => $order->id]));
             }
 
-            $shippingCost = $this->computeOrderShipping($refVariantId, $userTierId, $hasLabel, $totalQty);
+            $shippingCost = $byStamp
+                ? Order::stampShippingCost($totalQty)
+                : $this->computeOrderShipping($refVariantId, $userTierId, $hasLabel, $totalQty);
 
             $order->update([
                 'print_cost' => $printCost,
@@ -485,6 +503,9 @@ class OrderController extends Controller
             'shipping_cost' => 'nullable|numeric|min:0',
             'print_cost' => 'nullable|numeric|min:0',
             'status' => 'nullable|integer|in:0,1,2,3,4,5,6,7',
+            // Proof photo of the stamp stuck on the envelope — uploaded by the
+            // fulfiller and shown to the seller (stamp has no tracking).
+            'proof_image' => 'nullable|url|max:1024',
         ]);
 
         $user = $request->user();
@@ -493,7 +514,7 @@ class OrderController extends Controller
             return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
         }
 
-        $data = $request->only('shipping_label', 'tracking_id', 'shipping_cost', 'print_cost', 'status');
+        $data = $request->only('shipping_label', 'tracking_id', 'shipping_cost', 'print_cost', 'status', 'proof_image');
 
         // Recalculate total_cost if costs changed
         if ($request->has('shipping_cost') || $request->has('print_cost')) {
@@ -2352,10 +2373,12 @@ class OrderController extends Controller
     public function fulfillByApiKey(Request $request)
     {
         $user = $request->get('api_user');
-        $hasLabel = !empty($request->shipping_label);
+        $byStamp = $request->boolean('ship_by_stamp');
+        $hasLabel = !$byStamp && !empty($request->shipping_label);
 
         $request->validate([
             'ref_id' => 'nullable|string',
+            'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
             // Legacy single accessory (kept for backward compat — callers may
@@ -2382,6 +2405,15 @@ class OrderController extends Controller
             'address.country' => $hasLabel ? 'nullable|string' : 'required|string',
         ]);
 
+        if ($byStamp) {
+            $stampQty = collect($request->items)->sum(fn ($i) => max(1, (int) ($i['quantity'] ?? 1)));
+            if ($stampQty > Order::STAMP_MAX_ITEMS) {
+                return response()->json([
+                    'message' => 'Ship by stamp tối đa ' . Order::STAMP_MAX_ITEMS . ' items. Đơn này ' . $stampQty . ' items — dùng label thường.',
+                ], 422);
+            }
+        }
+
         $rawRefId = $request->ref_id ? trim($request->ref_id) : null;
         if ($rawRefId) {
             $exists = Order::where('user_id', $user->id)->where('ref_id', $rawRefId)->exists();
@@ -2393,14 +2425,14 @@ class OrderController extends Controller
             }
         }
 
-        return DB::transaction(function () use ($request, $user, $hasLabel, $rawRefId) {
+        return DB::transaction(function () use ($request, $user, $hasLabel, $byStamp, $rawRefId) {
             $firstVariantId = (int) ($request->items[0]['product_variant_id'] ?? 0) ?: null;
             $order = Order::create([
                 'user_id' => $user->id,
                 'system_id' => $this->generateSystemId(), // temporary, updated after we have order.id
                 'ref_id' => $rawRefId,
                 'status' => Order::STATUS_NEW_ORDER,
-                'ship_type' => $hasLabel ? 'tiktok_ship' : 'seller_ship',
+                'ship_type' => $byStamp ? Order::SHIP_STAMP : ($hasLabel ? Order::SHIP_TIKTOK : Order::SHIP_SELLER),
                 'shipping_label' => $hasLabel ? $request->shipping_label : null,
                 'shipping_cost' => 0,
             ]);
@@ -2445,7 +2477,9 @@ class OrderController extends Controller
                 Address::create(array_merge($request->address, ['order_id' => $order->id]));
             }
 
-            $shippingCost = $this->computeOrderShipping($refVariantId, $userTierId, $hasLabel, $totalQty);
+            $shippingCost = $byStamp
+                ? Order::stampShippingCost($totalQty)
+                : $this->computeOrderShipping($refVariantId, $userTierId, $hasLabel, $totalQty);
 
             $order->update([
                 'print_cost' => $printCost,
