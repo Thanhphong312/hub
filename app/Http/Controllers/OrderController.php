@@ -509,6 +509,7 @@ class OrderController extends Controller
             // Proof photo of the stamp stuck on the envelope — uploaded by the
             // fulfiller and shown to the seller (stamp has no tracking).
             'proof_image' => 'nullable|url|max:1024',
+            'ship_type'   => 'nullable|in:' . Order::SHIP_TIKTOK . ',' . Order::SHIP_SELLER . ',' . Order::SHIP_STAMP,
         ]);
 
         $user = $request->user();
@@ -519,11 +520,31 @@ class OrderController extends Controller
 
         $data = $request->only('shipping_label', 'tracking_id', 'shipping_cost', 'print_cost', 'status', 'proof_image');
 
-        // Recalculate total_cost if costs changed
-        if ($request->has('shipping_cost') || $request->has('print_cost')) {
-            $printCost = $request->print_cost ?? $order->print_cost;
-            $shippingCost = $request->shipping_cost ?? $order->shipping_cost;
-            $data['total_cost'] = $printCost + $shippingCost;
+        // Ship-type change — only staff. Switching to stamp recomputes the
+        // shipping cost from the items' qty and clears label/tracking (stamp
+        // has neither). Switching away resets shipping_cost to 0 unless the
+        // caller passed an explicit value.
+        if ($request->filled('ship_type') && $request->ship_type !== $order->ship_type) {
+            if (!($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
+                return response()->json(['message' => 'Only staff can change ship_type'], 403);
+            }
+            $data['ship_type'] = $request->ship_type;
+            if ($request->ship_type === Order::SHIP_STAMP) {
+                $order->loadMissing('items');
+                $totalQty = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
+                $data['shipping_cost']  = Order::stampShippingCost($totalQty);
+                $data['shipping_label'] = null;
+                $data['tracking_id']    = null;
+            } elseif (!$request->has('shipping_cost')) {
+                $data['shipping_cost'] = 0;
+            }
+        }
+
+        // Recalculate total_cost if any cost-affecting field changed
+        if (array_key_exists('shipping_cost', $data) || array_key_exists('print_cost', $data)) {
+            $printCost    = $data['print_cost']    ?? $order->print_cost;
+            $shippingCost = $data['shipping_cost'] ?? $order->shipping_cost;
+            $data['total_cost'] = round((float) $printCost + (float) $shippingCost, 2);
         }
 
         if (isset($data['status']) && $data['status'] == Order::STATUS_SHIPPED) {
