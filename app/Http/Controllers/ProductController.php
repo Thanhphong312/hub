@@ -46,7 +46,7 @@ class ProductController extends Controller
      *     @OA\Parameter(name="status",   in="query", description="1=active, 0=inactive", @OA\Schema(type="integer", enum={0,1})),
      *     @OA\Parameter(name="style",    in="query", @OA\Schema(type="string")),
      *     @OA\Parameter(name="per_page", in="query", @OA\Schema(type="integer", default=20)),
-     *     @OA\Response(response=200, description="Paginated products with variants + accessories")
+     *     @OA\Response(response=200, description="Paginated products. Each product is eager-loaded with `variants[]`, `accessories[]`, and `materials[]` (chất liệu — id/name/description/is_default).")
      * )
      */
     public function index(Request $request)
@@ -90,7 +90,15 @@ class ProductController extends Controller
      *                 @OA\Property(property="line_id",   type="string",  example="GC"),
      *                 @OA\Property(property="status",    type="integer", example=1),
      *                 @OA\Property(property="variants",  type="array", @OA\Items(type="object")),
-     *                 @OA\Property(property="accessories", type="array", @OA\Items(type="object"))
+     *                 @OA\Property(property="accessories", type="array", @OA\Items(type="object")),
+     *                 @OA\Property(property="materials", type="array",
+     *                     @OA\Items(
+     *                         @OA\Property(property="id",          type="integer", example=7),
+     *                         @OA\Property(property="name",        type="string",  example="Gloss 300gsm"),
+     *                         @OA\Property(property="description", type="string",  nullable=true),
+     *                         @OA\Property(property="is_default",  type="boolean", example=true)
+     *                     )
+     *                 )
      *             )
      *         )
      *     ),
@@ -571,6 +579,37 @@ class ProductController extends Controller
 
     // ---- Materials (chất liệu) — per-product selectable attribute ----
 
+    /**
+     * @OA\Post(
+     *     path="/api/products/{product}/materials",
+     *     summary="Add a material (chất liệu) to a product [admin]",
+     *     tags={"Products"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="product", in="path", required=true, @OA\Schema(type="integer"), example=1),
+     *     @OA\RequestBody(required=true,
+     *         @OA\JsonContent(
+     *             required={"name"},
+     *             @OA\Property(property="name",        type="string",  example="Gloss 300gsm"),
+     *             @OA\Property(property="description", type="string",  nullable=true, example="Bóng, dày, dùng cho thiệp cao cấp"),
+     *             @OA\Property(property="is_default",  type="boolean", example=false, description="Setting true auto-clears the flag on other materials of the same product")
+     *         )
+     *     ),
+     *     @OA\Response(response=201, description="Material created",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message",  type="string", example="Material created"),
+     *             @OA\Property(property="material", type="object",
+     *                 @OA\Property(property="id",          type="integer", example=7),
+     *                 @OA\Property(property="product_id",  type="integer", example=1),
+     *                 @OA\Property(property="name",        type="string",  example="Gloss 300gsm"),
+     *                 @OA\Property(property="description", type="string",  nullable=true),
+     *                 @OA\Property(property="is_default",  type="boolean", example=false)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=403, description="Forbidden (non-admin)"),
+     *     @OA\Response(response=422, description="Validation error")
+     * )
+     */
     public function storeMaterial(Request $request, Product $product)
     {
         $data = $request->validate([
@@ -592,6 +631,30 @@ class ProductController extends Controller
         return response()->json(['message' => 'Material created', 'material' => $material], 201);
     }
 
+    /**
+     * @OA\Put(
+     *     path="/api/materials/{material}",
+     *     summary="Update a material [admin]",
+     *     tags={"Products"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="material", in="path", required=true, @OA\Schema(type="integer"), example=7),
+     *     @OA\RequestBody(
+     *         @OA\JsonContent(
+     *             @OA\Property(property="name",        type="string",  example="Matte 250gsm"),
+     *             @OA\Property(property="description", type="string",  nullable=true),
+     *             @OA\Property(property="is_default",  type="boolean", description="Setting true clears the flag on other materials of the same product")
+     *         )
+     *     ),
+     *     @OA\Response(response=200, description="Material updated",
+     *         @OA\JsonContent(
+     *             @OA\Property(property="message",  type="string", example="Material updated"),
+     *             @OA\Property(property="material", type="object")
+     *         )
+     *     ),
+     *     @OA\Response(response=403, description="Forbidden"),
+     *     @OA\Response(response=404, description="Not found")
+     * )
+     */
     public function updateMaterial(Request $request, \App\Models\Material $material)
     {
         $data = $request->validate([
@@ -606,6 +669,20 @@ class ProductController extends Controller
         return response()->json(['message' => 'Material updated', 'material' => $material]);
     }
 
+    /**
+     * @OA\Delete(
+     *     path="/api/materials/{material}",
+     *     summary="Delete a material [admin]",
+     *     tags={"Products"},
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="material", in="path", required=true, @OA\Schema(type="integer"), example=7),
+     *     @OA\Response(response=200, description="Material deleted",
+     *         @OA\JsonContent(@OA\Property(property="message", type="string", example="Material deleted"))
+     *     ),
+     *     @OA\Response(response=403, description="Forbidden"),
+     *     @OA\Response(response=404, description="Not found")
+     * )
+     */
     public function destroyMaterial(\App\Models\Material $material)
     {
         $material->delete();
