@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use App\Models\WalletTransaction;
+use App\Services\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -185,6 +186,16 @@ class WalletController extends Controller
             'note' => $request->note ?? 'Deposit',
         ]);
 
+        $owner = User::find($targetUserId);
+        app(TelegramService::class)->notifyTopup(implode("\n", [
+            '🟡 <b>New top-up pending</b>',
+            sprintf('User: %s (#%s)', e($owner?->name ?? '—'), $targetUserId),
+            sprintf('Amount: <b>$%s</b>', number_format((float) $tx->amount, 2)),
+            sprintf('Method: %s · ref: <code>%s</code>', e($tx->method), e($tx->transaction_id)),
+            $tx->note ? 'Note: ' . e($tx->note) : null,
+            sprintf('Submitted by: %s', e($authUser?->name ?? '—')),
+        ]));
+
         return response()->json([
             'message' => 'Deposit submitted (pending approval)',
             'transaction' => $tx,
@@ -200,7 +211,7 @@ class WalletController extends Controller
             return response()->json(['message' => 'Transaction is not pending'], 400);
         }
 
-        return DB::transaction(function () use ($transaction) {
+        return DB::transaction(function () use ($transaction, $request) {
             $user = User::findOrFail($transaction->user_id);
             $balanceBefore = (float) $user->wallet;
             $user->increment('wallet', $transaction->amount);
@@ -210,6 +221,15 @@ class WalletController extends Controller
                 'balance_before' => $balanceBefore,
                 'balance_after' => $user->fresh()->wallet,
             ]);
+
+            app(TelegramService::class)->notifyTopup(implode("\n", [
+                '✅ <b>Top-up approved</b>',
+                sprintf('User: %s (#%s)', e($user->name), $user->id),
+                sprintf('Amount: <b>$%s</b>', number_format((float) $transaction->amount, 2)),
+                sprintf('Wallet: $%s → <b>$%s</b>', number_format($balanceBefore, 2), number_format((float) $user->fresh()->wallet, 2)),
+                sprintf('Method: %s · ref: <code>%s</code>', e($transaction->method), e($transaction->transaction_id)),
+                sprintf('Approved by: %s', e($request->user()?->name ?? '—')),
+            ]));
 
             return response()->json([
                 'message' => 'Deposit approved',

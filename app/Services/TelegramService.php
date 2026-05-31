@@ -26,6 +26,8 @@ class TelegramService
             'bot_token'          => '',
             'default_chat_id'    => '',
             'default_thread_id'  => null,
+            'topup_chat_id'      => '',
+            'topup_thread_id'    => null,
             'report_days'        => 0,
             'daily_cron_enabled' => false,
         ]);
@@ -66,6 +68,25 @@ class TelegramService
             throw new \RuntimeException("Telegram sendMessage failed: {$desc}");
         }
         return (int) ($body['result']['message_id'] ?? 0);
+    }
+
+    /**
+     * Best-effort send to the configured topup chat (falls back to default_chat_id).
+     * Swallows config errors + Telegram failures so they never break the wallet
+     * deposit / approval HTTP response — failures are logged instead.
+     */
+    public function notifyTopup(string $text): void
+    {
+        $cfg      = self::settings();
+        $chatId   = $cfg['topup_chat_id']   ?: ($cfg['default_chat_id']   ?? null);
+        $threadId = $cfg['topup_thread_id'] ?? ($cfg['default_thread_id'] ?? null);
+        if (!$chatId || empty($cfg['bot_token'])) return;
+
+        try {
+            $this->sendMessage($chatId, $text, $threadId ? (int) $threadId : null);
+        } catch (\Throwable $e) {
+            \Log::warning('[TelegramService] notifyTopup failed: ' . $e->getMessage());
+        }
     }
 
     /**
