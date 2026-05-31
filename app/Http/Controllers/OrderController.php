@@ -446,7 +446,7 @@ class OrderController extends Controller
             $totalQty = 0;
             $refVariantId = null;
             foreach ($request->items as $itemData) {
-                $price = $this->getVariantPrice($itemData['product_variant_id'], $userTierId);
+                $price = $this->computeItemPrice($itemData['metas'] ?? null, $itemData['product_variant_id'], $userTierId);
                 $quantity = max(1, (int)($itemData['quantity'] ?? 1));
 
                 $item = OrderItem::create([
@@ -1870,7 +1870,16 @@ class OrderController extends Controller
                     $created[] = $order->system_id;
                 }
 
-                $price = $this->getVariantPrice($variantId, $user->tier_id);
+                // Build the metas list up front so the per-item price can
+                // include 2nd_fee for 2-sided designs (same rule as store()).
+                $metasIn = [];
+                foreach (['front', 'back', 'left', 'right', 'neck', 'special'] as $metaKey) {
+                    $col = 'meta_' . $metaKey;
+                    if (!empty($data[$col])) {
+                        $metasIn[] = ['key' => $metaKey, 'value' => $data[$col]];
+                    }
+                }
+                $price = $this->computeItemPrice($metasIn, $variantId, $user->tier_id);
 
                 $item = OrderItem::create([
                     'order_id' => $order->id,
@@ -1886,16 +1895,12 @@ class OrderController extends Controller
                     $item->accessoryPrices()->sync($resolvedAccPrices->pluck('id')->all());
                 }
 
-                // Metas: meta_<key> columns → OrderItemMeta rows (skip empty).
-                foreach (['front', 'back', 'left', 'right', 'neck', 'special'] as $metaKey) {
-                    $col = 'meta_' . $metaKey;
-                    if (!empty($data[$col])) {
-                        OrderItemMeta::create([
-                            'order_item_id' => $item->id,
-                            'key' => $metaKey,
-                            'value' => $data[$col],
-                        ]);
-                    }
+                foreach ($metasIn as $m) {
+                    OrderItemMeta::create([
+                        'order_item_id' => $item->id,
+                        'key' => $m['key'],
+                        'value' => $m['value'],
+                    ]);
                 }
 
                 // Recompute order totals across ALL items now in the order so a
@@ -2519,7 +2524,7 @@ class OrderController extends Controller
             $totalQty = 0;
             $refVariantId = null;
             foreach ($request->items as $itemData) {
-                $price = $this->getVariantPrice($itemData['product_variant_id'], $userTierId);
+                $price = $this->computeItemPrice($itemData['metas'] ?? null, $itemData['product_variant_id'], $userTierId);
                 $quantity = max(1, (int)($itemData['quantity'] ?? 1));
 
                 $item = OrderItem::create([
@@ -2574,6 +2579,40 @@ class OrderController extends Controller
     private function getVariantPrice(int $variantId, ?int $tierId): float
     {
         return $this->getVariantPriceByKey($variantId, $tierId, 'base_cost');
+    }
+
+    /**
+     * Per-item unit price = base_cost + 2nd_fee × (faceCount − 1).
+     *
+     * `faceCount` counts the distinct design metas present (non-empty value)
+     * among front/back/left/right/neck/special. Single-face items pay just
+     * base_cost; 2-sided items pay base + 2nd_fee; 3-sided items pay base +
+     * 2 × 2nd_fee, and so on.
+     *
+     * Used by store(), importCsv() and fulfillByApiKey() so all three create
+     * paths price 2-sided items identically.
+     */
+    private function computeItemPrice(?iterable $metas, int $variantId, ?int $tierId): float
+    {
+        $price = $this->getVariantPriceByKey($variantId, $tierId, 'base_cost');
+
+        $designKeys = ['front', 'back', 'left', 'right', 'neck', 'special'];
+        $present = [];
+        foreach ($metas ?? [] as $m) {
+            $k = is_array($m) ? ($m['key'] ?? null) : ($m->key ?? null);
+            $v = is_array($m) ? ($m['value'] ?? null) : ($m->value ?? null);
+            if ($k && in_array($k, $designKeys, true) && $v !== null && trim((string) $v) !== '') {
+                $present[$k] = true;
+            }
+        }
+        $faceCount = count($present);
+
+        if ($faceCount > 1) {
+            $secondFee = $this->getVariantPriceByKey($variantId, $tierId, '2nd_fee');
+            $price += ($faceCount - 1) * $secondFee;
+        }
+
+        return round($price, 2);
     }
 
     private function generateSystemId(): string
