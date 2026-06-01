@@ -11,7 +11,8 @@ class WalletTransaction extends Model
     const METHOD_PAYPAL = 'paypal';
     const METHOD_PINGPONG = 'pingpong';
     const METHOD_VNPAY = 'vnpay';
-    const METHODS = [self::METHOD_PAYPAL, self::METHOD_PINGPONG, self::METHOD_VNPAY];
+    const METHOD_BANK_TRANSFER = 'bank_transfer';
+    const METHODS = [self::METHOD_PAYPAL, self::METHOD_PINGPONG, self::METHOD_VNPAY, self::METHOD_BANK_TRANSFER];
 
     const STATUS_PENDING = 'pending';
     const STATUS_APPROVED = 'approved';

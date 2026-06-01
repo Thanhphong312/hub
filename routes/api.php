@@ -165,6 +165,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/wallet/vnpay/rate', [\App\Http\Controllers\VnpayController::class, 'rate']);
     Route::post('/wallet/vnpay/create', [\App\Http\Controllers\VnpayController::class, 'create']);
 
+    // Bank-transfer top-up (manual approval — used while real VNPay isn't live)
+    Route::get('/wallet/bank-transfer/rate', [\App\Http\Controllers\BankTransferController::class, 'rate']);
+    Route::post('/wallet/bank-transfer/init', [\App\Http\Controllers\BankTransferController::class, 'init']);
+
     // Wallet
     Route::get('/wallet/balance', [WalletController::class, 'balance']);
     Route::get('/wallet/transactions', [WalletController::class, 'transactions']);
@@ -224,6 +228,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/telegram',         [TelegramController::class, 'getSettings']);
         Route::put('/telegram',         [TelegramController::class, 'updateSettings']);
+        Route::get('/bank-transfer',    [\App\Http\Controllers\BankTransferController::class, 'getSettings']);
+        Route::put('/bank-transfer',    [\App\Http\Controllers\BankTransferController::class, 'updateSettings']);
         Route::get('/telegram/groups',  [TelegramController::class, 'discoverGroups']);
         Route::post('/telegram/test',   [TelegramController::class, 'test']);
         Route::post('/telegram/report', [TelegramController::class, 'report']);
