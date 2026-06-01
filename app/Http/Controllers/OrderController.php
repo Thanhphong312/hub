@@ -520,6 +520,8 @@ class OrderController extends Controller
             'address.state'        => 'nullable|string|max:120',
             'address.zipcode'      => 'nullable|string|max:32',
             'address.country'      => 'nullable|string|max:120',
+            'address.phone'        => 'nullable|string|max:64',
+            'address.email'        => 'nullable|string|max:191',
         ]);
 
         $user = $request->user();
@@ -589,7 +591,7 @@ class OrderController extends Controller
             && $user && ($user->hasRole('admin') || $user->hasRole('support'))) {
             $addrData = collect($request->address)->only([
                 'first_name', 'last_name', 'address_1', 'address_2',
-                'city', 'state', 'zipcode', 'country',
+                'city', 'state', 'zipcode', 'country', 'phone', 'email',
             ])->toArray();
             if (array_filter($addrData, fn ($v) => $v !== null && $v !== '')) {
                 \App\Models\Address::updateOrCreate(
