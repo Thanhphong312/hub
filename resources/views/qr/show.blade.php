@@ -222,7 +222,11 @@
             @endif
             <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
                 <span class="px-2 py-0.5 bg-orange-100 text-orange-700 rounded font-medium">{{ $statusMap[$order->status] ?? $order->status }}</span>
-                <span class="px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded">{{ $order->ship_type }}</span>
+                @if ($order->ship_type === 'stamp')
+                    <span class="px-3 py-1 bg-amber-400 text-black rounded font-extrabold uppercase tracking-widest text-lg">★ STAMP ★</span>
+                @else
+                    <span class="px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded">{{ $order->ship_type }}</span>
+                @endif
                 @if ($order->production)
                     <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded font-medium">Production</span>
                 @endif
