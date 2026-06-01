@@ -1445,7 +1445,13 @@ class OrderController extends Controller
         return DB::transaction(function () use ($user, $order, $amountToPay) {
             $balanceBefore = (float) $user->wallet;
             $user->decrement('wallet', $amountToPay);
-            $order->update(['paid_cost' => $order->total_cost]);
+            // Auto-advance new_order → processing once it's fully paid, so
+            // fulfillers can see the queue without a separate status flip.
+            $updates = ['paid_cost' => $order->total_cost];
+            if ((int) $order->status === Order::STATUS_NEW_ORDER) {
+                $updates['status'] = Order::STATUS_PROCESSING;
+            }
+            $order->update($updates);
 
             WalletTransaction::create([
                 'user_id' => $user->id,
@@ -1536,7 +1542,11 @@ class OrderController extends Controller
 
                 $balanceBefore = (float) $payer->wallet;
                 $payer->decrement('wallet', $amountToPay);
-                $order->update(['paid_cost' => $order->total_cost]);
+                $updates = ['paid_cost' => $order->total_cost];
+                if ((int) $order->status === Order::STATUS_NEW_ORDER) {
+                    $updates['status'] = Order::STATUS_PROCESSING;
+                }
+                $order->update($updates);
 
                 WalletTransaction::create([
                     'user_id' => $payer->id,
@@ -1641,7 +1651,11 @@ class OrderController extends Controller
 
                     $balanceBefore = (float) $owner->wallet;
                     $owner->decrement('wallet', $amountToPay);
-                    $order->update(['paid_cost' => $order->total_cost]);
+                    $updates = ['paid_cost' => $order->total_cost];
+                    if ((int) $order->status === Order::STATUS_NEW_ORDER) {
+                        $updates['status'] = Order::STATUS_PROCESSING;
+                    }
+                    $order->update($updates);
 
                     WalletTransaction::create([
                         'user_id' => $owner->id,
