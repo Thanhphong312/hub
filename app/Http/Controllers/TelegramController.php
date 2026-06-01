@@ -20,6 +20,8 @@ class TelegramController extends Controller
             'bot_token'          => 'nullable|string|max:200',
             'default_chat_id'    => 'nullable|string|max:120',
             'default_thread_id'  => 'nullable|integer',
+            'topup_chat_id'      => 'nullable|string|max:120',
+            'topup_thread_id'    => 'nullable|integer',
             'report_days'        => 'nullable|integer|min:0|max:365',
             'daily_cron_enabled' => 'nullable|boolean',
         ]);
