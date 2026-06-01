@@ -206,6 +206,8 @@ class ConversionController extends Controller
                     'state'      => $o->address->state,
                     'zipcode'    => $o->address->zipcode,
                     'country'    => $o->address->country,
+                    'phone'      => $o->address->phone,
+                    'email'      => $o->address->email,
                 ] : null,
             ];
         })->values();
