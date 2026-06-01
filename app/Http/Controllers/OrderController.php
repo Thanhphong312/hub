@@ -510,6 +510,16 @@ class OrderController extends Controller
             // fulfiller and shown to the seller (stamp has no tracking).
             'proof_image' => 'nullable|url|max:1024',
             'ship_type'   => 'nullable|in:' . Order::SHIP_TIKTOK . ',' . Order::SHIP_SELLER . ',' . Order::SHIP_STAMP,
+            // Shipping address — required for stamp orders. Staff-only edit.
+            'address'              => 'sometimes|array',
+            'address.first_name'   => 'nullable|string|max:120',
+            'address.last_name'    => 'nullable|string|max:120',
+            'address.address_1'    => 'nullable|string|max:255',
+            'address.address_2'    => 'nullable|string|max:255',
+            'address.city'         => 'nullable|string|max:120',
+            'address.state'        => 'nullable|string|max:120',
+            'address.zipcode'      => 'nullable|string|max:32',
+            'address.country'      => 'nullable|string|max:120',
         ]);
 
         $user = $request->user();
@@ -552,6 +562,23 @@ class OrderController extends Controller
         }
 
         $order->update($data);
+
+        // Address upsert — staff only. Useful for stamp orders that get
+        // their shipping address edited after creation. Owner column ties
+        // it to this order, so we update-or-create.
+        if ($request->has('address') && is_array($request->address)
+            && $user && ($user->hasRole('admin') || $user->hasRole('support'))) {
+            $addrData = collect($request->address)->only([
+                'first_name', 'last_name', 'address_1', 'address_2',
+                'city', 'state', 'zipcode', 'country',
+            ])->toArray();
+            if (array_filter($addrData, fn ($v) => $v !== null && $v !== '')) {
+                \App\Models\Address::updateOrCreate(
+                    ['order_id' => $order->id],
+                    $addrData
+                );
+            }
+        }
 
         if (isset($data['status']) && $data['status'] == Order::STATUS_SHIPPED) {
             $order->fresh()->decrementStockForShipment();
