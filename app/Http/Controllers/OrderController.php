@@ -530,23 +530,42 @@ class OrderController extends Controller
 
         $data = $request->only('shipping_label', 'tracking_id', 'shipping_cost', 'print_cost', 'status', 'proof_image');
 
-        // Ship-type change — only staff. Switching to stamp recomputes the
-        // shipping cost from the items' qty and clears label/tracking (stamp
-        // has neither). Switching away resets shipping_cost to 0 unless the
-        // caller passed an explicit value.
+        // Ship-type change — only staff. Each transition recomputes the
+        // shipping cost from the items + the variant price table so the
+        // stored value reflects the new mode's pricing rule:
+        //   stamp        → stampShippingCost() + clear label/tracking
+        //   seller_ship  → base + addition × (qty-1) + clear label/tracking
+        //   tiktok_ship  → label_fee (when a label is present)
+        // The caller can override by passing an explicit shipping_cost.
         if ($request->filled('ship_type') && $request->ship_type !== $order->ship_type) {
             if (!($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
                 return response()->json(['message' => 'Only staff can change ship_type'], 403);
             }
             $data['ship_type'] = $request->ship_type;
+
+            $order->loadMissing('items');
+            $totalQty = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
+            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+            $tierId = $order->user?->tier_id;
+
             if ($request->ship_type === Order::SHIP_STAMP) {
-                $order->loadMissing('items');
-                $totalQty = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
                 $data['shipping_cost']  = Order::stampShippingCost($totalQty);
                 $data['shipping_label'] = null;
                 $data['tracking_id']    = null;
+            } elseif ($request->ship_type === Order::SHIP_SELLER) {
+                // seller_ship: base + addition × (qty-1). Clear label/tracking
+                // since the seller will buy + attach their own.
+                $data['shipping_cost']  = $firstVariantId
+                    ? $this->computeOrderShipping($firstVariantId, $tierId, false, $totalQty)
+                    : 0;
+                $data['shipping_label'] = null;
+                $data['tracking_id']    = null;
             } elseif (!$request->has('shipping_cost')) {
-                $data['shipping_cost'] = 0;
+                // tiktok_ship: charge label_fee if a label is set, else 0.
+                $hasLabel = !empty($request->shipping_label ?? $order->shipping_label);
+                $data['shipping_cost'] = ($firstVariantId && $hasLabel)
+                    ? $this->computeOrderShipping($firstVariantId, $tierId, true, $totalQty)
+                    : 0;
             }
         }
 
