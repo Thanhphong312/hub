@@ -1345,8 +1345,14 @@ class OrderController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        if (empty($order->shipping_label)) {
-            return response()->json(['message' => 'Order has no shipping_label to overlay'], 422);
+        // Stamp orders compose their convert_label from the address instead
+        // of a carrier label, so they're a valid reconvert target too.
+        $isStamp = $order->ship_type === Order::SHIP_STAMP;
+        if (empty($order->shipping_label) && !$isStamp) {
+            return response()->json(['message' => 'Order has no shipping_label (and isn\'t a stamp order) to reconvert'], 422);
+        }
+        if ($isStamp && !$order->loadMissing('address')->address) {
+            return response()->json(['message' => 'Stamp order has no address to render the convert_label from'], 422);
         }
 
         $order->update(['convert_label' => null]);
@@ -1379,14 +1385,19 @@ class OrderController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
+        // Accept both carrier-label orders AND stamp orders (which render
+        // the convert_label from their address instead of a carrier label).
         $orders = Order::whereIn('id', $request->order_ids)
-            ->whereNotNull('shipping_label')
-            ->where('shipping_label', '!=', '')
+            ->where(function ($q) {
+                $q->where(function ($q2) {
+                    $q2->whereNotNull('shipping_label')->where('shipping_label', '!=', '');
+                })->orWhere('ship_type', Order::SHIP_STAMP);
+            })
             ->get();
 
         if ($orders->isEmpty()) {
             return response()->json([
-                'message' => 'No matching orders with a shipping_label to reconvert',
+                'message' => 'No matching orders to reconvert (need shipping_label OR ship_type=stamp)',
                 'count' => 0,
             ], 422);
         }

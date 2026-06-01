@@ -389,6 +389,8 @@ class ConversionController extends Controller
                     'state'      => $order->address->state,
                     'zipcode'    => $order->address->zipcode,
                     'country'    => $order->address->country,
+                    'phone'      => $order->address->phone,
+                    'email'      => $order->address->email,
                 ],
             ]);
         }
