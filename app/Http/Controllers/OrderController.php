@@ -1596,6 +1596,84 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         ]);
     }
 
+    /**
+     * App-side cron endpoint. The seller's renderer polls this every minute
+     * while their window is open and auto_pay is on. We settle ONLY the
+     * caller's own unpaid orders, oldest-first, stopping when the wallet
+     * can't cover the next one (strict FIFO — no skipping ahead). Mirrors
+     * the artisan command's per-user logic so the trail is identical.
+     */
+    public function autoPayRun(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || !$user->auto_pay) {
+            return response()->json(['message' => 'Auto-pay is off', 'count' => 0], 200);
+        }
+
+        $count = 0;
+        $totalAmount = 0.0;
+        $systemIds = [];
+
+        while (true) {
+            $order = Order::where('user_id', $user->id)
+                ->whereColumn('paid_cost', '<', 'total_cost')
+                ->orderBy('created_at', 'asc')
+                ->orderBy('id', 'asc')
+                ->first();
+            if (!$order) break;
+
+            $remaining = round((float) $order->total_cost - (float) $order->paid_cost, 2);
+            if ($remaining <= 0) break;
+
+            $user->refresh();
+            if (round((float) $user->wallet, 2) < $remaining) break;
+
+            DB::transaction(function () use ($user, $order, $remaining) {
+                $balanceBefore = (float) $user->wallet;
+                $user->decrement('wallet', $remaining);
+
+                $updates = ['paid_cost' => $order->total_cost];
+                if ((int) $order->status === Order::STATUS_NEW_ORDER) {
+                    $updates['status'] = Order::STATUS_PROCESSING;
+                }
+                $order->update($updates);
+
+                WalletTransaction::create([
+                    'user_id'         => $user->id,
+                    'order_id'        => $order->id,
+                    'order_system_id' => $order->system_id,
+                    'type'            => 'paid',
+                    'status'          => WalletTransaction::STATUS_APPROVED,
+                    'amount'          => -$remaining,
+                    'balance_before'  => $balanceBefore,
+                    'balance_after'   => $user->fresh()->wallet,
+                    'note'            => "Auto-paid order #{$order->system_id}",
+                ]);
+            });
+
+            $count++;
+            $totalAmount += $remaining;
+            $systemIds[] = $order->system_id;
+        }
+
+        if ($count > 0) {
+            app(\App\Services\TelegramService::class)->notifyTopup(implode("\n", [
+                '🤖 <b>Auto-pay ran</b>',
+                sprintf('User: %s (#%s)', e($user->name), $user->id),
+                sprintf('Paid: <b>%s order(s)</b> · $%s', $count, number_format($totalAmount, 2)),
+                sprintf('Wallet now: $%s', number_format((float) $user->fresh()->wallet, 2)),
+                'Orders: ' . implode(', ', $systemIds),
+            ]));
+        }
+
+        return response()->json([
+            'count'      => $count,
+            'amount'     => round($totalAmount, 2),
+            'system_ids' => $systemIds,
+            'wallet'     => (float) $user->fresh()->wallet,
+        ]);
+    }
+
     public function payAllUnpaid(Request $request)
     {
         $user = $request->user();

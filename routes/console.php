@@ -15,11 +15,8 @@ Artisan::command('inspire', function () {
 // setInterval) — no server-side scheduler. The settings endpoints stay
 // available so the app reads/writes config; everything else lives client-side.
 
-// Auto-pay: every minute, settle oldest-first unpaid orders for users
-// who toggled users.auto_pay on. Requires `php artisan schedule:run`
-// to be triggered every minute via system cron, e.g.:
-//   * * * * * cd /home/webapps/devhub && php artisan schedule:run >> /dev/null 2>&1
-Schedule::command('orders:auto-pay')
-    ->everyMinute()
-    ->withoutOverlapping()
-    ->runInBackground();
+// Auto-pay is app-side ONLY: when the seller's Wallet/Profile page is
+// open and they have auto_pay=true, the renderer polls POST
+// /api/orders/auto-pay/run every minute and the controller settles their
+// own oldest-first unpaid orders. No system cron required. The
+// orders:auto-pay artisan command is still available for manual ops.
