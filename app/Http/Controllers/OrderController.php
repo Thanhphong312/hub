@@ -307,7 +307,26 @@ class OrderController extends Controller
      *     path="/orders",
      *     tags={"Orders"},
      *     summary="Create order (Sanctum)",
-     *     description="Tạo 1 đơn mới. Phải gửi 1 trong 2: `shipping_label` URL HOẶC `address` đầy đủ. Items hỗ trợ multi-accessory qua `accessory_ids[]`.",
+     *     description="Tạo 1 đơn mới. Phải gửi 1 trong 2: `shipping_label` URL HOẶC `address` đầy đủ. Items hỗ trợ multi-accessory qua `accessory_ids[]`.
+
+### `items[].metas` keys
+
+Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{ key, value }` — `value` là URL ảnh design (Drive/B2/direct image), `key` là tên mặt in. Các key cho phép:
+
+| key | Mặt in | Khi nào dùng |
+|-----|--------|--------------|
+| `front` | Mặt trước | Đa số sản phẩm 1 hoặc 2 mặt. Thường bắt buộc. |
+| `back` | Mặt sau | Đơn 2 mặt. Tự cộng thêm `2nd_fee` vào item price (vd \$0.50). |
+| `left` | Mặt trái | Đơn có 3 mặt+ (vd áo có in tay trái). |
+| `right` | Mặt phải | Tương tự `left`. |
+| `neck` | Phần cổ | Thường cho áo / pass sleeve cần in tag cổ. |
+| `special` | Mặt đặc biệt | Mọi case khác — packer xem hint trong gangsheet. |
+
+**Pricing rule:** `item.price = base_cost + (N − 1) × 2nd_fee` với N là số meta key có giá trị (counted distinct). Variant prices lấy theo `(product_variant_id, tier_id)` từ table `product_variant_prices`.
+
+**Bỏ qua meta key trống** — backend filter mọi entry có `value` rỗng trước khi save.
+
+**Không truyền `*_qr` key** — đó là các meta server tự sinh sau khi convert (overlay barcode), không nhận từ client.",
      *     security={{"bearerAuth":{}}},
      *     @OA\RequestBody(
      *         required=true,
@@ -340,9 +359,20 @@ class OrderController extends Controller
      *                     @OA\Property(property="order_type",         type="integer", enum={0,1}, default=0, description="0=Greeting Card, 1=Pass Sleeve"),
      *                     @OA\Property(
      *                         property="metas", type="array",
+     *                         description="Artwork URLs theo từng mặt in. Xem bảng đầy đủ ở description chính. Mỗi entry: { key, value }. Mỗi mặt thêm (ngoài front) cộng thêm 2nd_fee vào item price.",
      *                         @OA\Items(
-     *                             @OA\Property(property="key",   type="string", enum={"front","back","left","right","neck","special"}, example="front"),
-     *                             @OA\Property(property="value", type="string", example="https://...")
+     *                             required={"key","value"},
+     *                             @OA\Property(
+     *                                 property="key", type="string",
+     *                                 enum={"front","back","left","right","neck","special"},
+     *                                 example="front",
+     *                                 description="front=mặt trước (bắt buộc cho hầu hết) · back=mặt sau (+2nd_fee) · left=tay trái · right=tay phải · neck=cổ áo · special=mặt đặc biệt"
+     *                             ),
+     *                             @OA\Property(
+     *                                 property="value", type="string",
+     *                                 example="https://drive.google.com/file/d/ABC/view",
+     *                                 description="URL ảnh design (Drive / B2 / direct image). Để rỗng để skip (backend tự filter)."
+     *                             )
      *                         )
      *                     )
      *                 )
