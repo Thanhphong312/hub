@@ -580,6 +580,49 @@ class ProductController extends Controller
     // ---- Materials (chất liệu) — per-product selectable attribute ----
 
     /**
+     * @OA\Get(
+     *     path="/products/{product}/materials",
+     *     tags={"Products"},
+     *     summary="List a product's materials",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="product", in="path", required=true, @OA\Schema(type="integer"), example=1),
+     *     @OA\Response(response=200, description="Material list",
+     *         @OA\JsonContent(type="array",
+     *             @OA\Items(
+     *                 @OA\Property(property="id",          type="integer", example=7),
+     *                 @OA\Property(property="product_id",  type="integer", example=1),
+     *                 @OA\Property(property="name",        type="string",  example="Gloss 300gsm"),
+     *                 @OA\Property(property="description", type="string",  nullable=true),
+     *                 @OA\Property(property="is_default",  type="boolean", example=true)
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=404, description="Product not found")
+     * )
+     */
+    public function listMaterials(Product $product)
+    {
+        return response()->json($product->materials()->orderBy('id')->get());
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/materials/{material}",
+     *     tags={"Products"},
+     *     summary="Get one material",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="material", in="path", required=true, @OA\Schema(type="integer"), example=7),
+     *     @OA\Response(response=200, description="Material detail"),
+     *     @OA\Response(response=404, description="Not found")
+     * )
+     */
+    public function showMaterial(\App\Models\Material $material)
+    {
+        return response()->json($material);
+    }
+
+
+    /**
      * @OA\Post(
      *     path="/products/{product}/materials",
      *     summary="Add a material (chất liệu) to a product [admin]",

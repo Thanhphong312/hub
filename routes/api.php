@@ -101,6 +101,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/products/{product}/variants', [ProductController::class, 'variants']);
     Route::get('/products/{product}/prices', [ProductController::class, 'prices']);
 
+    // Materials — public read (any authenticated user). Writes are admin-only
+    // and live in the admin group below.
+    Route::get('/products/{product}/materials', [ProductController::class, 'listMaterials']);
+    Route::get('/materials/{material}', [ProductController::class, 'showMaterial']);
+
     // Products (admin write)
     Route::middleware(CheckRole::class . ':admin')->group(function () {
         Route::post('/products', [ProductController::class, 'store']);
