@@ -38,6 +38,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::post('/logout-all', [AuthController::class, 'logoutAll']);
     Route::get('/me', [AuthController::class, 'me']);
+    Route::get('/help/{slug}', [\App\Http\Controllers\HelpController::class, 'show']);
     Route::post('/change-password', [AuthController::class, 'changePassword']);
     Route::put('/profile', [AuthController::class, 'updateProfile']);
     Route::get('/me/api-key', [AuthController::class, 'myApiKey']);
