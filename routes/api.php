@@ -173,6 +173,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Bank-transfer top-up (manual approval — used while real VNPay isn't live)
     Route::get('/wallet/bank-transfer/rate', [\App\Http\Controllers\BankTransferController::class, 'rate']);
     Route::post('/wallet/bank-transfer/init', [\App\Http\Controllers\BankTransferController::class, 'init']);
+    Route::post('/wallet/bank-transfer/confirm/{transaction}', [\App\Http\Controllers\BankTransferController::class, 'confirm']);
 
     // Wallet
     Route::get('/wallet/balance', [WalletController::class, 'balance']);
