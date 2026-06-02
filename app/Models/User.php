@@ -22,6 +22,7 @@ class User extends Authenticatable
         'api_key',
         'status',
         'convert',
+        'auto_pay',
     ];
 
     protected $hidden = [
@@ -37,6 +38,7 @@ class User extends Authenticatable
             'password' => 'hashed',
             'wallet' => 'decimal:2',
             'convert' => 'boolean',
+            'auto_pay' => 'boolean',
         ];
     }
 

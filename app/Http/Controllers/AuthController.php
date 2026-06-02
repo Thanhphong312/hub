@@ -116,11 +116,12 @@ class AuthController extends Controller
         $user = $request->user();
 
         $request->validate([
-            'name' => 'nullable|string',
-            'email' => 'nullable|email|unique:users,email,' . $user->id,
+            'name'     => 'nullable|string',
+            'email'    => 'nullable|email|unique:users,email,' . $user->id,
+            'auto_pay' => 'sometimes|boolean',
         ]);
 
-        $user->update($request->only('name', 'email'));
+        $user->update($request->only('name', 'email', 'auto_pay'));
         return response()->json(['message' => 'Profile updated', 'user' => $user->fresh()]);
     }
 
