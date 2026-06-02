@@ -89,8 +89,12 @@ class BankTransferController extends Controller
     /**
      * POST /api/wallet/bank-transfer/init
      * body: { amount_usd: number }
-     * → creates a pending wallet_transaction + returns the bank info, QR url
-     *   and the unique reference the seller must put in the transfer note.
+     * → Pure PREVIEW: generates a unique reference, computes the VND amount
+     *   from the rate, and returns the bank info + QR. NO wallet_transaction
+     *   is created here. The seller is expected to actually transfer first,
+     *   then POST /confirm with this reference — that's when the tx is
+     *   persisted and Telegram pings admin. This keeps the admin inbox
+     *   clean of abandoned-QR pendings.
      */
     public function init(Request $request)
     {
@@ -106,44 +110,22 @@ class BankTransferController extends Controller
             'amount_usd' => 'required|numeric|min:' . (float) ($s['min_usd'] ?? 1.0),
         ]);
 
-        $user = $request->user();
         $amountUsd = round((float) $data['amount_usd'], 2);
         $rate      = (float) ($s['rate'] ?? 26000);
         $amountVnd = (int) round($amountUsd * $rate);
 
-        // Unique short reference the seller types into the transfer memo so
-        // admin can match the incoming bank entry to this wallet_transaction.
+        // Reference the seller types into the bank transfer memo so admin
+        // can match the incoming bank entry to the wallet_transaction once
+        // confirm() persists it. Re-roll if any past tx already used the
+        // string (cheap unique-ish guarantee without holding a DB row).
         do {
             $ref = 'BT' . strtoupper(Str::random(6));
         } while (WalletTransaction::where('transaction_id', $ref)->exists());
 
         $content = str_replace('{ref}', $ref, $s['content_template'] ?? 'BS {ref}');
-
-        $tx = WalletTransaction::create([
-            'user_id'        => $user->id,
-            'type'           => 'deposit',
-            'status'         => WalletTransaction::STATUS_PENDING,
-            'method'         => WalletTransaction::METHOD_BANK_TRANSFER,
-            'transaction_id' => $ref,
-            'amount'         => $amountUsd,
-            'vnd_amount'     => $amountVnd,
-            'exchange_rate'  => $rate,
-            'note'           => "Bank transfer · {$content}",
-        ]);
-
-        $qrUrl = $this->renderQr($s, $amountVnd, $content);
-
-        app(TelegramService::class)->notifyTopup(implode("\n", [
-            '🟡 <b>New bank-transfer top-up pending</b>',
-            sprintf('User: %s (#%s)', e($user->name), $user->id),
-            sprintf('Amount: <b>$%s</b>  (₫%s @ rate %s)', number_format($amountUsd, 2), number_format($amountVnd), number_format($rate)),
-            sprintf('Reference: <code>%s</code>', $ref),
-            sprintf('Bank: %s · %s · %s', e($s['bank_name'] ?? ''), e($s['account_no'] ?? ''), e($s['account_holder'] ?? '')),
-            sprintf('Tx id: %s', $tx->id),
-        ]));
+        $qrUrl   = $this->renderQr($s, $amountVnd, $content);
 
         return response()->json([
-            'transaction'    => $tx,
             'reference'      => $ref,
             'content'        => $content,
             'amount_usd'     => $amountUsd,
@@ -154,64 +136,80 @@ class BankTransferController extends Controller
             'account_holder' => $s['account_holder'] ?? '',
             'branch'         => $s['branch'] ?? '',
             'qr_url'         => $qrUrl,
-        ], 201);
+        ]);
     }
 
     /**
-     * POST /api/wallet/bank-transfer/confirm/{transaction}
-     * body: { bank_ref?: string, note?: string, screenshot_url?: string }
+     * POST /api/wallet/bank-transfer/confirm
+     * body: { reference, amount_usd, bank_ref?, note?, screenshot_url? }
      *
-     * Seller calls this after they actually transferred the money. We append
-     * the bank-side reference (slip number / bank txn id) to the pending
-     * wallet_transaction's note + fire a second Telegram notification so the
-     * admin sees "Seller confirmed transfer with ref XYZ — ready to approve".
-     * Status stays pending — admin still has to approve from the Wallet UI.
+     * Called after the seller actually transferred the money. We create the
+     * pending wallet_transaction NOW (init() was preview only) with the
+     * reference shown in the QR + the seller's bank-side ref appended to
+     * note, then fire a single Telegram notification so admin can approve.
+     * The tx ends up status=pending until admin approves through Wallet.
      */
-    public function confirm(Request $request, WalletTransaction $transaction)
+    public function confirm(Request $request)
     {
-        $user = $request->user();
-        if ($transaction->user_id !== $user->id && !($user->hasRole('admin') || $user->hasRole('support'))) {
-            return response()->json(['message' => 'Forbidden'], 403);
-        }
-        if ($transaction->method !== WalletTransaction::METHOD_BANK_TRANSFER) {
-            return response()->json(['message' => 'Only bank-transfer transactions accept user confirmation here'], 422);
-        }
-        if ($transaction->status !== WalletTransaction::STATUS_PENDING) {
-            return response()->json(['message' => 'Transaction is no longer pending'], 422);
+        $s = self::settings();
+        if (empty($s['enabled'])) {
+            return response()->json(['message' => 'Bank-transfer top-up is disabled'], 422);
         }
 
         $data = $request->validate([
+            'reference'      => 'required|string|max:32',
+            'amount_usd'     => 'required|numeric|min:' . (float) ($s['min_usd'] ?? 1.0),
             'bank_ref'       => 'nullable|string|max:120',
             'note'           => 'nullable|string|max:500',
             'screenshot_url' => 'nullable|url|max:1024',
         ]);
 
-        $extra = [];
-        if (!empty($data['bank_ref']))       $extra[] = 'bank_ref=' . $data['bank_ref'];
-        if (!empty($data['screenshot_url'])) $extra[] = 'screenshot=' . $data['screenshot_url'];
-        if (!empty($data['note']))           $extra[] = 'seller_note=' . $data['note'];
+        $user = $request->user();
 
-        if (!empty($extra)) {
-            $transaction->update([
-                'note' => trim(($transaction->note ?? '') . ' | ' . implode(' · ', $extra)),
-            ]);
+        // Reference must not already be in use (init() only returns refs
+        // that were unused at the time; another confirm could race in).
+        if (WalletTransaction::where('transaction_id', $data['reference'])->exists()) {
+            return response()->json(['message' => 'Reference đã được dùng, vui lòng tạo lại QR mới.'], 409);
         }
+
+        $amountUsd = round((float) $data['amount_usd'], 2);
+        $rate      = (float) ($s['rate'] ?? 26000);
+        $amountVnd = (int) round($amountUsd * $rate);
+        $content   = str_replace('{ref}', $data['reference'], $s['content_template'] ?? 'BS {ref}');
+
+        $noteParts = ["Bank transfer · {$content}"];
+        if (!empty($data['bank_ref']))       $noteParts[] = 'bank_ref=' . $data['bank_ref'];
+        if (!empty($data['screenshot_url'])) $noteParts[] = 'screenshot=' . $data['screenshot_url'];
+        if (!empty($data['note']))           $noteParts[] = 'seller_note=' . $data['note'];
+
+        $tx = WalletTransaction::create([
+            'user_id'        => $user->id,
+            'type'           => 'deposit',
+            'status'         => WalletTransaction::STATUS_PENDING,
+            'method'         => WalletTransaction::METHOD_BANK_TRANSFER,
+            'transaction_id' => $data['reference'],
+            'amount'         => $amountUsd,
+            'vnd_amount'     => $amountVnd,
+            'exchange_rate'  => $rate,
+            'note'           => implode(' | ', $noteParts),
+        ]);
 
         app(TelegramService::class)->notifyTopup(implode("\n", [
             '🔔 <b>Seller confirmed bank transfer</b>',
             sprintf('User: %s (#%s)', e($user->name), $user->id),
-            sprintf('Reference: <code>%s</code>', e($transaction->transaction_id)),
-            sprintf('Amount: <b>$%s</b>  (₫%s)', number_format((float) $transaction->amount, 2), number_format((int) $transaction->vnd_amount)),
+            sprintf('Amount: <b>$%s</b>  (₫%s @ rate %s)', number_format($amountUsd, 2), number_format($amountVnd), number_format($rate)),
+            sprintf('Reference: <code>%s</code>', e($data['reference'])),
+            sprintf('Bank: %s · %s · %s', e($s['bank_name'] ?? ''), e($s['account_no'] ?? ''), e($s['account_holder'] ?? '')),
             !empty($data['bank_ref'])       ? 'Bank ref: <code>' . e($data['bank_ref']) . '</code>' : null,
             !empty($data['screenshot_url']) ? 'Screenshot: ' . e($data['screenshot_url'])           : null,
             !empty($data['note'])           ? 'Note: ' . e($data['note'])                          : null,
-            'Tx id: ' . $transaction->id . ' — chờ admin approve qua Wallet.',
+            sprintf('Tx id: %s — chờ admin approve qua Wallet.', $tx->id),
         ]));
 
         return response()->json([
             'message'     => 'Confirmation recorded — admin sẽ duyệt khi nhận được tiền.',
-            'transaction' => $transaction->fresh(),
-        ]);
+            'transaction' => $tx,
+        ], 201);
     }
 
     private function renderQr(array $s, int $amountVnd, string $content): string
