@@ -9,9 +9,9 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * Force the Accept header to application/json for /api/* requests so that
  * Laravel's auth / validation paths always return JSON, never a 302 redirect
- * to "/". Without this, Swagger UI's default `Accept: */*` triggers the
- * web-style redirect on validation failures, which surfaces as a confusing
- * HTML page in API consumers.
+ * to "/". Without this, Swagger UI's default Accept header (star-slash-star)
+ * triggers the web-style redirect on validation failures, which surfaces as
+ * a confusing HTML page in API consumers.
  */
 class ForceJsonForApi
 {
