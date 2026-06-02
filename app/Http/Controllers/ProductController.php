@@ -581,7 +581,7 @@ class ProductController extends Controller
 
     /**
      * @OA\Post(
-     *     path="/api/products/{product}/materials",
+     *     path="/products/{product}/materials",
      *     summary="Add a material (chất liệu) to a product [admin]",
      *     tags={"Products"},
      *     security={{"bearerAuth":{}}},
@@ -633,7 +633,7 @@ class ProductController extends Controller
 
     /**
      * @OA\Put(
-     *     path="/api/materials/{material}",
+     *     path="/materials/{material}",
      *     summary="Update a material [admin]",
      *     tags={"Products"},
      *     security={{"bearerAuth":{}}},
@@ -671,7 +671,7 @@ class ProductController extends Controller
 
     /**
      * @OA\Delete(
-     *     path="/api/materials/{material}",
+     *     path="/materials/{material}",
      *     summary="Delete a material [admin]",
      *     tags={"Products"},
      *     security={{"bearerAuth":{}}},
