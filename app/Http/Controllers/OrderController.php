@@ -9,6 +9,7 @@ use App\Models\OrderItemMeta;
 use App\Models\Address;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantPrice;
+use App\Models\User;
 use App\Models\WalletTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
