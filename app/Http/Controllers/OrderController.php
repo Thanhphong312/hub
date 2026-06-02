@@ -1674,6 +1674,137 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         ]);
     }
 
+    /**
+     * Admin dashboard for the auto-pay system. Returns:
+     *   - users: every seller with auto_pay=true + wallet + # unpaid + oldest
+     *   - recent: last N auto-paid wallet_transactions (note LIKE 'Auto-paid%')
+     * The desktop admin renders this in the Auto-pay menu.
+     */
+    public function autoPayStatus(Request $request)
+    {
+        $user = $request->user();
+        if (!($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $users = User::where('auto_pay', true)
+            ->orderBy('id')
+            ->get(['id', 'name', 'email', 'wallet', 'tier_id'])
+            ->map(function ($u) {
+                $unpaid = Order::where('user_id', $u->id)
+                    ->whereColumn('paid_cost', '<', 'total_cost')
+                    ->orderBy('created_at', 'asc');
+                $count = (clone $unpaid)->count();
+                $first = (clone $unpaid)->first(['id', 'system_id', 'total_cost', 'paid_cost', 'created_at']);
+                $totalOwed = (float) (clone $unpaid)
+                    ->get(['total_cost', 'paid_cost'])
+                    ->sum(fn($o) => max(0, $o->total_cost - $o->paid_cost));
+                return [
+                    'id'         => $u->id,
+                    'name'       => $u->name,
+                    'email'      => $u->email,
+                    'wallet'     => (float) $u->wallet,
+                    'unpaid'     => $count,
+                    'owed'       => round($totalOwed, 2),
+                    'oldest'     => $first ? [
+                        'id'         => $first->id,
+                        'system_id'  => $first->system_id,
+                        'remaining'  => round((float) $first->total_cost - (float) $first->paid_cost, 2),
+                        'created_at' => $first->created_at,
+                    ] : null,
+                ];
+            });
+
+        $limit = max(10, min(200, (int) ($request->limit ?? 50)));
+        $recent = WalletTransaction::where('note', 'like', 'Auto-paid order #%')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get(['id', 'user_id', 'order_id', 'order_system_id', 'amount', 'balance_after', 'created_at']);
+        // Attach user name for display
+        $userMap = User::whereIn('id', $recent->pluck('user_id')->unique())
+            ->get(['id', 'name'])
+            ->keyBy('id');
+        $recent = $recent->map(function ($t) use ($userMap) {
+            return [
+                'id'              => $t->id,
+                'user_id'         => $t->user_id,
+                'user_name'       => $userMap[$t->user_id]->name ?? null,
+                'order_id'        => $t->order_id,
+                'order_system_id' => $t->order_system_id,
+                'amount'          => (float) $t->amount,
+                'balance_after'   => (float) $t->balance_after,
+                'created_at'      => $t->created_at,
+            ];
+        });
+
+        return response()->json(['users' => $users, 'recent' => $recent]);
+    }
+
+    /**
+     * Admin force-runs auto-pay for one seller (ignores their auto_pay
+     * flag — useful for manual ops). Returns the same shape as the
+     * per-caller autoPayRun endpoint.
+     */
+    public function autoPayRunFor(Request $request, User $user)
+    {
+        $caller = $request->user();
+        if (!($caller && ($caller->hasRole('admin') || $caller->hasRole('support')))) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $count = 0;
+        $totalAmount = 0.0;
+        $systemIds = [];
+
+        while (true) {
+            $order = Order::where('user_id', $user->id)
+                ->whereColumn('paid_cost', '<', 'total_cost')
+                ->orderBy('created_at', 'asc')
+                ->orderBy('id', 'asc')
+                ->first();
+            if (!$order) break;
+
+            $remaining = round((float) $order->total_cost - (float) $order->paid_cost, 2);
+            if ($remaining <= 0) break;
+
+            $user->refresh();
+            if (round((float) $user->wallet, 2) < $remaining) break;
+
+            DB::transaction(function () use ($user, $order, $remaining) {
+                $balanceBefore = (float) $user->wallet;
+                $user->decrement('wallet', $remaining);
+                $updates = ['paid_cost' => $order->total_cost];
+                if ((int) $order->status === Order::STATUS_NEW_ORDER) {
+                    $updates['status'] = Order::STATUS_PROCESSING;
+                }
+                $order->update($updates);
+
+                WalletTransaction::create([
+                    'user_id'         => $user->id,
+                    'order_id'        => $order->id,
+                    'order_system_id' => $order->system_id,
+                    'type'            => 'paid',
+                    'status'          => WalletTransaction::STATUS_APPROVED,
+                    'amount'          => -$remaining,
+                    'balance_before'  => $balanceBefore,
+                    'balance_after'   => $user->fresh()->wallet,
+                    'note'            => "Auto-paid order #{$order->system_id}",
+                ]);
+            });
+
+            $count++;
+            $totalAmount += $remaining;
+            $systemIds[] = $order->system_id;
+        }
+
+        return response()->json([
+            'count'      => $count,
+            'amount'     => round($totalAmount, 2),
+            'system_ids' => $systemIds,
+            'wallet'     => (float) $user->fresh()->wallet,
+        ]);
+    }
+
     public function payAllUnpaid(Request $request)
     {
         $user = $request->user();

@@ -67,6 +67,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders/unpaid-summary', [OrderController::class, 'unpaidSummary']);
     Route::post('/orders/pay-all-unpaid', [OrderController::class, 'payAllUnpaid']);
     Route::post('/orders/auto-pay/run', [OrderController::class, 'autoPayRun']);
+    Route::get('/orders/auto-pay/status', [OrderController::class, 'autoPayStatus']);
+    Route::post('/orders/auto-pay/run-for/{user}', [OrderController::class, 'autoPayRunFor']);
     Route::post('/orders/bulk-reconvert', [OrderController::class, 'bulkReconvert']);
     Route::post('/orders/bulk-reconvert-label', [OrderController::class, 'bulkReconvertLabel']);
     Route::post('/orders/bulk-delete', [OrderController::class, 'bulkDestroy']);
