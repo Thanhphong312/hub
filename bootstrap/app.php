@@ -5,6 +5,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Illuminate\Auth\AuthenticationException;
+use Illuminate\Validation\ValidationException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -16,6 +17,11 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->api(prepend: [
             \Illuminate\Http\Middleware\HandleCors::class,
+            // Force every /api/* request to be treated as JSON regardless of
+            // Accept header, so validation + auth errors always come back as
+            // JSON (e.g. Swagger UI sends Accept: */* which would otherwise
+            // make Laravel redirect to "/" on validation failures).
+            \App\Http\Middleware\ForceJsonForApi::class,
         ]);
 
         $middleware->alias([
@@ -35,6 +41,17 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (AuthenticationException $e, Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 return response()->json(['message' => 'Unauthenticated.'], 401);
+            }
+        });
+        // Belt-and-braces — even if a future controller/middleware bypasses
+        // the ForceJsonForApi middleware, validation failures on /api/*
+        // still come back as JSON 422 instead of a 302 redirect.
+        $exceptions->render(function (ValidationException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->json([
+                    'message' => $e->getMessage(),
+                    'errors'  => $e->errors(),
+                ], $e->status);
             }
         });
     })->create();
