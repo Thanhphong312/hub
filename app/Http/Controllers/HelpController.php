@@ -13,7 +13,12 @@ use Illuminate\Http\Request;
 class HelpController extends Controller
 {
     private const DOCS = [
-        'topup-guide' => 'topup-bank-transfer.md',
+        // Seller-facing guide (friendly tone, FAQ) — surfaces via the
+        // "Hướng dẫn nạp tiền" button on Wallet.
+        'topup-guide'    => 'seller-guide-topup.md',
+        // Full technical runbook (admin config + API + troubleshooting)
+        // kept on a separate slug for ops.
+        'topup-runbook'  => 'topup-bank-transfer.md',
     ];
 
     public function show(Request $request, string $slug)
