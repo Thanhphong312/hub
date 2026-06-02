@@ -22,8 +22,15 @@ class TestCatalogSeeder extends Seeder
 {
     public function run(): void
     {
-        // Ensure at least one tier exists (DatabaseSeeder creates Tier 1..3).
-        $tier = Tier::firstOrCreate(['name' => 'Tier 1']);
+        // Spread test prices across EVERY tier currently in the DB so the
+        // seeded catalog is usable regardless of which tier the test seller
+        // happens to be on. Default tier names differ between deploys
+        // ("Tier 1" vs "Public" etc.), so looking up by name is fragile —
+        // seed against the full set instead.
+        $tiers = Tier::all();
+        if ($tiers->isEmpty()) {
+            $tiers = collect([Tier::firstOrCreate(['name' => 'Default'])]);
+        }
 
         // ── Product + variants ──────────────────────────────────────
         $product = Product::firstOrCreate(
@@ -52,15 +59,17 @@ class TestCatalogSeeder extends Seeder
                 array_merge($v, ['product_id' => $product->id, 'status' => 1, 'stock' => 1000])
             );
 
-            foreach ($priceMatrix as $key => $price) {
-                ProductVariantPrice::firstOrCreate(
-                    [
-                        'product_variant_id' => $variant->id,
-                        'tier_id'            => $tier->id,
-                        'key'                => $key,
-                    ],
-                    ['price' => $price]
-                );
+            foreach ($tiers as $t) {
+                foreach ($priceMatrix as $key => $price) {
+                    ProductVariantPrice::firstOrCreate(
+                        [
+                            'product_variant_id' => $variant->id,
+                            'tier_id'            => $t->id,
+                            'key'                => $key,
+                        ],
+                        ['price' => $price]
+                    );
+                }
             }
         }
 
@@ -84,15 +93,17 @@ class TestCatalogSeeder extends Seeder
             ['style' => 'White', 'accessory_code' => 'W', 'price' => 0.20],
             ['style' => 'Kraft', 'accessory_code' => 'K', 'price' => 0.25],
         ];
-        foreach ($accessoryStyles as $row) {
-            AccessoryPrice::firstOrCreate(
-                [
-                    'accessory_id'   => $envelope->id,
-                    'tier_id'        => $tier->id,
-                    'accessory_code' => $row['accessory_code'],
-                ],
-                ['style' => $row['style'], 'price' => $row['price'], 'stock' => 1000]
-            );
+        foreach ($tiers as $t) {
+            foreach ($accessoryStyles as $row) {
+                AccessoryPrice::firstOrCreate(
+                    [
+                        'accessory_id'   => $envelope->id,
+                        'tier_id'        => $t->id,
+                        'accessory_code' => $row['accessory_code'],
+                    ],
+                    ['style' => $row['style'], 'price' => $row['price'], 'stock' => 1000]
+                );
+            }
         }
 
         $this->command->info('TestCatalogSeeder: 1 product, ' . count($variantsSpec) . ' variants, 2 materials, 1 accessory (2 styles).');
