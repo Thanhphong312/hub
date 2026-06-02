@@ -331,6 +331,7 @@ class OrderController extends Controller
      *                 @OA\Items(
      *                     required={"product_variant_id"},
      *                     @OA\Property(property="product_variant_id", type="integer", example=42),
+     *                     @OA\Property(property="material_id",        type="integer", example=7, description="Optional. Material (chất liệu) id — must belong to the product. Lấy ds qua GET /products (each product has materials[])."),
      *                     @OA\Property(property="accessory_ids",      type="array", @OA\Items(type="integer"), example={18,19}, description="Mảng accessory_prices.id (multi-acc)"),
      *                     @OA\Property(property="accessory_item_id",  type="integer", example=18, description="Legacy single-acc"),
      *                     @OA\Property(property="quantity",           type="integer", default=1, example=2),
@@ -346,6 +347,7 @@ class OrderController extends Controller
      *                     )
      *                 )
      *             ),
+     *             @OA\Property(property="ship_by_stamp", type="boolean", default=false, description="Đơn ship tem — không có tracking, qty ≤ 4. Khi true, address bắt buộc + shipping_label bỏ qua."),
      *             @OA\Property(property="force",  type="boolean", default=false, description="Bỏ qua check 409 duplicate ref_id"),
      *             @OA\Property(property="rename", type="boolean", default=false, description="Auto thêm suffix `_r_1` nếu trùng")
      *         )
