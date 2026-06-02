@@ -175,6 +175,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/wallet/bank-transfer/init', [\App\Http\Controllers\BankTransferController::class, 'init']);
     Route::post('/wallet/bank-transfer/confirm', [\App\Http\Controllers\BankTransferController::class, 'confirm']);
 
+    // PingPong wire top-up (USD) — same 2-step flow as bank-transfer
+    Route::get('/wallet/pingpong/info', [\App\Http\Controllers\PingpongTransferController::class, 'rate']);
+    Route::post('/wallet/pingpong/init', [\App\Http\Controllers\PingpongTransferController::class, 'init']);
+    Route::post('/wallet/pingpong/confirm', [\App\Http\Controllers\PingpongTransferController::class, 'confirm']);
+
     // Wallet
     Route::get('/wallet/balance', [WalletController::class, 'balance']);
     Route::get('/wallet/transactions', [WalletController::class, 'transactions']);
