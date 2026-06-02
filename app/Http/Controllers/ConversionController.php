@@ -42,6 +42,10 @@ class ConversionController extends Controller
                 'items.productVariant.product:id,line_id',
             ])
             ->whereHas('items.metas', fn ($q) => $q->whereIn('key', self::SOURCE_KEYS))
+            // Cancelled orders should never appear in the convert queue —
+            // they are dead and re-generating _qr metas for them just clogs
+            // the admin's Convert page.
+            ->where('status', '!=', Order::STATUS_CANCELLED)
             ->orderBy('id', 'asc');
 
         // Sellers can only convert their own orders. Admin/support can convert
