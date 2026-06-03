@@ -19,6 +19,9 @@ class HelpController extends Controller
         // Full technical runbook (admin config + API + troubleshooting)
         // kept on a separate slug for ops.
         'topup-runbook'  => 'topup-bank-transfer.md',
+        // Auto-pay setup walkthrough (web), surfaces via the help button
+        // next to the Auto-pay toggle on Profile.
+        'autopay-guide'  => 'seller-guide-autopay.md',
     ];
 
     public function show(Request $request, string $slug)
