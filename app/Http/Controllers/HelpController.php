@@ -24,6 +24,13 @@ class HelpController extends Controller
             'icon'        => '💳',
             'audience'    => 'seller',
         ],
+        'payment-guide' => [
+            'file'        => 'seller-guide-payment.md',
+            'title'       => 'Hướng dẫn thanh toán đơn',
+            'description' => 'Pay từng đơn, Pay all unpaid, Refund + cách đọc print_cost / shipping_cost / total_cost.',
+            'icon'        => '💰',
+            'audience'    => 'seller',
+        ],
         'autopay-guide' => [
             'file'        => 'seller-guide-autopay.md',
             'title'       => 'Hướng dẫn Auto-pay',
