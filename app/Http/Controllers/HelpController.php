@@ -12,31 +12,87 @@ use Illuminate\Http\Request;
  */
 class HelpController extends Controller
 {
+    // Each doc has a file + display metadata so the Documents index page
+    // can render a card without re-deriving titles from the markdown.
+    // `audience` filters who sees the entry on the index ('seller' = all
+    // logged-in sellers; 'staff' = admin/support only).
     private const DOCS = [
-        // Seller-facing guide (friendly tone, FAQ) — surfaces via the
-        // "Hướng dẫn nạp tiền" button on Wallet.
-        'topup-guide'    => 'seller-guide-topup.md',
-        // Full technical runbook (admin config + API + troubleshooting)
-        // kept on a separate slug for ops.
-        'topup-runbook'  => 'topup-bank-transfer.md',
-        // Auto-pay setup walkthrough (web), surfaces via the help button
-        // next to the Auto-pay toggle on Profile.
-        'autopay-guide'  => 'seller-guide-autopay.md',
+        'topup-guide' => [
+            'file'        => 'seller-guide-topup.md',
+            'title'       => 'Hướng dẫn nạp tiền',
+            'description' => 'Các bước nạp ví qua Bank Transfer (VND) hoặc PingPong wire (USD), kèm FAQ.',
+            'icon'        => '💳',
+            'audience'    => 'seller',
+        ],
+        'autopay-guide' => [
+            'file'        => 'seller-guide-autopay.md',
+            'title'       => 'Hướng dẫn Auto-pay',
+            'description' => 'Bật auto-pay, chọn delay window, hành vi cron + FAQ.',
+            'icon'        => '🤖',
+            'audience'    => 'seller',
+        ],
+        'topup-runbook' => [
+            'file'        => 'topup-bank-transfer.md',
+            'title'       => 'Top-up runbook (admin/dev)',
+            'description' => 'Cấu hình bank/PingPong + endpoint + troubleshooting cho admin.',
+            'icon'        => '🛠️',
+            'audience'    => 'staff',
+        ],
     ];
+
+    /**
+     * List every doc the caller is allowed to see. Used by the in-app
+     * Documents page so the menu is data-driven (add an entry to DOCS →
+     * appears in the menu, no frontend change needed).
+     */
+    public function index(Request $request)
+    {
+        $user = $request->user();
+        $isStaff = $user && $user->role
+            && in_array($user->role->slug ?? '', ['admin', 'support'], true);
+
+        $items = [];
+        foreach (self::DOCS as $slug => $meta) {
+            if (($meta['audience'] ?? 'seller') === 'staff' && !$isStaff) continue;
+            $path = base_path('doc/' . $meta['file']);
+            $items[] = [
+                'slug'        => $slug,
+                'title'       => $meta['title'],
+                'description' => $meta['description'],
+                'icon'        => $meta['icon'] ?? '📄',
+                'audience'    => $meta['audience'] ?? 'seller',
+                'mtime'       => is_file($path) ? filemtime($path) : null,
+            ];
+        }
+        return response()->json(['items' => $items]);
+    }
 
     public function show(Request $request, string $slug)
     {
         if (!array_key_exists($slug, self::DOCS)) {
             return response()->json(['message' => 'Guide not found'], 404);
         }
+        $meta = self::DOCS[$slug];
 
-        $path = base_path('doc/' . self::DOCS[$slug]);
+        // Staff-only docs are gated on read too — listing already filters
+        // them out, but show() is reachable by direct slug.
+        if (($meta['audience'] ?? 'seller') === 'staff') {
+            $user = $request->user();
+            $isStaff = $user && $user->role
+                && in_array($user->role->slug ?? '', ['admin', 'support'], true);
+            if (!$isStaff) {
+                return response()->json(['message' => 'Forbidden'], 403);
+            }
+        }
+
+        $path = base_path('doc/' . $meta['file']);
         if (!is_file($path)) {
             return response()->json(['message' => 'Guide file missing on server'], 404);
         }
 
         return response()->json([
             'slug'     => $slug,
+            'title'    => $meta['title'],
             'markdown' => file_get_contents($path),
             // Cheap freshness signal so clients can cache aggressively.
             'mtime'    => filemtime($path),
