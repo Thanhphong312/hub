@@ -23,6 +23,7 @@ class User extends Authenticatable
         'status',
         'convert',
         'auto_pay',
+        'auto_pay_delay_hours',
     ];
 
     protected $hidden = [
@@ -39,6 +40,7 @@ class User extends Authenticatable
             'wallet' => 'decimal:2',
             'convert' => 'boolean',
             'auto_pay' => 'boolean',
+            'auto_pay_delay_hours' => 'integer',
         ];
     }
 

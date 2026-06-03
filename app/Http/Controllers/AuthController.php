@@ -116,12 +116,15 @@ class AuthController extends Controller
         $user = $request->user();
 
         $request->validate([
-            'name'     => 'nullable|string',
-            'email'    => 'nullable|email|unique:users,email,' . $user->id,
-            'auto_pay' => 'sometimes|boolean',
+            'name'                 => 'nullable|string',
+            'email'                => 'nullable|email|unique:users,email,' . $user->id,
+            'auto_pay'             => 'sometimes|boolean',
+            // 0 = immediate; cap at 72h (3 days) so sellers can't accidentally
+            // disable auto-pay by setting an absurd delay.
+            'auto_pay_delay_hours' => 'sometimes|integer|min:0|max:72',
         ]);
 
-        $user->update($request->only('name', 'email', 'auto_pay'));
+        $user->update($request->only('name', 'email', 'auto_pay', 'auto_pay_delay_hours'));
         return response()->json(['message' => 'Profile updated', 'user' => $user->fresh()]);
     }
 

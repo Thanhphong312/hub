@@ -1615,10 +1615,19 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $totalAmount = 0.0;
         $systemIds = [];
 
+        // Seller-configurable buffer: skip orders younger than N hours so the
+        // seller still has a window to edit/cancel before money leaves the
+        // wallet. 0 = pay immediately (legacy behaviour).
+        $delayHours = max(0, (int) $user->auto_pay_delay_hours);
+        $cutoff = $delayHours > 0 ? now()->subHours($delayHours) : null;
+
         while (true) {
-            $order = Order::where('user_id', $user->id)
-                ->whereColumn('paid_cost', '<', 'total_cost')
-                ->orderBy('created_at', 'asc')
+            $q = Order::where('user_id', $user->id)
+                ->whereColumn('paid_cost', '<', 'total_cost');
+            if ($cutoff) {
+                $q->where('created_at', '<=', $cutoff);
+            }
+            $order = $q->orderBy('created_at', 'asc')
                 ->orderBy('id', 'asc')
                 ->first();
             if (!$order) break;
@@ -1690,7 +1699,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $users = User::where('auto_pay', true)
             ->orderBy('id')
-            ->get(['id', 'name', 'email', 'wallet', 'tier_id'])
+            ->get(['id', 'name', 'email', 'wallet', 'tier_id', 'auto_pay_delay_hours'])
             ->map(function ($u) {
                 $unpaid = Order::where('user_id', $u->id)
                     ->whereColumn('paid_cost', '<', 'total_cost')
@@ -1701,13 +1710,14 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     ->get(['total_cost', 'paid_cost'])
                     ->sum(fn($o) => max(0, $o->total_cost - $o->paid_cost));
                 return [
-                    'id'         => $u->id,
-                    'name'       => $u->name,
-                    'email'      => $u->email,
-                    'wallet'     => (float) $u->wallet,
-                    'unpaid'     => $count,
-                    'owed'       => round($totalOwed, 2),
-                    'oldest'     => $first ? [
+                    'id'                   => $u->id,
+                    'name'                 => $u->name,
+                    'email'                => $u->email,
+                    'wallet'               => (float) $u->wallet,
+                    'auto_pay_delay_hours' => (int) $u->auto_pay_delay_hours,
+                    'unpaid'               => $count,
+                    'owed'                 => round($totalOwed, 2),
+                    'oldest'               => $first ? [
                         'id'         => $first->id,
                         'system_id'  => $first->system_id,
                         'remaining'  => round((float) $first->total_cost - (float) $first->paid_cost, 2),
