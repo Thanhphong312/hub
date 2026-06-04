@@ -2,7 +2,7 @@
 
 Sau khi đã **có tiền trong ví** (xem [Hướng dẫn nạp tiền](#)), bạn cần
 thanh toán các đơn để chuyển từ **Unpaid → Paid** và đẩy đơn sang
-**Processing** cho xưởng in.
+**Producing** cho xưởng in.
 
 Có 3 cách thanh toán:
 1. **Pay từng đơn** — chọn 1 đơn, trả riêng.
@@ -49,7 +49,7 @@ Dùng khi bạn muốn **review từng đơn** trước khi tiền rời ví.
 - Nếu ví không đủ → nút bị disable + báo "Insufficient wallet".
 
 **6. Sau khi pay thành công:**
-- Đơn chuyển sang **Processing** (status 1).
+- Đơn chuyển sang **Producing** (status 1).
 - Ví giảm đúng `total_cost`.
 - 1 wallet_transaction type `paid` được ghi.
 - Toast "Đã thanh toán" hiện.
@@ -74,7 +74,7 @@ Dùng khi bạn có **nhiều đơn unpaid cùng lúc** và muốn xử lý 1 ph
 
 **4. Hệ thống pay theo thứ tự đơn cũ nhất trước (FIFO):**
 - Pay đến khi **ví hết tiền** thì dừng — không pay 1 phần đơn.
-- Đơn nào pay được → chuyển sang Processing.
+- Đơn nào pay được → chuyển sang Producing.
 - Đơn nào không đủ tiền → vẫn unpaid.
 
 **5. Toast báo:**
@@ -133,10 +133,10 @@ Click vào dòng `paid` để jump sang Order Detail tương ứng.
 
 ## ❓ FAQ
 
-**Q: Tôi pay đơn xong, status đơn không đổi sang Processing?**
+**Q: Tôi pay đơn xong, status đơn không đổi sang Producing?**
 A: Hệ thống chỉ tự chuyển nếu đơn đang ở **New Order**. Nếu đơn ở
 status khác (Wrongsize, Onhold…) thì pay xong giữ nguyên status. Trường
-hợp Processing không tự đổi → reload trang, có thể là cache.
+hợp Producing không tự đổi → reload trang, có thể là cache.
 
 **Q: Tôi vô tình pay nhầm đơn của khách khác?**
 A: Vào Order Detail của đơn đó → bấm Refund (nếu có quyền). Hoặc nhắn

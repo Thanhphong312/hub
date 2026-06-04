@@ -34,7 +34,7 @@ namespace App\Http\Controllers;
 
 ## Order status code
 
-`0`=new_order, `1`=processing, `2`=wrongsize, `3`=fixed, `4`=reprint, `5`=onhold, `6`=shipped, `7`=cancelled.
+`0`=new_order, `1`=producing, `2`=wrongsize, `3`=fixed, `4`=reprint, `5`=onhold, `6`=shipped, `7`=cancelled.
 
 Seller chỉ được tự set status `5` (onhold) hoặc `7` (cancelled) cho đơn của mình. Các transition khác do admin/support thực hiện.
 ",

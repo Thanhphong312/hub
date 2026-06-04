@@ -12,7 +12,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('user_id')->constrained('users')->cascadeOnDelete();
             $table->string('ref_id')->unique();
-            $table->tinyInteger('status')->default(0); // 0=new_order,1=processing,2=wrongsize,3=fixed,4=reprint,5=onhold,6=shipped
+            $table->tinyInteger('status')->default(0); // 0=new_order,1=producing,2=wrongsize,3=fixed,4=reprint,5=onhold,6=shipped
             $table->string('ship_type')->default('seller_ship'); // seller_ship, tiktok_ship
             $table->string('shipping_label')->nullable();
             $table->string('tracking_id')->nullable();

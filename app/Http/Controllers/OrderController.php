@@ -1537,7 +1537,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         return DB::transaction(function () use ($user, $order, $amountToPay) {
             $balanceBefore = (float) $user->wallet;
             $user->decrement('wallet', $amountToPay);
-            // Auto-advance new_order → processing once it's fully paid, so
+            // Auto-advance new_order → producing once it's fully paid, so
             // fulfillers can see the queue without a separate status flip.
             $updates = ['paid_cost' => $order->total_cost];
             if ((int) $order->status === Order::STATUS_NEW_ORDER) {

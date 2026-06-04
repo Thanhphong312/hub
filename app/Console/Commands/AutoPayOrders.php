@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\DB;
  * Cron: for each user with auto_pay=true and wallet > 0, settle oldest-first
  * unpaid orders against the wallet until the wallet runs out. Mirrors the
  * single-pay logic in OrderController::pay() — same DB transaction, same
- * wallet_transactions row, same new_order → processing status bump — so
+ * wallet_transactions row, same new_order → producing status bump — so
  * the audit trail looks identical to a manual click.
  *
  * Scheduled every minute (see routes/console.php).

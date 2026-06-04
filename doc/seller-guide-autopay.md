@@ -70,7 +70,7 @@ tự lưu.
 
 Khi 1 đơn được auto-pay:
 - `paid_cost` của đơn = `total_cost` (đã trả full).
-- Nếu đơn đang ở status **New Order** → tự chuyển sang **Processing**.
+- Nếu đơn đang ở status **New Order** → tự chuyển sang **Producing**.
 - Một **wallet_transaction** type `paid` được ghi lại, note
   `Auto-paid order #PS_C....`.
 - Số dư ví trừ đi đúng số tiền của đơn.

@@ -76,7 +76,7 @@ class Order extends Model
 
     const STATUS_MAP = [
         0 => 'new_order',
-        1 => 'processing',
+        1 => 'producing',
         2 => 'wrongsize',
         3 => 'fixed',
         4 => 'reprint',
