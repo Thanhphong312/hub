@@ -66,6 +66,7 @@ class GangsheetController extends Controller
             'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
         ])
             ->where('production', false)
+            ->whereNull('gangsheet_group_id')   // not already pulled into an automation group
             ->where('status', '!=', Order::STATUS_SHIPPED)
             ->whereHas('items.metas', fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX)->where('production', false))
             ->orderBy('id', 'asc');
@@ -159,49 +160,17 @@ class GangsheetController extends Controller
         $metaIds  = $this->decodeIds($request->input('meta_ids'));
 
         try {
-            $gangsheet = DB::transaction(function () use ($request, $orderIds, $metaIds) {
-                $gs = Gangsheet::create([
-                    'created_by_user_id' => $request->user()?->id,
-                    'filename' => $request->filename,
-                    'file_url' => $request->file_url,
-                    'line_id' => $request->line_id,
-                    'first_system_id' => $request->first_system_id,
-                    'last_system_id' => $request->last_system_id,
-                    'orders_count' => (int) $request->orders_count,
-                    'metas_count' => (int) $request->metas_count,
-                    'order_ids' => $orderIds,
-                    'meta_ids' => $metaIds,
-                ]);
-
-                if (!empty($metaIds)) {
-                    OrderItemMeta::whereIn('id', $metaIds)->update(['production' => true]);
-                }
-                if (!empty($orderIds)) {
-                    Order::whereIn('id', $orderIds)->update(['production' => true]);
-                }
-
-                // Parallel gangsheet_labels row: mirrors the orders so the
-                // scan-to-complete-all workflow can operate on the same set.
-                // The name reuses the gangsheet's filename (minus the .pdf)
-                // so operators can match the printed _qr sheet against this
-                // label group at a glance.
-                $labelName = preg_replace('/\.pdf$/i', '', $gs->filename) . '_label';
-                $totalItemsQty = empty($orderIds)
-                    ? 0
-                    : (int) OrderItem::whereIn('order_id', $orderIds)->sum('quantity');
-                GangsheetLabel::create([
-                    'gangsheet_id' => $gs->id,
-                    'created_by_user_id' => $request->user()?->id,
-                    'name' => $labelName,
-                    'line_id' => $gs->line_id,
-                    'order_ids' => $orderIds,
-                    'orders_count' => count($orderIds),
-                    'total_items_qty' => $totalItemsQty,
-                    'status' => 'pending',
-                ]);
-
-                return $gs;
-            });
+            $gangsheet = app(\App\Services\GangsheetService::class)->record([
+                'filename'        => $request->filename,
+                'file_url'        => $request->file_url,
+                'line_id'         => $request->line_id,
+                'first_system_id' => $request->first_system_id,
+                'last_system_id'  => $request->last_system_id,
+                'orders_count'    => (int) $request->orders_count,
+                'metas_count'     => (int) $request->metas_count,
+                'order_ids'       => $orderIds,
+                'meta_ids'        => $metaIds,
+            ], $request->user()?->id);
         } catch (\Throwable $e) {
             \Log::error('[gangsheet] DB save failed: ' . $e->getMessage(), ['filename' => $request->filename]);
             return response()->json([

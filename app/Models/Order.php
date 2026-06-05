@@ -11,6 +11,7 @@ class Order extends Model
         'shipping_label_converted', 'convert_label', 'proof_image',
         'tracking_id', 'print_cost', 'shipping_cost', 'total_cost',
         'paid_cost', 'completed_time', 'production', 'stock_decremented',
+        'gangsheet_group_id',
     ];
 
     // ship_type values.
@@ -93,6 +94,12 @@ class Order extends Model
     public function items()
     {
         return $this->hasMany(OrderItem::class);
+    }
+
+    // Current automation gangsheet group (null = not assigned / back in pending).
+    public function gangsheetGroup()
+    {
+        return $this->belongsTo(GangsheetGroup::class);
     }
 
     public function address()

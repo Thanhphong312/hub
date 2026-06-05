@@ -4,6 +4,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ConversionController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\GangsheetController;
+use App\Http\Controllers\GangsheetGroupController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\GangsheetLabelController;
 use App\Http\Controllers\OrderController;
@@ -159,6 +160,20 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheets/bulk-delete', [GangsheetController::class, 'bulkDestroy']);
         Route::get('/gangsheets/{gangsheet}', [GangsheetController::class, 'show']);
         Route::delete('/gangsheets/{gangsheet}', [GangsheetController::class, 'destroy']);
+
+        // Automation gangsheet groups (doc/automation_gangsheet.md). All driven
+        // by the desktop app — no server scheduler. Static paths before the
+        // wildcard {group} so they don't get swallowed by route binding.
+        Route::get('/gangsheet-groups/automation-config', [GangsheetGroupController::class, 'getAutomationConfig']);
+        Route::put('/gangsheet-groups/automation-config', [GangsheetGroupController::class, 'updateAutomationConfig']);
+        Route::post('/gangsheet-groups/assign', [GangsheetGroupController::class, 'assign']);
+        Route::post('/gangsheet-groups/claim', [GangsheetGroupController::class, 'claim']);
+        Route::post('/gangsheet-groups/release-stale', [GangsheetGroupController::class, 'releaseStale']);
+        Route::post('/gangsheet-groups/mark-fired', [GangsheetGroupController::class, 'markFired']);
+        Route::get('/gangsheet-groups', [GangsheetGroupController::class, 'index']);
+        Route::get('/gangsheet-groups/{group}', [GangsheetGroupController::class, 'show']);
+        Route::post('/gangsheet-groups/{group}/finalize', [GangsheetGroupController::class, 'finalize']);
+        Route::post('/gangsheet-groups/{group}/remove-design', [GangsheetGroupController::class, 'removeDesign']);
 
         // Gangsheet label — parallel grouping of convert_labels for orders
         // already in a _qr gangsheet. Scanned for bulk complete-all.
