@@ -37,6 +37,7 @@ class GangsheetGroupController extends Controller
         return [
             'items.metas' => fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX),
             'items.productVariant.product:id,name,line_id',
+            'items.material:id,name',
             'items.accessoryPrice.accessory:id,name,product_id,gangsheet_split',
             'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
         ];
@@ -65,8 +66,8 @@ class GangsheetGroupController extends Controller
             $touched = [];
 
             foreach ($pending as $order) {
-                [$lineId, $side, $accId] = $this->computeBucket($order);
-                $bucket = GangsheetGroup::bucketKey($lineId, $side, $accId);
+                [$lineId, $side, $accId, $matId] = $this->computeBucket($order);
+                $bucket = GangsheetGroup::bucketKey($lineId, $side, $accId, $matId);
 
                 $group = $openByBucket[$bucket] ?? GangsheetGroup::where('bucket_key', $bucket)
                     ->where('status', GangsheetGroup::STATUS_OPEN)
@@ -75,7 +76,7 @@ class GangsheetGroupController extends Controller
                     ->first();
 
                 if (!$group || count($group->order_ids ?? []) >= $groupSize) {
-                    $group = $this->createGroup($day, $lineId, $side, $accId, $bucket);
+                    $group = $this->createGroup($day, $lineId, $side, $accId, $matId, $bucket);
                 }
 
                 $ids = $group->order_ids ?? [];
@@ -97,7 +98,7 @@ class GangsheetGroupController extends Controller
         return response()->json($summary);
     }
 
-    private function createGroup(string $day, ?string $lineId, string $side, ?int $accId, string $bucket): GangsheetGroup
+    private function createGroup(string $day, ?string $lineId, string $side, ?int $accId, ?int $matId, string $bucket): GangsheetGroup
     {
         // seq resets each production day (08:00 VN); max+1 within the day.
         $seq = (int) GangsheetGroup::where('production_day', $day)->max('seq') + 1;
@@ -107,6 +108,7 @@ class GangsheetGroupController extends Controller
             'line_id'        => $lineId,
             'side_type'      => $side,
             'accessory_id'   => $accId,
+            'material_id'    => $matId,
             'bucket_key'     => $bucket,
             'status'         => GangsheetGroup::STATUS_OPEN,
             'order_ids'      => [],
@@ -119,8 +121,12 @@ class GangsheetGroupController extends Controller
      *                  else 'one'.
      *   accessory_id = smallest id among gangsheet_split=true accessories, else null.
      *   line_id      = dominant product line_id across the order's items.
+     *   material_id  = the FIRST item's material (first item that has one). For
+     *                  a multi-material order we only look at the first item —
+     *                  no "mixed" split.
      *
-     * @return array{0:?string,1:string,2:?int}  [lineId, sideType, accessoryId]
+     * @return array{0:?string,1:string,2:?int,3:?int}
+     *         [lineId, sideType, accessoryId, materialId]
      */
     private function computeBucket(Order $order): array
     {
@@ -128,6 +134,7 @@ class GangsheetGroupController extends Controller
         $hasBack  = false;
         $lineCounts = [];
         $accIds = [];
+        $matId = null;
 
         foreach ($order->items as $it) {
             foreach ($it->metas as $m) {
@@ -143,6 +150,9 @@ class GangsheetGroupController extends Controller
             };
             foreach ($it->accessoryPrices as $ap) $collect($ap->accessory);
             $collect($it->accessoryPrice?->accessory);
+
+            // First item with a material decides the order's material bucket.
+            if ($matId === null && $it->material_id) $matId = (int) $it->material_id;
         }
 
         $side = ($hasFront && $hasBack) ? 'two' : 'one';
@@ -155,7 +165,7 @@ class GangsheetGroupController extends Controller
 
         $accId = empty($accIds) ? null : min($accIds);
 
-        return [$lineId, $side, $accId];
+        return [$lineId, $side, $accId, $matId];
     }
 
     // ── List / detail (UI) ───────────────────────────────────────────────────

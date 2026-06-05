@@ -22,7 +22,7 @@ class GangsheetGroup extends Model
     const DAY_START_HOUR = 8;
 
     protected $fillable = [
-        'seq', 'production_day', 'line_id', 'side_type', 'accessory_id',
+        'seq', 'production_day', 'line_id', 'side_type', 'accessory_id', 'material_id',
         'bucket_key', 'status', 'order_ids', 'gangsheet_id',
         'claimed_by_user_id', 'closing_at', 'generated_at',
     ];
@@ -47,9 +47,9 @@ class GangsheetGroup extends Model
         return $t->toDateString();
     }
 
-    public static function bucketKey(?string $lineId, string $sideType, ?int $accessoryId): string
+    public static function bucketKey(?string $lineId, string $sideType, ?int $accessoryId, ?int $materialId): string
     {
-        return ($lineId ?? '') . '|' . $sideType . '|' . ((int) $accessoryId);
+        return ($lineId ?? '') . '|' . $sideType . '|' . ((int) $accessoryId) . '|' . ((int) $materialId);
     }
 
     public function gangsheet()
