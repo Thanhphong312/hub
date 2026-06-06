@@ -49,9 +49,8 @@ class GangsheetGroupController extends Controller
         $this->releaseStaleInternal();
 
         $groupSize = max(1, (int) (AppSetting::getJson('gangsheet_group_size', ['size' => 10])['size'] ?? 10));
-        $groupMin  = max(1, (int) (AppSetting::getJson('gangsheet_group_min', ['min' => 1])['min'] ?? 1));
 
-        $summary = DB::transaction(function () use ($groupSize, $groupMin) {
+        $summary = DB::transaction(function () use ($groupSize) {
             $pending = Order::with($this->orderEagerLoads())
                 ->where('production', false)
                 ->whereNull('gangsheet_group_id')
@@ -61,9 +60,8 @@ class GangsheetGroupController extends Controller
                 ->lockForUpdate()
                 ->get();
 
-            // Bucket the pending orders first. A bucket only forms a group when it
-            // reaches the minimum (existing open group + new pending ≥ min) —
-            // otherwise the orders stay pending until enough accumulate.
+            // Bucket the pending orders. Every bucket forms a group regardless of
+            // count — at a close hook we want everything grouped and ganged.
             $byBucket = [];   // bucket_key => ['dims'=>[lineId,side,accId,matId], 'orders'=>[Order...]]
             foreach ($pending as $order) {
                 [$lineId, $side, $accId, $matId] = $this->computeBucket($order);
@@ -84,12 +82,6 @@ class GangsheetGroupController extends Controller
                     ->lockForUpdate()
                     ->orderBy('id')
                     ->first();
-                $existing = $group ? count($group->order_ids ?? []) : 0;
-
-                // Not enough to reach the minimum → leave these orders pending.
-                if ($existing + count($b['orders']) < $groupMin) {
-                    continue;
-                }
 
                 [$lineId, $side, $accId, $matId] = $b['dims'];
                 foreach ($b['orders'] as $order) {
@@ -109,7 +101,7 @@ class GangsheetGroupController extends Controller
                 }
             }
 
-            return ['assigned' => $assigned, 'groups_touched' => count($touched), 'production_day' => $day, 'group_min' => $groupMin, 'group_size' => $groupSize];
+            return ['assigned' => $assigned, 'groups_touched' => count($touched), 'production_day' => $day, 'group_size' => $groupSize];
         });
 
         return response()->json($summary);
@@ -215,19 +207,15 @@ class GangsheetGroupController extends Controller
 
         $this->releaseStaleInternal();
 
-        // Manual claim (explicit group_ids) closes those groups regardless of
-        // size. Auto claim (no ids) only takes groups that reached the minimum,
-        // so auto-close never gangs a barely-filled group.
-        $isManual = $request->filled('group_ids');
-        $min = $isManual ? 1 : max(1, (int) (AppSetting::getJson('gangsheet_group_min', ['min' => 1])['min'] ?? 1));
-
-        $claimedIds = DB::transaction(function () use ($request, $isManual, $min) {
+        // Both manual (explicit group_ids) and auto (no ids → all open) close
+        // groups regardless of count — at a hook we gang whatever is there.
+        $claimedIds = DB::transaction(function () use ($request) {
             $q = GangsheetGroup::where('status', GangsheetGroup::STATUS_OPEN);
-            if ($isManual) {
+            if ($request->filled('group_ids')) {
                 $q->whereIn('id', $request->group_ids);
             }
             $rows = $q->lockForUpdate()->get()
-                ->filter(fn ($g) => count($g->order_ids ?? []) >= $min)   // skip empty / below-min groups
+                ->filter(fn ($g) => count($g->order_ids ?? []) > 0)   // skip empty groups
                 ->values();
 
             foreach ($rows as $g) {
@@ -416,13 +404,11 @@ class GangsheetGroupController extends Controller
     public function getAutomationConfig()
     {
         $size  = AppSetting::getJson('gangsheet_group_size', ['size' => 10]);
-        $minS  = AppSetting::getJson('gangsheet_group_min', ['min' => 1]);
         $auto  = AppSetting::getJson('gangsheet_auto_close', ['enabled' => false, 'hooks' => []]);
         $marks = AppSetting::getJson('gangsheet_close_marks', ['date' => null, 'fired' => []]);
 
         return response()->json([
             'group_size'     => (int) ($size['size'] ?? 10),
-            'group_min'      => (int) ($minS['min'] ?? 1),
             'auto_close'     => [
                 'enabled' => (bool) ($auto['enabled'] ?? false),
                 'hooks'   => array_values($auto['hooks'] ?? []),
@@ -436,7 +422,6 @@ class GangsheetGroupController extends Controller
     {
         $data = $request->validate([
             'group_size'           => 'sometimes|integer|min:1|max:1000',
-            'group_min'            => 'sometimes|integer|min:1|max:1000',
             'auto_close'           => 'sometimes|array',
             'auto_close.enabled'   => 'nullable|boolean',
             'auto_close.hooks'     => 'nullable|array',
@@ -445,9 +430,6 @@ class GangsheetGroupController extends Controller
 
         if (isset($data['group_size'])) {
             AppSetting::setJson('gangsheet_group_size', ['size' => (int) $data['group_size']]);
-        }
-        if (isset($data['group_min'])) {
-            AppSetting::setJson('gangsheet_group_min', ['min' => (int) $data['group_min']]);
         }
         if (isset($data['auto_close'])) {
             $cur = AppSetting::getJson('gangsheet_auto_close', ['enabled' => false, 'hooks' => []]);
