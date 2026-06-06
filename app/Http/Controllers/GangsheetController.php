@@ -29,9 +29,9 @@ class GangsheetController extends Controller
             $query->where('line_id', $request->line_id);
         }
         if ($request->filled('page_format')) {
-            // 'original' also covers legacy gangs (null format).
-            if ($request->page_format === 'original') {
-                $query->where(fn ($q) => $q->where('page_format', 'original')->orWhereNull('page_format'));
+            // Legacy gangs (null format) were Letter 11×8.5 → group them there.
+            if ($request->page_format === 'letter') {
+                $query->where(fn ($q) => $q->where('page_format', 'letter')->orWhereNull('page_format'));
             } else {
                 $query->where('page_format', $request->page_format);
             }
