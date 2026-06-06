@@ -49,8 +49,9 @@ class GangsheetGroupController extends Controller
         $this->releaseStaleInternal();
 
         $groupSize = max(1, (int) (AppSetting::getJson('gangsheet_group_size', ['size' => 10])['size'] ?? 10));
+        $groupMin  = max(1, (int) (AppSetting::getJson('gangsheet_group_min', ['min' => 1])['min'] ?? 1));
 
-        $summary = DB::transaction(function () use ($groupSize) {
+        $summary = DB::transaction(function () use ($groupSize, $groupMin) {
             $pending = Order::with($this->orderEagerLoads())
                 ->where('production', false)
                 ->whereNull('gangsheet_group_id')
@@ -60,39 +61,55 @@ class GangsheetGroupController extends Controller
                 ->lockForUpdate()
                 ->get();
 
+            // Bucket the pending orders first. A bucket only forms a group when it
+            // reaches the minimum (existing open group + new pending ≥ min) —
+            // otherwise the orders stay pending until enough accumulate.
+            $byBucket = [];   // bucket_key => ['dims'=>[lineId,side,accId,matId], 'orders'=>[Order...]]
+            foreach ($pending as $order) {
+                [$lineId, $side, $accId, $matId] = $this->computeBucket($order);
+                $key = GangsheetGroup::bucketKey($lineId, $side, $accId, $matId);
+                if (!isset($byBucket[$key])) {
+                    $byBucket[$key] = ['dims' => [$lineId, $side, $accId, $matId], 'orders' => []];
+                }
+                $byBucket[$key]['orders'][] = $order;
+            }
+
             $day = GangsheetGroup::productionDay();
-            $openByBucket = [];   // bucket_key => GangsheetGroup (in-memory, may fill up mid-loop)
             $assigned = 0;
             $touched = [];
 
-            foreach ($pending as $order) {
-                [$lineId, $side, $accId, $matId] = $this->computeBucket($order);
-                $bucket = GangsheetGroup::bucketKey($lineId, $side, $accId, $matId);
-
-                $group = $openByBucket[$bucket] ?? GangsheetGroup::where('bucket_key', $bucket)
+            foreach ($byBucket as $key => $b) {
+                $group = GangsheetGroup::where('bucket_key', $key)
                     ->where('status', GangsheetGroup::STATUS_OPEN)
                     ->lockForUpdate()
                     ->orderBy('id')
                     ->first();
+                $existing = $group ? count($group->order_ids ?? []) : 0;
 
-                if (!$group || count($group->order_ids ?? []) >= $groupSize) {
-                    $group = $this->createGroup($day, $lineId, $side, $accId, $matId, $bucket);
+                // Not enough to reach the minimum → leave these orders pending.
+                if ($existing + count($b['orders']) < $groupMin) {
+                    continue;
                 }
 
-                $ids = $group->order_ids ?? [];
-                $ids[] = $order->id;
-                $group->order_ids = $ids;
-                $group->save();
+                [$lineId, $side, $accId, $matId] = $b['dims'];
+                foreach ($b['orders'] as $order) {
+                    if (!$group || count($group->order_ids ?? []) >= $groupSize) {
+                        $group = $this->createGroup($day, $lineId, $side, $accId, $matId, $key);
+                    }
+                    $ids = $group->order_ids ?? [];
+                    $ids[] = $order->id;
+                    $group->order_ids = $ids;
+                    $group->save();
 
-                $order->gangsheet_group_id = $group->id;
-                $order->saveQuietly();
+                    $order->gangsheet_group_id = $group->id;
+                    $order->saveQuietly();
 
-                $openByBucket[$bucket] = $group;
-                $touched[$group->id] = true;
-                $assigned++;
+                    $touched[$group->id] = true;
+                    $assigned++;
+                }
             }
 
-            return ['assigned' => $assigned, 'groups_touched' => count($touched), 'production_day' => $day];
+            return ['assigned' => $assigned, 'groups_touched' => count($touched), 'production_day' => $day, 'group_min' => $groupMin, 'group_size' => $groupSize];
         });
 
         return response()->json($summary);
