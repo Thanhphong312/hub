@@ -485,7 +485,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $item = OrderItem::create([
                     'order_id' => $order->id,
                     'product_variant_id' => $itemData['product_variant_id'],
-                    'material_id' => $itemData['material_id'] ?? null,
+                    'material_id' => $this->resolveMaterialId($itemData['material_id'] ?? null, $itemData['product_variant_id']),
                     'accessory_item_id' => null, // set by syncItemAccessories below
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
@@ -2855,7 +2855,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $item = OrderItem::create([
                     'order_id' => $order->id,
                     'product_variant_id' => $itemData['product_variant_id'],
-                    'material_id' => $itemData['material_id'] ?? null,
+                    'material_id' => $this->resolveMaterialId($itemData['material_id'] ?? null, $itemData['product_variant_id']),
                     'accessory_item_id' => null,
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
@@ -2899,6 +2899,21 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
             ], 201);
         });
+    }
+
+    /**
+     * Resolve an order item's material: keep the explicitly provided id, else
+     * fall back to the product's default material (materials.is_default=1) for
+     * the variant's product. Returns null when the product has no default.
+     */
+    private function resolveMaterialId(?int $providedMaterialId, $variantId): ?int
+    {
+        if (!empty($providedMaterialId)) return (int) $providedMaterialId;
+        if (empty($variantId)) return null;
+        return \App\Models\Material::where('is_default', true)
+            ->whereIn('product_id', \App\Models\ProductVariant::where('id', $variantId)->select('product_id'))
+            ->orderBy('id')
+            ->value('id');
     }
 
     private function getVariantPrice(int $variantId, ?int $tierId): float
