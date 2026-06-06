@@ -34,6 +34,7 @@ class GangsheetService
                 'filename'           => $data['filename'],
                 'file_url'           => $data['file_url'],
                 'line_id'            => $data['line_id'] ?? null,
+                'page_format'        => $data['page_format'] ?? null,
                 'first_system_id'    => $data['first_system_id'] ?? null,
                 'last_system_id'     => $data['last_system_id'] ?? null,
                 'orders_count'       => (int) ($data['orders_count'] ?? count($orderIds)),

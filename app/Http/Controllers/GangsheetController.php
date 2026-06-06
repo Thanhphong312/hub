@@ -28,6 +28,14 @@ class GangsheetController extends Controller
         if ($request->filled('line_id')) {
             $query->where('line_id', $request->line_id);
         }
+        if ($request->filled('page_format')) {
+            // 'original' also covers legacy gangs (null format).
+            if ($request->page_format === 'original') {
+                $query->where(fn ($q) => $q->where('page_format', 'original')->orWhereNull('page_format'));
+            } else {
+                $query->where('page_format', $request->page_format);
+            }
+        }
 
         return response()->json($query->paginate($request->get('per_page', 20)));
     }
@@ -150,6 +158,7 @@ class GangsheetController extends Controller
             'filename' => 'required|string',
             'file_url' => 'required|url',
             'line_id' => 'nullable|string|max:16',
+            'page_format' => 'nullable|string|max:16',
             'first_system_id' => 'nullable|string',
             'last_system_id' => 'nullable|string',
             'orders_count' => 'required|integer|min:1',
@@ -166,6 +175,7 @@ class GangsheetController extends Controller
                 'filename'        => $request->filename,
                 'file_url'        => $request->file_url,
                 'line_id'         => $request->line_id,
+                'page_format'     => $request->page_format,
                 'first_system_id' => $request->first_system_id,
                 'last_system_id'  => $request->last_system_id,
                 'orders_count'    => (int) $request->orders_count,

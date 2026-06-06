@@ -240,6 +240,7 @@ class GangsheetGroupController extends Controller
             'filename'        => 'required|string',
             'file_url'        => 'required|url',
             'line_id'         => 'nullable|string|max:16',
+            'page_format'     => 'nullable|string|max:16',
             'first_system_id' => 'nullable|string',
             'last_system_id'  => 'nullable|string',
             'orders_count'    => 'required|integer|min:1',
@@ -255,7 +256,7 @@ class GangsheetGroupController extends Controller
         }
 
         $gs = $svc->record($request->only([
-            'filename', 'file_url', 'line_id', 'first_system_id', 'last_system_id',
+            'filename', 'file_url', 'line_id', 'page_format', 'first_system_id', 'last_system_id',
             'orders_count', 'metas_count', 'order_ids', 'meta_ids',
         ]), $request->user()?->id);
 
