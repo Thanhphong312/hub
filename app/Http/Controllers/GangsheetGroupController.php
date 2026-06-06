@@ -198,13 +198,19 @@ class GangsheetGroupController extends Controller
 
         $this->releaseStaleInternal();
 
-        $claimedIds = DB::transaction(function () use ($request) {
+        // Manual claim (explicit group_ids) closes those groups regardless of
+        // size. Auto claim (no ids) only takes groups that reached the minimum,
+        // so auto-close never gangs a barely-filled group.
+        $isManual = $request->filled('group_ids');
+        $min = $isManual ? 1 : max(1, (int) (AppSetting::getJson('gangsheet_group_min', ['min' => 1])['min'] ?? 1));
+
+        $claimedIds = DB::transaction(function () use ($request, $isManual, $min) {
             $q = GangsheetGroup::where('status', GangsheetGroup::STATUS_OPEN);
-            if ($request->filled('group_ids')) {
+            if ($isManual) {
                 $q->whereIn('id', $request->group_ids);
             }
             $rows = $q->lockForUpdate()->get()
-                ->filter(fn ($g) => count($g->order_ids ?? []) > 0)   // skip empty groups
+                ->filter(fn ($g) => count($g->order_ids ?? []) >= $min)   // skip empty / below-min groups
                 ->values();
 
             foreach ($rows as $g) {
@@ -393,11 +399,13 @@ class GangsheetGroupController extends Controller
     public function getAutomationConfig()
     {
         $size  = AppSetting::getJson('gangsheet_group_size', ['size' => 10]);
+        $minS  = AppSetting::getJson('gangsheet_group_min', ['min' => 1]);
         $auto  = AppSetting::getJson('gangsheet_auto_close', ['enabled' => false, 'hooks' => []]);
         $marks = AppSetting::getJson('gangsheet_close_marks', ['date' => null, 'fired' => []]);
 
         return response()->json([
             'group_size'     => (int) ($size['size'] ?? 10),
+            'group_min'      => (int) ($minS['min'] ?? 1),
             'auto_close'     => [
                 'enabled' => (bool) ($auto['enabled'] ?? false),
                 'hooks'   => array_values($auto['hooks'] ?? []),
@@ -411,6 +419,7 @@ class GangsheetGroupController extends Controller
     {
         $data = $request->validate([
             'group_size'           => 'sometimes|integer|min:1|max:1000',
+            'group_min'            => 'sometimes|integer|min:1|max:1000',
             'auto_close'           => 'sometimes|array',
             'auto_close.enabled'   => 'nullable|boolean',
             'auto_close.hooks'     => 'nullable|array',
@@ -419,6 +428,9 @@ class GangsheetGroupController extends Controller
 
         if (isset($data['group_size'])) {
             AppSetting::setJson('gangsheet_group_size', ['size' => (int) $data['group_size']]);
+        }
+        if (isset($data['group_min'])) {
+            AppSetting::setJson('gangsheet_group_min', ['min' => (int) $data['group_min']]);
         }
         if (isset($data['auto_close'])) {
             $cur = AppSetting::getJson('gangsheet_auto_close', ['enabled' => false, 'hooks' => []]);
