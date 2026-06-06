@@ -323,6 +323,54 @@ class GangsheetGroupController extends Controller
         return response()->json($result);
     }
 
+    // ── Delete a single group: detach all its orders → back to pending; drop
+    //    the gangsheet + label if it was generated (B2 PDF deleted client-side
+    //    via the returned url). ─────────────────────────────────────────────
+    public function destroy(GangsheetGroup $group)
+    {
+        $deletedFileUrl = DB::transaction(function () use ($group) {
+            $orderIds = $group->order_ids ?? [];
+            if (!empty($orderIds)) {
+                Order::whereIn('id', $orderIds)
+                    ->where('gangsheet_group_id', $group->id)
+                    ->update(['production' => false, 'gangsheet_group_id' => null]);
+                $itemIds = OrderItem::whereIn('order_id', $orderIds)->pluck('id');
+                OrderItemMeta::whereIn('order_item_id', $itemIds)
+                    ->where('key', 'regexp', self::QR_KEY_REGEX)
+                    ->update(['production' => false]);
+            }
+
+            $url = null;
+            if ($group->gangsheet_id) {
+                $old = Gangsheet::find($group->gangsheet_id);
+                if ($old) {
+                    $url = $old->file_url;
+                    GangsheetLabel::where('gangsheet_id', $old->id)->delete();
+                    $old->delete();
+                }
+            }
+            $group->delete();
+            return $url;
+        });
+
+        return response()->json(['message' => 'Group deleted', 'deleted_file_url' => $deletedFileUrl]);
+    }
+
+    // ── Delete ALL open groups (detach orders → pending). Used to rebuild after
+    //    changing group size. Open groups have no gangsheet, so no B2 cleanup. ─
+    public function deleteOpen()
+    {
+        $count = DB::transaction(function () {
+            $ids = GangsheetGroup::where('status', GangsheetGroup::STATUS_OPEN)->pluck('id');
+            if ($ids->isEmpty()) return 0;
+            Order::whereIn('gangsheet_group_id', $ids)
+                ->update(['production' => false, 'gangsheet_group_id' => null]);
+            return GangsheetGroup::whereIn('id', $ids)->delete();
+        });
+
+        return response()->json(['message' => "Deleted {$count} open group(s)", 'count' => $count]);
+    }
+
     // ── Stale release (app calls this; also called inline before assign/claim) ─
     public function releaseStale()
     {

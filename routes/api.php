@@ -170,10 +170,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheet-groups/claim', [GangsheetGroupController::class, 'claim']);
         Route::post('/gangsheet-groups/release-stale', [GangsheetGroupController::class, 'releaseStale']);
         Route::post('/gangsheet-groups/mark-fired', [GangsheetGroupController::class, 'markFired']);
+        Route::post('/gangsheet-groups/delete-open', [GangsheetGroupController::class, 'deleteOpen']);
         Route::get('/gangsheet-groups', [GangsheetGroupController::class, 'index']);
         Route::get('/gangsheet-groups/{group}', [GangsheetGroupController::class, 'show']);
         Route::post('/gangsheet-groups/{group}/finalize', [GangsheetGroupController::class, 'finalize']);
         Route::post('/gangsheet-groups/{group}/remove-design', [GangsheetGroupController::class, 'removeDesign']);
+        Route::delete('/gangsheet-groups/{group}', [GangsheetGroupController::class, 'destroy']);
 
         // Gangsheet label — parallel grouping of convert_labels for orders
         // already in a _qr gangsheet. Scanned for bulk complete-all.
