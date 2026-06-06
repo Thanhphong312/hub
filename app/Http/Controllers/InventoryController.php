@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Accessory;
 use App\Models\AccessoryPrice;
+use App\Models\Material;
 use App\Models\Order;
 use App\Models\ProductVariant;
 use App\Models\StockImport;
@@ -37,6 +38,8 @@ class InventoryController extends Controller
             // New unified target: accessory (one stock pool per accessory).
             'accessory:id,name,product_id',
             'accessory.product:id,name',
+            'material:id,name,product_id',
+            'material.product:id,name',
             'supply:id,name,code',
             // Legacy: rows imported before per-accessory unification still
             // carry accessory_price_id. Load for display only.
@@ -55,6 +58,7 @@ class InventoryController extends Controller
                     $w->whereNotNull('accessory_id')->orWhereNotNull('accessory_price_id');
                 });
             }
+            if ($request->target === 'material') $q->whereNotNull('material_id');
             if ($request->target === 'supply') $q->whereNotNull('supply_id');
         }
         if ($request->filled('product_variant_id')) {
@@ -81,6 +85,7 @@ class InventoryController extends Controller
         $request->validate([
             'product_variant_id' => 'nullable|exists:product_variants,id',
             'accessory_id'       => 'nullable|exists:accessories,id',
+            'material_id'        => 'nullable|exists:materials,id',
             'supply_id'          => 'nullable|exists:supplies,id',
             'accessory_price_id' => 'nullable|exists:accessory_prices,id',
             'price_mode'   => 'required|in:per_item,per_package',
@@ -96,6 +101,7 @@ class InventoryController extends Controller
         $supplyId         = $request->supply_id;
         $accessoryPriceId = $request->accessory_price_id;
         $accessoryId      = $request->accessory_id;
+        $materialId       = $request->material_id;
 
         // Legacy callers may pass only accessory_id (pre-unshare). Auto-resolve
         // to the FIRST accessory_price row of that accessory so the import
@@ -112,9 +118,9 @@ class InventoryController extends Controller
             $accessoryId = AccessoryPrice::where('id', $accessoryPriceId)->value('accessory_id');
         }
 
-        $targetCount = ($variantId ? 1 : 0) + ($accessoryPriceId ? 1 : 0) + ($supplyId ? 1 : 0);
+        $targetCount = ($variantId ? 1 : 0) + ($accessoryPriceId ? 1 : 0) + ($materialId ? 1 : 0) + ($supplyId ? 1 : 0);
         if ($targetCount !== 1) {
-            return response()->json(['message' => 'Provide exactly one of product_variant_id, accessory_price_id (or accessory_id), or supply_id'], 422);
+            return response()->json(['message' => 'Provide exactly one of product_variant_id, accessory_price_id (or accessory_id), material_id, or supply_id'], 422);
         }
 
         $mode = $request->price_mode;
@@ -136,11 +142,12 @@ class InventoryController extends Controller
             $totalCost = round((float) $request->unit_price * $quantity, 2);
         }
 
-        return DB::transaction(function () use ($request, $variantId, $accessoryId, $accessoryPriceId, $supplyId, $mode, $quantity, $packageSize, $packageCount, $totalCost) {
+        return DB::transaction(function () use ($request, $variantId, $accessoryId, $accessoryPriceId, $materialId, $supplyId, $mode, $quantity, $packageSize, $packageCount, $totalCost) {
             $import = StockImport::create([
                 'product_variant_id' => $variantId,
                 'accessory_id'       => $accessoryId,        // historical filter convenience
                 'accessory_price_id' => $accessoryPriceId,   // source of truth target
+                'material_id'        => $materialId,
                 'supply_id'          => $supplyId,
                 'quantity'      => $quantity,
                 'price_mode'    => $mode,
@@ -160,6 +167,8 @@ class InventoryController extends Controller
                 // group so all tier rows of the same code share one pool.
                 $canonical = $this->canonicalAccessoryPriceId($accessoryPriceId) ?? $accessoryPriceId;
                 AccessoryPrice::where('id', $canonical)->increment('stock', $quantity);
+            } elseif ($materialId) {
+                Material::where('id', $materialId)->increment('stock', $quantity);
             } else {
                 Supply::where('id', $supplyId)->increment('stock', $quantity);
             }
@@ -170,6 +179,8 @@ class InventoryController extends Controller
                     'productVariant.product:id,name',
                     'accessory:id,name,product_id',
                     'accessory.product:id,name',
+                    'material:id,name,product_id',
+                    'material.product:id,name',
                     'supply:id,name,code',
                     'accessoryPrice.accessory:id,name,product_id',
                     'accessoryPrice.accessory.product:id,name',
@@ -190,6 +201,8 @@ class InventoryController extends Controller
             } elseif ($import->accessory_price_id) {
                 $canonical = $this->canonicalAccessoryPriceId($import->accessory_price_id) ?? $import->accessory_price_id;
                 AccessoryPrice::where('id', $canonical)->decrement('stock', $import->quantity);
+            } elseif ($import->material_id) {
+                Material::where('id', $import->material_id)->decrement('stock', $import->quantity);
             } elseif ($import->supply_id) {
                 Supply::where('id', $import->supply_id)->decrement('stock', $import->quantity);
             } elseif ($import->accessory_id) {
@@ -290,6 +303,21 @@ class InventoryController extends Controller
                 $accessoriesTouched++;
             }
 
+            // Materials ─────────────────────────────────────────────────────
+            // Per-material pool: stock = Σ imports.quantity for that material_id.
+            $materialImports = DB::table('stock_imports')
+                ->whereNotNull('material_id')
+                ->groupBy('material_id')
+                ->selectRaw('material_id, SUM(quantity) AS imported')
+                ->pluck('imported', 'material_id');
+
+            $materialsTouched = 0;
+            foreach ($materialImports as $mid => $imported) {
+                Material::where('id', $mid)->update(['stock' => (int) $imported]);
+                $materialsTouched++;
+            }
+            Material::whereNotIn('id', $materialImports->keys())->update(['stock' => 0]);
+
             // Supplies ─────────────────────────────────────────────────────
             // Each supply: stock = Σ imports.quantity for this supply_id − N
             // where N is the count of shipped orders ONLY for the default
@@ -321,6 +349,7 @@ class InventoryController extends Controller
                 'message' => 'Stock resynced from history',
                 'variants_updated'   => $variantsTouched,
                 'accessories_updated'=> $accessoriesTouched,
+                'materials_updated'  => $materialsTouched,
                 'supplies_updated'   => $suppliesTouched,
                 'orders_marked'      => $ordersMarked,
             ]);
@@ -364,6 +393,9 @@ class InventoryController extends Controller
             ->get()
             ->groupBy(fn ($p) => $p->accessory_id . '|' . ($p->accessory_code ?? ''))
             ->map(fn ($group) => $group->first()); // canonical row carries the stock
+        // Materials (chất liệu) — per-material stock pool, flat, grouped by product.
+        $materials = Material::with('product:id,name')
+            ->orderBy('product_id')->orderBy('id')->get();
         // Supplies (label paper, packaging, etc.) — flat, default-label first.
         $supplies = Supply::orderByDesc('is_default_label')->orderBy('id')->get();
 
@@ -375,7 +407,7 @@ class InventoryController extends Controller
             fputcsv($fh, ['', '', '', '', '', '', '', '', $title, '', '', '']);
         };
 
-        $callback = function () use ($headers, $variants, $accessoryRows, $supplies, $writeSectionHeader) {
+        $callback = function () use ($headers, $variants, $accessoryRows, $materials, $supplies, $writeSectionHeader) {
             $fh = fopen('php://output', 'w');
             fwrite($fh, "\xEF\xBB\xBF");
             fputcsv($fh, $headers);
@@ -433,6 +465,28 @@ class InventoryController extends Controller
                         $p->accessory?->name ?? '',
                         '',
                         max(0, (int) ($p->stock ?? 0)),
+                    ]);
+                }
+            }
+
+            // ── Materials (chất liệu) — one row per material; stock per material.
+            //     sku_or_code = material id (materials have no code).
+            if ($materials->isNotEmpty()) {
+                fputcsv($fh, array_fill(0, count($headers), ''));
+                $writeSectionHeader($fh, count($headers), '════════ MATERIALS (chất liệu) ════════');
+
+                foreach ($materials as $m) {
+                    fputcsv($fh, [
+                        'material',
+                        (string) $m->id,
+                        '',
+                        '',
+                        '', '', '',
+                        '',
+                        $m->product?->name ?? '',
+                        $m->name ?? '',
+                        '',
+                        (int) ($m->stock ?? 0),
                     ]);
                 }
             }
@@ -535,6 +589,7 @@ class InventoryController extends Controller
                 //     unique accessory_id (we collapse tier dups).
                 $variantId        = null;
                 $accessoryPriceId = null;
+                $materialId       = null;
                 $supplyId         = null;
                 if ($targetType === 'variant') {
                     $variant = \App\Models\ProductVariant::where('sku', $skuOrCode)->first();
@@ -568,8 +623,17 @@ class InventoryController extends Controller
                     }
                     if (!$supply) { $errors[] = "Line {$lineNum}: supply code/id '{$skuOrCode}' not found"; continue; }
                     $supplyId = $supply->id;
+                } elseif ($targetType === 'material') {
+                    // Materials have no code → sku_or_code is the material id.
+                    if (!ctype_digit((string) $skuOrCode)) {
+                        $errors[] = "Line {$lineNum}: material needs a numeric id in sku_or_code"; continue;
+                    }
+                    if (!Material::where('id', (int) $skuOrCode)->exists()) {
+                        $errors[] = "Line {$lineNum}: material id '{$skuOrCode}' not found"; continue;
+                    }
+                    $materialId = (int) $skuOrCode;
                 } else {
-                    $errors[] = "Line {$lineNum}: target_type must be 'variant', 'accessory' or 'supply'"; continue;
+                    $errors[] = "Line {$lineNum}: target_type must be 'variant', 'accessory', 'material' or 'supply'"; continue;
                 }
 
                 // Resolve qty + total based on price_mode.
@@ -601,6 +665,7 @@ class InventoryController extends Controller
                     'product_variant_id' => $variantId,
                     'accessory_id'       => $accessoryIdSync,    // history/back-compat
                     'accessory_price_id' => $accessoryPriceId,   // per-code target
+                    'material_id'        => $materialId,
                     'supply_id'          => $supplyId,
                     'quantity'      => $quantity,
                     'price_mode'    => $mode,
@@ -616,6 +681,8 @@ class InventoryController extends Controller
                     ProductVariant::where('id', $variantId)->increment('stock', $quantity);
                 } elseif ($accessoryPriceId) {
                     AccessoryPrice::where('id', $accessoryPriceId)->increment('stock', $quantity);
+                } elseif ($materialId) {
+                    Material::where('id', $materialId)->increment('stock', $quantity);
                 } else {
                     Supply::where('id', $supplyId)->increment('stock', $quantity);
                 }
@@ -673,6 +740,19 @@ class InventoryController extends Controller
             })
             ->values();
 
+        // Materials (chất liệu) — per-material stock pool.
+        $materials = Material::with('product:id,name')
+            ->orderBy('product_id')->orderBy('id')
+            ->get()
+            ->map(fn ($m) => [
+                'kind'         => 'material',
+                'id'           => $m->id,
+                'product_name' => $m->product?->name,
+                'sku'          => (string) $m->id,
+                'label'        => $m->name ?? '',
+                'stock'        => max(0, (int) $m->stock),
+            ]);
+
         $supplies = Supply::orderByDesc('is_default_label')->orderBy('id')
             ->get()
             ->map(fn ($s) => [
@@ -689,6 +769,7 @@ class InventoryController extends Controller
         return response()->json([
             'variants'    => $variants,
             'accessories' => $accessories,
+            'materials'   => $materials,
             'supplies'    => $supplies,
         ]);
     }

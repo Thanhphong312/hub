@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Material extends Model
 {
-    protected $fillable = ['product_id', 'name', 'description', 'is_default', 'status'];
+    protected $fillable = ['product_id', 'name', 'description', 'is_default', 'status', 'stock'];
 
     protected $casts = ['is_default' => 'boolean'];
 
