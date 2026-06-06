@@ -142,6 +142,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Conversion (only for users with convert=1)
     Route::get('/conversion/pending', [ConversionController::class, 'pending']);
+    Route::post('/conversion/resize-targets', [ConversionController::class, 'resizeTargets']);
     Route::post('/conversion/{item}/qr-meta', [ConversionController::class, 'uploadQrMeta']);
     Route::post('/conversion/order/{order}/convert-label', [ConversionController::class, 'uploadConvertLabel']);
     Route::get('/conversion/label-lookup/{idOrSystemId}', [ConversionController::class, 'lookupLabelTarget']);

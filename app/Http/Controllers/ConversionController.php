@@ -223,6 +223,87 @@ class ConversionController extends Controller
     }
 
     /**
+     * Targets for the resize-reconvert flow. For each EXISTING _qr meta on the
+     * selected orders' items, return its source design URL so the desktop app
+     * can re-compose at a new size and REPLACE it in place via uploadQrMeta().
+     * Unlike pending(), this returns already-generated _qr (we want to re-render
+     * them) and never deletes anything — independent of the old reconvert flow.
+     */
+    public function resizeTargets(Request $request)
+    {
+        $user = $request->user();
+        if (!$user->convert) {
+            return response()->json(['message' => 'Convert mode is not enabled for this account'], 403);
+        }
+        $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
+
+        $request->validate([
+            'system_ids'   => 'required|array|min:1',
+            'system_ids.*' => 'string',
+        ]);
+        $ids = array_values(array_unique(array_map('trim', $request->system_ids)));
+
+        $query = Order::with([
+                'items.metas',
+                'items.accessoryPrice',
+                'items.productVariant.product:id,name,line_id',
+            ])
+            ->whereIn('system_id', $ids);
+        if (!$isStaff) {
+            $query->where('user_id', $user->id);
+        }
+        $orders = $query->get();
+
+        $items = [];
+        foreach ($orders as $order) {
+            $accessorySummary = $this->computeAccessorySummary($order);
+            foreach ($order->items as $item) {
+                $byKey = $item->metas->keyBy('key');
+
+                $product = $item->productVariant?->product;
+                $lineId = strtoupper((string) ($product->line_id ?? ''));
+                $productName = strtolower((string) ($product->name ?? ''));
+                $isGcProduct = $lineId === 'GC'
+                    || str_starts_with($lineId, 'GC')
+                    || str_ends_with($lineId, '_C')
+                    || (strlen($lineId) === 2 && str_ends_with($lineId, 'C'))
+                    || str_contains($productName, 'greeting')
+                    || str_contains($productName, 'card');
+
+                $targets = [];
+                foreach ($item->metas as $m) {
+                    if (!preg_match('/^(front|back|left|right|neck|special)_qr(_\d+)?$/', $m->key, $mm)) continue;
+                    $sourceKey = $mm[1];
+                    $sourceMeta = $byKey->get($sourceKey);
+                    if (!$sourceMeta || empty($sourceMeta->value)) continue;   // need the source design to re-render
+                    $targets[] = [
+                        'target_key'            => $m->key,
+                        'source_key'            => $sourceKey,
+                        'source_value'          => $sourceMeta->value,
+                        'is_greeting_card_back' => $isGcProduct && $sourceKey === 'back',
+                    ];
+                }
+
+                if (!empty($targets)) {
+                    $items[] = [
+                        'order_item_id'     => $item->id,
+                        'order_id'          => $order->id,
+                        'system_id'         => $order->system_id,
+                        'accessory_summary' => $accessorySummary,
+                        'line_id'           => $product->line_id ?? null,
+                        'targets'           => $targets,
+                    ];
+                }
+            }
+        }
+
+        $found = $orders->pluck('system_id')->all();
+        $missing = array_values(array_diff($ids, $found));
+
+        return response()->json(['items' => $items, 'missing' => $missing]);
+    }
+
+    /**
      * Per-order accessory summary, e.g. "5P-2W-1N":
      *   quantities are aggregated by letter (first char of style or accessory_code,
      *   "N" when no accessory). Items sharing the same letter are merged so a
