@@ -434,7 +434,7 @@ class InventoryController extends Controller
                 fputcsv($fh, [
                     'variant',
                     $v->sku ?? '',
-                    '',
+                    'per_item',
                     '',
                     '', '', '',
                     '',
@@ -457,7 +457,7 @@ class InventoryController extends Controller
                     fputcsv($fh, [
                         'accessory',
                         $code,
-                        '',
+                        'per_item',
                         '',
                         '', '', '',
                         '',
@@ -479,7 +479,7 @@ class InventoryController extends Controller
                     fputcsv($fh, [
                         'material',
                         (string) $m->id,
-                        '',
+                        'per_item',
                         '',
                         '', '', '',
                         '',
@@ -503,7 +503,7 @@ class InventoryController extends Controller
                     fputcsv($fh, [
                         'supply',
                         $s->code ?: (string) $s->id,
-                        '',
+                        'per_item',
                         '',
                         '', '', '',
                         '',
@@ -573,7 +573,14 @@ class InventoryController extends Controller
                 $data = array_map(fn ($v) => is_string($v) ? trim($v) : $v, $data);
 
                 $mode = strtolower($data['price_mode'] ?? '');
-                if ($mode === '') { $skipped++; continue; } // empty reference row
+                // A row is "to import" only if it carries a quantity/package or
+                // a unit_price. Untouched template rows + section dividers have
+                // none → skip. price_mode defaults to per_item when blank
+                // (template pre-fills it, but it stays editable).
+                $hasQty = ($data['quantity'] ?? '') !== '' || ($data['package_size'] ?? '') !== '' || ($data['package_count'] ?? '') !== '';
+                $hasPrice = ($data['unit_price'] ?? '') !== '';
+                if (!$hasQty && !$hasPrice) { $skipped++; continue; }
+                if ($mode === '') $mode = StockImport::MODE_PER_ITEM;
 
                 $targetType = strtolower($data['target_type'] ?? '');
                 $skuOrCode  = $data['sku_or_code'] ?? '';
