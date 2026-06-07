@@ -610,15 +610,22 @@ class InventoryController extends Controller
                         if (!$exists) { $errors[] = "Line {$lineNum}: accessory_price id '{$skuOrCode}' not found"; continue; }
                         $accessoryPriceId = (int) $skuOrCode;
                     } else {
-                        $priceIds = AccessoryPrice::where('accessory_code', $skuOrCode)
-                            ->distinct()->pluck('id')->all();
-                        if (count($priceIds) === 0) {
+                        // A code may exist on several tier rows of the SAME
+                        // accessory (stock is pooled per code on the canonical
+                        // row). Resolve by distinct accessory_id: one → use that
+                        // group's canonical (lowest-id) price row; several → the
+                        // code is ambiguous across accessories → ask for an id.
+                        $accessoryIds = AccessoryPrice::where('accessory_code', $skuOrCode)
+                            ->distinct()->pluck('accessory_id')->all();
+                        if (count($accessoryIds) === 0) {
                             $errors[] = "Line {$lineNum}: accessory code '{$skuOrCode}' not found"; continue;
                         }
-                        if (count($priceIds) > 1) {
-                            $errors[] = "Line {$lineNum}: accessory code '{$skuOrCode}' maps to multiple price rows — use numeric id instead"; continue;
+                        if (count($accessoryIds) > 1) {
+                            $errors[] = "Line {$lineNum}: accessory code '{$skuOrCode}' belongs to multiple accessories — use numeric id instead"; continue;
                         }
-                        $accessoryPriceId = (int) $priceIds[0];
+                        $accessoryPriceId = (int) AccessoryPrice::where('accessory_id', $accessoryIds[0])
+                            ->where('accessory_code', $skuOrCode)
+                            ->orderBy('id')->value('id');
                     }
                 } elseif ($targetType === 'supply') {
                     // sku_or_code resolves by exact match on supplies.code first,
@@ -687,7 +694,8 @@ class InventoryController extends Controller
                 if ($variantId) {
                     ProductVariant::where('id', $variantId)->increment('stock', $quantity);
                 } elseif ($accessoryPriceId) {
-                    AccessoryPrice::where('id', $accessoryPriceId)->increment('stock', $quantity);
+                    $canonical = $this->canonicalAccessoryPriceId($accessoryPriceId) ?? $accessoryPriceId;
+                    AccessoryPrice::where('id', $canonical)->increment('stock', $quantity);
                 } elseif ($materialId) {
                     Material::where('id', $materialId)->increment('stock', $quantity);
                 } else {
