@@ -50,11 +50,18 @@ class GangsheetGroupController extends Controller
 
         $groupSize = max(1, (int) (AppSetting::getJson('gangsheet_group_size', ['size' => 10])['size'] ?? 10));
 
-        $summary = DB::transaction(function () use ($groupSize) {
+        // fulfill_status (= order.status) filter: from the request, else the
+        // saved setting. Empty = every non-shipped order.
+        $statuses = $request->filled('statuses')
+            ? array_map('intval', (array) $request->statuses)
+            : array_map('intval', (array) AppSetting::getJson('gangsheet_assign_statuses', []));
+
+        $summary = DB::transaction(function () use ($groupSize, $statuses) {
             $pending = Order::with($this->orderEagerLoads())
                 ->where('production', false)
                 ->whereNull('gangsheet_group_id')
                 ->where('status', '!=', Order::STATUS_SHIPPED)
+                ->when(!empty($statuses), fn ($q) => $q->whereIn('status', $statuses))
                 ->whereHas('items.metas', fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX)->where('production', false))
                 ->orderBy('id', 'asc')
                 ->lockForUpdate()
@@ -409,7 +416,8 @@ class GangsheetGroupController extends Controller
         $marks = AppSetting::getJson('gangsheet_close_marks', ['date' => null, 'fired' => []]);
 
         return response()->json([
-            'group_size'     => (int) ($size['size'] ?? 10),
+            'group_size'      => (int) ($size['size'] ?? 10),
+            'assign_statuses' => array_values(array_map('intval', (array) AppSetting::getJson('gangsheet_assign_statuses', []))),
             'auto_close'     => [
                 'enabled' => (bool) ($auto['enabled'] ?? false),
                 'hooks'   => array_values($auto['hooks'] ?? []),
@@ -423,6 +431,8 @@ class GangsheetGroupController extends Controller
     {
         $data = $request->validate([
             'group_size'           => 'sometimes|integer|min:1|max:1000',
+            'assign_statuses'      => 'sometimes|array',
+            'assign_statuses.*'    => 'integer|min:0|max:7',
             'auto_close'           => 'sometimes|array',
             'auto_close.enabled'   => 'nullable|boolean',
             'auto_close.hooks'     => 'nullable|array',
@@ -431,6 +441,9 @@ class GangsheetGroupController extends Controller
 
         if (isset($data['group_size'])) {
             AppSetting::setJson('gangsheet_group_size', ['size' => (int) $data['group_size']]);
+        }
+        if (isset($data['assign_statuses'])) {
+            AppSetting::setJson('gangsheet_assign_statuses', array_values(array_map('intval', $data['assign_statuses'])));
         }
         if (isset($data['auto_close'])) {
             $cur = AppSetting::getJson('gangsheet_auto_close', ['enabled' => false, 'hooks' => []]);

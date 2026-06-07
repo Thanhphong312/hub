@@ -111,6 +111,10 @@ class GangsheetController extends Controller
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
         }
+        // Optional fulfill_status (= order.status) multi-filter.
+        if ($request->filled('statuses')) {
+            $query->whereIn('status', array_map('intval', (array) $request->statuses));
+        }
 
         return response()->json($query->paginate($request->get('per_page', 100)));
     }
