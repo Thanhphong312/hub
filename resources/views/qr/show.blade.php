@@ -251,10 +251,12 @@
                 <span class="text-orange-700 text-sm font-semibold">Total Qty</span>
                 <span class="font-extrabold text-orange-600 text-3xl leading-none">{{ $totalQty }}</span>
             </div>
+            @unless (($user->role->slug ?? '') === 'partner')
             <div class="flex justify-between"><span class="text-neutral-500">Print Cost</span><span class="font-medium">${{ $order->print_cost }}</span></div>
             <div class="flex justify-between"><span class="text-neutral-500">Shipping Cost</span><span class="font-medium">${{ $order->shipping_cost }}</span></div>
             <div class="flex justify-between border-t border-neutral-100 pt-1.5"><span class="text-neutral-500">Total</span><span class="font-semibold text-neutral-800">${{ $order->total_cost }}</span></div>
             <div class="flex justify-between"><span class="text-neutral-500">Paid</span><span class="font-medium {{ $order->paid_cost >= $order->total_cost ? 'text-green-600' : 'text-red-500' }}">${{ $order->paid_cost }}</span></div>
+            @endunless
             <div class="flex justify-between text-xs text-neutral-500 pt-1.5 border-t border-neutral-100"><span>Created</span><span>{{ $order->created_at->toDateTimeString() }}</span></div>
             @if ($order->completed_time)
                 <div class="flex justify-between text-xs text-neutral-500"><span>Completed</span><span>{{ $order->completed_time->toDateTimeString() }}</span></div>

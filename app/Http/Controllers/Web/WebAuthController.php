@@ -33,7 +33,7 @@ class WebAuthController extends Controller
             return back()->withErrors(['email' => 'Account is inactive.']);
         }
 
-        if (!$user->role || !in_array($user->role->slug, ['admin', 'support'])) {
+        if (!$user->role || !in_array($user->role->slug, ['admin', 'support', 'partner'])) {
             Auth::logout();
             return back()->withErrors(['email' => 'You are not authorized to access this portal.']);
         }

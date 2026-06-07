@@ -12,7 +12,7 @@ class EnsureWebPortalAccess
     {
         $user = $request->user();
 
-        if (!$user || !$user->role || !in_array($user->role->slug, ['admin', 'support'])) {
+        if (!$user || !$user->role || !in_array($user->role->slug, ['admin', 'support', 'partner'])) {
             Auth::logout();
             $request->session()->invalidate();
             $request->session()->regenerateToken();
