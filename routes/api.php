@@ -6,6 +6,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\GangsheetController;
 use App\Http\Controllers\GangsheetGroupController;
 use App\Http\Controllers\InventoryController;
+use App\Http\Controllers\InventoryForecastController;
 use App\Http\Controllers\GangsheetLabelController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PartnerController;
@@ -238,6 +239,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/inventory/imports', [InventoryController::class, 'index']);
         Route::post('/inventory/imports', [InventoryController::class, 'store']);
         Route::delete('/inventory/imports/{import}', [InventoryController::class, 'destroy']);
+
+        // AI forecast + purchase orders
+        Route::get('/inventory/forecast', [InventoryForecastController::class, 'forecast']);
+        Route::post('/inventory/forecast/ai', [InventoryForecastController::class, 'aiForecast']);
+        Route::get('/inventory/ai-config', [InventoryForecastController::class, 'getAiConfig']);
+        Route::put('/inventory/ai-config', [InventoryForecastController::class, 'updateAiConfig']);
+        Route::get('/inventory/purchase-orders', [InventoryForecastController::class, 'poIndex']);
+        Route::post('/inventory/purchase-orders', [InventoryForecastController::class, 'poStore']);
+        Route::post('/inventory/purchase-orders/{po}/approve', [InventoryForecastController::class, 'poApprove']);
+        Route::post('/inventory/purchase-orders/{po}/receive', [InventoryForecastController::class, 'poReceive']);
+        Route::delete('/inventory/purchase-orders/{po}', [InventoryForecastController::class, 'poDestroy']);
     });
 
     // Users (admin only)
