@@ -8,6 +8,7 @@ use App\Http\Controllers\GangsheetGroupController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\GangsheetLabelController;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\PartnerController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\SettingController;
 use App\Http\Controllers\TelegramController;
@@ -156,6 +157,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(CheckRole::class . ':admin,support')->group(function () {
         Route::get('/gangsheets/pending-orders', [GangsheetController::class, 'pendingOrders']);
         Route::post('/gangsheets/lookup-orders', [GangsheetController::class, 'lookupOrders']);
+        // Partner assignment (admin assigns gangs to partner users).
+        Route::get('/gangsheets/partner-users', [GangsheetController::class, 'partnerUsers']);
+        Route::put('/gangsheets/{gangsheet}/partners', [GangsheetController::class, 'setPartners']);
         Route::get('/gangsheets', [GangsheetController::class, 'index']);
         Route::post('/gangsheets', [GangsheetController::class, 'store']);
         Route::post('/gangsheets/bulk-delete', [GangsheetController::class, 'bulkDestroy']);
@@ -187,6 +191,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheet-labels/{gangsheetLabel}/complete-all', [GangsheetLabelController::class, 'completeAll']);
         Route::put('/gangsheet-labels/{gangsheetLabel}/file-url', [GangsheetLabelController::class, 'updateFileUrl']);
         Route::delete('/gangsheet-labels/{gangsheetLabel}', [GangsheetLabelController::class, 'destroy']);
+    });
+
+    // Partner app (partner-bullstart) — partner sees only assigned gangsheets.
+    // Admin allowed too for testing/support.
+    Route::middleware(CheckRole::class . ':partner,admin')->prefix('partner')->group(function () {
+        Route::get('/dashboard', [PartnerController::class, 'dashboard']);
+        Route::get('/gangsheets', [PartnerController::class, 'gangsheets']);
+        Route::get('/gangsheets/{gangsheet}', [PartnerController::class, 'show']);
     });
 
     // VNPay (authenticated — seller initiates a deposit)

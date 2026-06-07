@@ -59,6 +59,12 @@ class User extends Authenticatable
         return $this->hasMany(Order::class);
     }
 
+    // Gangsheets an admin assigned to this partner user (partner-bullstart app).
+    public function assignedGangsheets()
+    {
+        return $this->belongsToMany(Gangsheet::class, 'gangsheet_partner', 'user_id', 'gangsheet_id')->withTimestamps();
+    }
+
     public function walletTransactions()
     {
         return $this->hasMany(WalletTransaction::class);

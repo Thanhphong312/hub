@@ -32,4 +32,10 @@ class Gangsheet extends Model
     {
         return $this->belongsTo(User::class, 'created_by_user_id');
     }
+
+    // Partner users this gangsheet is assigned to (visible in partner-bullstart).
+    public function partners()
+    {
+        return $this->belongsToMany(User::class, 'gangsheet_partner', 'gangsheet_id', 'user_id')->withTimestamps();
+    }
 }

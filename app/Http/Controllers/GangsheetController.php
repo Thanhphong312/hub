@@ -17,7 +17,7 @@ class GangsheetController extends Controller
 
     public function index(Request $request)
     {
-        $query = Gangsheet::with('creator:id,name')->orderBy('id', 'desc');
+        $query = Gangsheet::with('creator:id,name', 'partners:id,name')->orderBy('id', 'desc');
 
         if ($request->filled('date_from')) {
             $query->whereDate('created_at', '>=', $request->date_from);
@@ -40,9 +40,34 @@ class GangsheetController extends Controller
         return response()->json($query->paginate($request->get('per_page', 20)));
     }
 
+    /** Users with the 'partner' role — for the admin "assign to partner" picker. */
+    public function partnerUsers()
+    {
+        return response()->json(
+            \App\Models\User::whereHas('role', fn ($q) => $q->where('slug', 'partner'))
+                ->select('id', 'name', 'email')
+                ->orderBy('name')
+                ->get()
+        );
+    }
+
+    /** Admin sets which partner users a gangsheet is assigned to. */
+    public function setPartners(Request $request, Gangsheet $gangsheet)
+    {
+        $request->validate([
+            'user_ids'   => 'present|array',
+            'user_ids.*' => 'integer|exists:users,id',
+        ]);
+        $gangsheet->partners()->sync($request->user_ids ?? []);
+        return response()->json([
+            'message'     => 'Partners updated',
+            'partner_ids' => $gangsheet->partners()->pluck('users.id'),
+        ]);
+    }
+
     public function show(Gangsheet $gangsheet)
     {
-        $gangsheet->load('creator:id,name');
+        $gangsheet->load('creator:id,name', 'partners:id,name');
         $orderIds = $gangsheet->order_ids ?? [];
         $orders = empty($orderIds)
             ? collect()
