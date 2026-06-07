@@ -62,7 +62,8 @@ class User extends Authenticatable
     // Gangsheets an admin assigned to this partner user (partner-bullstart app).
     public function assignedGangsheets()
     {
-        return $this->belongsToMany(Gangsheet::class, 'gangsheet_partner', 'user_id', 'gangsheet_id')->withTimestamps();
+        return $this->belongsToMany(Gangsheet::class, 'gangsheet_partner', 'user_id', 'gangsheet_id')
+            ->withPivot('printed_at')->withTimestamps();
     }
 
     public function walletTransactions()

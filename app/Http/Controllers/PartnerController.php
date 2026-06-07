@@ -71,4 +71,17 @@ class PartnerController extends Controller
 
         return response()->json(['gangsheet' => $gangsheet, 'orders' => $orders]);
     }
+
+    /** Partner toggles the "đã in" mark on one of their assigned gangsheets. */
+    public function markPrinted(Request $request, Gangsheet $gangsheet)
+    {
+        $request->validate(['printed' => 'required|boolean']);
+        $user = $request->user();
+        if (!$user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
+            return response()->json(['message' => 'Not found'], 404);
+        }
+        $printedAt = $request->boolean('printed') ? now() : null;
+        $user->assignedGangsheets()->updateExistingPivot($gangsheet->id, ['printed_at' => $printedAt]);
+        return response()->json(['gangsheet_id' => $gangsheet->id, 'printed_at' => $printedAt]);
+    }
 }
