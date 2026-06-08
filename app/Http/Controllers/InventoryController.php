@@ -788,4 +788,38 @@ class InventoryController extends Controller
             'supplies'    => $supplies,
         ]);
     }
+
+    /**
+     * Manually set the on-hand stock of a single item (inline edit on the
+     * Current stock page). `id` is the same id the stock() rows carry — for
+     * accessories that is the canonical accessory_price.id where stock lives.
+     * Note: resyncStock() recomputes variant/accessory stock from imports, so
+     * a manual override there is superseded the next time resync runs.
+     */
+    public function setStockValue(Request $request)
+    {
+        $data = $request->validate([
+            'kind'  => 'required|in:variant,accessory,material,supply',
+            'id'    => 'required|integer',
+            'stock' => 'required|integer|min:0',
+        ]);
+        $model = match ($data['kind']) {
+            'variant'   => ProductVariant::find($data['id']),
+            'accessory' => AccessoryPrice::find($data['id']),
+            'material'  => Material::find($data['id']),
+            'supply'    => Supply::find($data['id']),
+        };
+        if (!$model) {
+            return response()->json(['message' => 'Item not found'], 404);
+        }
+        $model->stock = $data['stock'];
+        $model->save();
+
+        return response()->json([
+            'message' => 'Stock updated',
+            'kind'    => $data['kind'],
+            'id'      => (int) $data['id'],
+            'stock'   => (int) $model->stock,
+        ]);
+    }
 }
