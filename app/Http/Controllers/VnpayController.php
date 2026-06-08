@@ -74,17 +74,25 @@ class VnpayController extends Controller
         $minVnd = $this->setting('min_vnd');
         $request->validate([
             'vnd_amount' => "required|numeric|min:{$minVnd}",
+            'user_id'    => 'sometimes|exists:users,id',
         ]);
+
+        // Sellers can only top up their own wallet; admin/staff can top up on
+        // behalf of any user (same rule as manual deposit). The target user is
+        // who gets credited by the IPN, since it reads $tx->user_id.
+        $targetUser = $user->hasRole('seller')
+            ? $user
+            : ($request->filled('user_id') ? User::find($request->user_id) : $user);
 
         $vndAmount = (int) round($request->vnd_amount);
         $rate      = $this->setting('rate');
         $usdAmount = round($vndAmount / $rate, 2);
 
         // Unique txn ref — also serves as wallet_transactions.transaction_id
-        $txnRef = 'BS' . time() . '-' . $user->id . '-' . substr(bin2hex(random_bytes(3)), 0, 6);
+        $txnRef = 'BS' . time() . '-' . $targetUser->id . '-' . substr(bin2hex(random_bytes(3)), 0, 6);
 
         $tx = WalletTransaction::create([
-            'user_id'        => $user->id,
+            'user_id'        => $targetUser->id,
             'type'           => 'deposit',
             'status'         => WalletTransaction::STATUS_PENDING,
             'method'         => WalletTransaction::METHOD_VNPAY,
@@ -92,7 +100,9 @@ class VnpayController extends Controller
             'amount'         => $usdAmount,
             'vnd_amount'     => $vndAmount,
             'exchange_rate'  => $rate,
-            'note'           => 'VNPay deposit',
+            'note'           => $targetUser->id === $user->id
+                ? 'VNPay deposit'
+                : 'VNPay deposit (topup by ' . ($user->name ?? $user->email) . ')',
         ]);
 
         $tmnCode    = $this->setting('tmn_code');
@@ -113,7 +123,7 @@ class VnpayController extends Controller
             'vnp_Amount'     => $vndAmount * 100,           // VNPay expects amount × 100
             'vnp_CurrCode'   => 'VND',
             'vnp_TxnRef'     => $txnRef,
-            'vnp_OrderInfo'  => "Deposit USD wallet for {$user->email}",
+            'vnp_OrderInfo'  => "Deposit USD wallet for {$targetUser->email}",
             'vnp_OrderType'  => 'other',
             'vnp_Locale'     => 'vn',
             'vnp_ReturnUrl'  => $returnUrl,
