@@ -493,4 +493,109 @@ class ConversionController extends Controller
             'status' => $order->status,
         ]);
     }
+
+    // ------------------------------------------------------------------
+    // QR background check — the in-app cron scans front_qr design images for a
+    // dark/black background in the barcode area (unreadable Code 128). Three
+    // endpoints: pending (what to scan), result (record verdict), flagged
+    // (orders found with a black background, for the review list).
+    // Only front faces carry the barcode, so we only check front_qr metas.
+    // ------------------------------------------------------------------
+    private const FRONT_QR_REGEX_SQL = '^front_qr(_[0-9]+)?$';
+
+    /** Not-shipped orders with a front_qr meta that hasn't been bg-checked
+     *  since its latest front_qr meta was (re)generated. */
+    public function qrBgPending(Request $request)
+    {
+        $user = $request->user();
+
+        $query = Order::query()
+            ->where('status', '!=', Order::STATUS_SHIPPED)
+            ->where('status', '!=', Order::STATUS_CANCELLED)
+            ->whereHas('items.metas', fn ($q) => $q->where('key', 'regexp', self::FRONT_QR_REGEX_SQL));
+        if ($user->hasRole('seller')) {
+            $query->where('user_id', $user->id);
+        }
+
+        $orders = $query
+            ->with(['items.metas' => fn ($q) => $q->where('key', 'regexp', self::FRONT_QR_REGEX_SQL)])
+            ->orderBy('id')
+            ->limit(400)
+            ->get();
+
+        $out = [];
+        foreach ($orders as $order) {
+            $metas = $order->items->flatMap->metas->filter(fn ($m) => filled($m->value));
+            if ($metas->isEmpty()) continue;
+
+            // Re-scan only when a front_qr meta is newer than the last check.
+            $latest = $metas->max('updated_at');
+            if ($order->qr_bg_checked_at && $latest && $order->qr_bg_checked_at->gte($latest)) {
+                continue;
+            }
+
+            $meta = $metas->first();
+            $out[] = [
+                'order_id'      => $order->id,
+                'system_id'     => $order->system_id,
+                'order_item_id' => $meta->order_item_id,
+                'key'           => $meta->key,
+                'url'           => $meta->value,
+            ];
+            if (count($out) >= 100) break;
+        }
+
+        return response()->json(['items' => $out]);
+    }
+
+    /** Record the bg-check verdict for one order. */
+    public function qrBgResult(Request $request)
+    {
+        $data = $request->validate([
+            'order_id' => 'required|exists:orders,id',
+            'status'   => 'required|in:ok,black',
+        ]);
+
+        $order = Order::findOrFail($data['order_id']);
+        $user = $request->user();
+        if ($user->hasRole('seller') && $order->user_id !== $user->id) {
+            abort(403);
+        }
+
+        $order->update([
+            'qr_bg_status'     => $data['status'],
+            'qr_bg_checked_at' => now(),
+        ]);
+
+        return response()->json(['ok' => true, 'status' => $data['status']]);
+    }
+
+    /** Orders flagged with a black background that still need fixing. */
+    public function qrBgFlagged(Request $request)
+    {
+        $user = $request->user();
+
+        $query = Order::query()
+            ->where('qr_bg_status', 'black')
+            ->where('status', '!=', Order::STATUS_SHIPPED)
+            ->where('status', '!=', Order::STATUS_CANCELLED);
+        if ($user->hasRole('seller')) {
+            $query->where('user_id', $user->id);
+        }
+
+        $orders = $query
+            ->with(['items.metas' => fn ($q) => $q->where('key', 'regexp', self::FRONT_QR_REGEX_SQL)])
+            ->orderByDesc('qr_bg_checked_at')
+            ->limit(500)
+            ->get()
+            ->map(fn ($o) => [
+                'order_id'   => $o->id,
+                'system_id'  => $o->system_id,
+                'status'     => $o->status,
+                'checked_at' => optional($o->qr_bg_checked_at)->toIso8601String(),
+                'url'        => optional($o->items->flatMap->metas->first(fn ($m) => filled($m->value)))->value,
+            ]);
+
+        return response()->json(['items' => $orders]);
+    }
 }

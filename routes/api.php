@@ -149,6 +149,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/conversion/order/{order}/convert-label', [ConversionController::class, 'uploadConvertLabel']);
     Route::get('/conversion/label-lookup/{idOrSystemId}', [ConversionController::class, 'lookupLabelTarget']);
 
+    // QR background check (in-app cron): find/record/list not-shipped orders
+    // whose front_qr design has a dark background in the barcode area.
+    Route::get('/conversion/qr-bg/pending', [ConversionController::class, 'qrBgPending']);
+    Route::post('/conversion/qr-bg/result', [ConversionController::class, 'qrBgResult']);
+    Route::get('/conversion/qr-bg/flagged', [ConversionController::class, 'qrBgFlagged']);
+
     // Shared upload credentials for OrderCreate B2 uploads (mockups, shipping
     // label, meta values). Any authenticated user — including sellers — gets
     // the per-day folder so they can upload directly from the desktop app.

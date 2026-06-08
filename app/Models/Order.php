@@ -11,7 +11,7 @@ class Order extends Model
         'shipping_label_converted', 'convert_label', 'proof_image',
         'tracking_id', 'print_cost', 'shipping_cost', 'total_cost',
         'paid_cost', 'completed_time', 'production', 'stock_decremented',
-        'gangsheet_group_id',
+        'gangsheet_group_id', 'qr_bg_status', 'qr_bg_checked_at',
     ];
 
     // ship_type values.
@@ -60,6 +60,7 @@ class Order extends Model
     {
         return [
             'completed_time' => 'datetime',
+            'qr_bg_checked_at' => 'datetime',
             'production' => 'boolean',
             'shipping_label_converted' => 'boolean',
             'stock_decremented' => 'boolean',
