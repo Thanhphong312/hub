@@ -57,6 +57,8 @@ class QrController extends Controller
 
         if ($statusValue === Order::STATUS_SHIPPED) {
             $order->fresh()->decrementStockForShipment();
+        } else {
+            $order->fresh()->restockForUnship();   // shipped → onhold: trả lại kho
         }
 
         // XHR (from Ship & Print button) gets JSON; classic form posts redirect.

@@ -137,4 +137,19 @@ class Order extends Model
         $this->stock_decremented = true;
         $this->saveQuietly();
     }
+
+    /**
+     * Reverse of decrementStockForShipment(): when an order leaves the
+     * shipped state, return the 1 label-paper unit that the ship event
+     * consumed. Idempotent via the same `stock_decremented` flag, so it
+     * only ever restocks what was actually deducted (no-op otherwise).
+     */
+    public function restockForUnship(): void
+    {
+        if (!$this->stock_decremented) return;
+
+        Supply::where('is_default_label', true)->increment('stock', 1);
+        $this->stock_decremented = false;
+        $this->saveQuietly();
+    }
 }

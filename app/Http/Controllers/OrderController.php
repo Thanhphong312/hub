@@ -634,8 +634,10 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             }
         }
 
-        if (isset($data['status']) && $data['status'] == Order::STATUS_SHIPPED) {
-            $order->fresh()->decrementStockForShipment();
+        if (isset($data['status'])) {
+            $data['status'] == Order::STATUS_SHIPPED
+                ? $order->fresh()->decrementStockForShipment()
+                : $order->fresh()->restockForUnship();   // rời shipped → trả lại kho
         }
 
         return response()->json([
@@ -1464,9 +1466,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $order->update($data);
 
-        if ($request->status == Order::STATUS_SHIPPED) {
-            $order->fresh()->decrementStockForShipment();
-        }
+        $request->status == Order::STATUS_SHIPPED
+            ? $order->fresh()->decrementStockForShipment()
+            : $order->fresh()->restockForUnship();   // rời shipped → trả lại kho
 
         return response()->json(['message' => 'Status updated', 'order' => $order->fresh()]);
     }
@@ -1497,6 +1499,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             // stock_decremented), so re-shipping orders in a bulk batch is safe.
             Order::with('items')->whereIn('id', $request->order_ids)->get()
                 ->each(fn ($o) => $o->decrementStockForShipment());
+        } else {
+            // Leaving shipped → return label stock for the ones that had it
+            // deducted. The flag guard keeps never-shipped orders untouched.
+            Order::whereIn('id', $request->order_ids)->where('stock_decremented', true)->get()
+                ->each(fn ($o) => $o->restockForUnship());
         }
 
         return response()->json([

@@ -13,6 +13,7 @@ class Supply extends Model
         'is_default_label',
         'low_stock_threshold',
         'notes',
+        'purchase_url',
     ];
 
     protected function casts(): array

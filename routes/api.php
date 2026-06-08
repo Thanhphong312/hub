@@ -247,6 +247,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/inventory/forecast/ai', [InventoryForecastController::class, 'aiForecast']);
         Route::get('/inventory/ai-config', [InventoryForecastController::class, 'getAiConfig']);
         Route::put('/inventory/ai-config', [InventoryForecastController::class, 'updateAiConfig']);
+        Route::get('/inventory/order-items', [InventoryForecastController::class, 'orderItems']);
+        Route::put('/inventory/order-items/link', [InventoryForecastController::class, 'saveItemLink']);
         Route::get('/inventory/purchase-orders', [InventoryForecastController::class, 'poIndex']);
         Route::post('/inventory/purchase-orders', [InventoryForecastController::class, 'poStore']);
         Route::post('/inventory/purchase-orders/{po}/approve', [InventoryForecastController::class, 'poApprove']);

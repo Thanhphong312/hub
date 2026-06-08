@@ -80,10 +80,19 @@ class InventoryForecastController extends Controller
     {
         $cfg = $this->cfg();
         $lookback = max(1, $cfg['lookback_days']);
-        $since = now()->subDays($lookback);
+
+        // Window = exactly `lookback` whole days in Vietnam time, from the
+        // start of (today − lookback+1) to the end of today. completed_time is
+        // stored in UTC, so convert the VN day-boundaries to UTC for the query.
+        $tz = 'Asia/Ho_Chi_Minh';
+        $nowVn = now()->setTimezone($tz);
+        $sinceVn = $nowVn->copy()->startOfDay()->subDays($lookback - 1);
+        $untilVn = $nowVn->copy()->endOfDay();
+        $since = $sinceVn->copy()->utc();
+        $until = $untilVn->copy()->utc();
 
         $shippedCount = (int) Order::where('status', Order::STATUS_SHIPPED)
-            ->where('completed_time', '>=', $since)->count();
+            ->whereBetween('completed_time', [$since, $until])->count();
 
         // Estimated orders/day: explicit override, else the recent average.
         $avgPerDay = $shippedCount / $lookback;
@@ -129,7 +138,7 @@ class InventoryForecastController extends Controller
             ->join('orders as o', 'o.id', '=', 'oi.order_id')
             ->join('order_item_accessories as oia', 'oia.order_item_id', '=', 'oi.id')
             ->join('accessory_prices as ap', 'ap.id', '=', 'oia.accessory_price_id')
-            ->where('o.status', Order::STATUS_SHIPPED)->where('o.completed_time', '>=', $since)
+            ->where('o.status', Order::STATUS_SHIPPED)->whereBetween('o.completed_time', [$since, $until])
             ->groupBy('ap.accessory_id', 'ap.accessory_code')
             ->selectRaw('ap.accessory_id, ap.accessory_code, SUM(oi.quantity) AS used')
             ->get();
@@ -146,7 +155,7 @@ class InventoryForecastController extends Controller
         $matUse = DB::table('order_items as oi')
             ->join('orders as o', 'o.id', '=', 'oi.order_id')
             ->whereNotNull('oi.material_id')
-            ->where('o.status', Order::STATUS_SHIPPED)->where('o.completed_time', '>=', $since)
+            ->where('o.status', Order::STATUS_SHIPPED)->whereBetween('o.completed_time', [$since, $until])
             ->groupBy('oi.material_id')
             ->selectRaw('oi.material_id, SUM(oi.quantity) AS used')
             ->pluck('used', 'material_id');
@@ -165,7 +174,8 @@ class InventoryForecastController extends Controller
                 'avg_per_day'     => round($avgPerDay, 2),
                 'projected_orders'=> (int) ceil($projOrders),
                 'shipped_orders'  => $shippedCount,
-                'since'           => $since->toDateString(),
+                'since'           => $sinceVn->toDateString(),
+                'until'           => $untilVn->toDateString(),
             ],
             'rows' => $rows,
         ];
@@ -227,12 +237,88 @@ class InventoryForecastController extends Controller
         return $res->json('choices.0.message.content') ?? '';
     }
 
+    // ── Đặt hàng: orderable items + reusable buy-link ─────────────────────
+
+    /** All orderable stock items (material / accessory / supply) for Đặt hàng. */
+    public function orderItems()
+    {
+        // Open (pending/approved) PO qty per target = "đã đặt chờ về".
+        $poOpen = StockPurchaseOrder::whereIn('status', StockPurchaseOrder::OPEN_STATUSES)->get();
+        $poBy = ['accessory_price' => [], 'material' => [], 'supply' => []];
+        foreach ($poOpen as $po) {
+            if ($po->accessory_price_id) $poBy['accessory_price'][$po->accessory_price_id] = ($poBy['accessory_price'][$po->accessory_price_id] ?? 0) + $po->quantity;
+            elseif ($po->material_id)    $poBy['material'][$po->material_id]   = ($poBy['material'][$po->material_id] ?? 0) + $po->quantity;
+            elseif ($po->supply_id)      $poBy['supply'][$po->supply_id]       = ($poBy['supply'][$po->supply_id] ?? 0) + $po->quantity;
+        }
+
+        $items = [];
+
+        foreach (Material::with('product:id,name')->orderBy('id')->get() as $m) {
+            $items[] = [
+                'kind' => 'material', 'id' => $m->id,
+                'label' => ($m->product?->name ? $m->product->name . ' · ' : '') . $m->name,
+                'stock' => (int) $m->stock, 'pending' => $poBy['material'][$m->id] ?? 0,
+                'purchase_url' => $m->purchase_url,
+            ];
+        }
+
+        // Accessories — canonical price row per (accessory_id, code); stock lives there.
+        $seen = [];
+        foreach (AccessoryPrice::with('accessory:id,name')->orderBy('id')->get() as $ap) {
+            $key = $ap->accessory_id . '|' . ($ap->accessory_code ?? '');
+            if (isset($seen[$key])) continue;
+            $seen[$key] = true;
+            $name = ($ap->accessory?->name ?? 'Accessory') . ($ap->accessory_code ? " [{$ap->accessory_code}]" : '');
+            $items[] = [
+                'kind' => 'accessory', 'id' => $ap->id, 'label' => $name,
+                'stock' => (int) $ap->stock, 'pending' => $poBy['accessory_price'][$ap->id] ?? 0,
+                'purchase_url' => $ap->purchase_url,
+            ];
+        }
+
+        foreach (Supply::orderBy('id')->get() as $s) {
+            $items[] = [
+                'kind' => 'supply', 'id' => $s->id,
+                'label' => $s->name . ($s->is_default_label ? ' (label)' : ''),
+                'stock' => (int) $s->stock, 'pending' => $poBy['supply'][$s->id] ?? 0,
+                'purchase_url' => $s->purchase_url,
+            ];
+        }
+
+        return response()->json(['items' => $items]);
+    }
+
+    /** Save the reusable "where to buy" link on a stock target. */
+    public function saveItemLink(Request $request)
+    {
+        $data = $request->validate([
+            'kind' => 'required|in:material,accessory,supply',
+            'id'   => 'required|integer',
+            'purchase_url' => 'nullable|string|max:1000',
+        ]);
+        $model = $this->targetModel($data['kind'], (int) $data['id']);
+        if (!$model) return response()->json(['message' => 'Item not found'], 404);
+        $model->update(['purchase_url' => $data['purchase_url'] ?: null]);
+        return response()->json(['message' => 'Saved', 'purchase_url' => $model->purchase_url]);
+    }
+
+    private function targetModel(string $kind, int $id)
+    {
+        return match ($kind) {
+            'material'  => Material::find($id),
+            'accessory' => AccessoryPrice::find($id),
+            'supply'    => Supply::find($id),
+            default     => null,
+        };
+    }
+
     // ── Purchase orders ───────────────────────────────────────────────────
     public function poIndex(Request $request)
     {
         $q = StockPurchaseOrder::with([
             'productVariant.product:id,name', 'accessoryPrice.accessory:id,name',
-            'material:id,name', 'supply:id,name,code', 'creator:id,name', 'approver:id,name',
+            'material:id,name,product_id', 'material.product:id,name',
+            'supply:id,name,code', 'creator:id,name', 'approver:id,name',
         ])->orderByDesc('id');
         if ($request->filled('status')) $q->where('status', $request->status);
         return response()->json($q->paginate($request->get('per_page', 30)));
@@ -248,7 +334,11 @@ class InventoryForecastController extends Controller
             'quantity'           => 'required|integer|min:1',
             'unit_price'         => 'nullable|numeric|min:0',
             'notes'              => 'nullable|string|max:500',
+            'purchase_url'       => 'nullable|string|max:1000',
         ]);
+        $purchaseUrl = array_key_exists('purchase_url', $data) ? $data['purchase_url'] : null;
+        unset($data['purchase_url']);
+
         $targets = ($data['product_variant_id'] ?? null ? 1 : 0) + ($data['accessory_price_id'] ?? null ? 1 : 0)
             + ($data['material_id'] ?? null ? 1 : 0) + ($data['supply_id'] ?? null ? 1 : 0);
         if ($targets !== 1) {
@@ -258,6 +348,15 @@ class InventoryForecastController extends Controller
             'status' => StockPurchaseOrder::STATUS_PENDING,
             'created_by_user_id' => $request->user()->id,
         ]);
+
+        // Persist the reusable buy-link on the target item so the next reorder pre-fills it.
+        if ($purchaseUrl !== null) {
+            $url = $purchaseUrl ?: null;
+            if ($data['accessory_price_id'] ?? null) AccessoryPrice::where('id', $data['accessory_price_id'])->update(['purchase_url' => $url]);
+            elseif ($data['material_id'] ?? null)    Material::where('id', $data['material_id'])->update(['purchase_url' => $url]);
+            elseif ($data['supply_id'] ?? null)      Supply::where('id', $data['supply_id'])->update(['purchase_url' => $url]);
+        }
+
         return response()->json(['message' => 'Purchase order created', 'po' => $po], 201);
     }
 
