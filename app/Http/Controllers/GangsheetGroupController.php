@@ -52,23 +52,19 @@ class GangsheetGroupController extends Controller
 
         // fulfill_status (= order.status) filter: from the request, else the
         // saved setting. Empty = every non-shipped order.
-        $statuses = $request->filled('statuses')
-            ? array_map('intval', (array) $request->statuses)
-            : array_map('intval', (array) AppSetting::getJson('gangsheet_assign_statuses', []));
+        // Per-user rules: [{user_id, statuses:[…]}]. An order qualifies if its
+        // user has a rule and its status is in that rule's list (empty list =
+        // any status for that user). Empty rules = every non-shipped order.
+        $rules = $request->filled('rules')
+            ? (array) $request->rules
+            : (array) AppSetting::getJson('gangsheet_assign_rules', []);
 
-        // Optional: only gom orders belonging to these users (sellers). Empty =
-        // every user. From request, else the saved setting.
-        $users = $request->filled('users')
-            ? array_map('intval', (array) $request->users)
-            : array_map('intval', (array) AppSetting::getJson('gangsheet_assign_users', []));
-
-        $summary = DB::transaction(function () use ($groupSize, $statuses, $users) {
+        $summary = DB::transaction(function () use ($groupSize, $rules) {
             $pending = Order::with($this->orderEagerLoads())
                 ->where('production', false)
                 ->whereNull('gangsheet_group_id')
                 ->where('status', '!=', Order::STATUS_SHIPPED)
-                ->when(!empty($statuses), fn ($q) => $q->whereIn('status', $statuses))
-                ->when(!empty($users), fn ($q) => $q->whereIn('user_id', $users))
+                ->when(!empty($rules), fn ($q) => self::applyAssignRules($q, $rules))
                 ->whereHas('items.metas', fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX)->where('production', false))
                 ->orderBy('id', 'asc')
                 ->lockForUpdate()
@@ -119,6 +115,30 @@ class GangsheetGroupController extends Controller
         });
 
         return response()->json($summary);
+    }
+
+    /**
+     * Constrain an Order query to per-user rules [{user_id, statuses:[…]}].
+     * An order matches if its user has a rule and its status is in that rule's
+     * list (empty list = any status for that user). Used by group assign AND
+     * compose pending so both honour the same per-user policy.
+     */
+    public static function applyAssignRules($query, array $rules): void
+    {
+        $query->where(function ($w) use ($rules) {
+            $any = false;
+            foreach ($rules as $r) {
+                $uid = (int) ($r['user_id'] ?? 0);
+                if (!$uid) continue;
+                $st = array_values(array_map('intval', (array) ($r['statuses'] ?? [])));
+                $w->orWhere(function ($x) use ($uid, $st) {
+                    $x->where('user_id', $uid);
+                    if (!empty($st)) $x->whereIn('status', $st);
+                });
+                $any = true;
+            }
+            if (!$any) $w->whereRaw('1=0');   // rules present but all invalid → match none
+        });
     }
 
     private function createGroup(string $day, ?string $lineId, string $side, ?int $accId, ?int $matId, string $bucket): GangsheetGroup
@@ -437,8 +457,7 @@ class GangsheetGroupController extends Controller
 
         return response()->json([
             'group_size'      => (int) ($size['size'] ?? 10),
-            'assign_statuses' => array_values(array_map('intval', (array) AppSetting::getJson('gangsheet_assign_statuses', []))),
-            'assign_users'    => array_values(array_map('intval', (array) AppSetting::getJson('gangsheet_assign_users', []))),
+            'assign_rules'    => array_values((array) AppSetting::getJson('gangsheet_assign_rules', [])),
             'marks'           => [
                 'gap'   => (int) ($reg['gap']   ?? 30),
                 'arm'   => (int) ($reg['arm']   ?? 90),
@@ -458,10 +477,10 @@ class GangsheetGroupController extends Controller
     {
         $data = $request->validate([
             'group_size'           => 'sometimes|integer|min:1|max:1000',
-            'assign_statuses'      => 'sometimes|array',
-            'assign_statuses.*'    => 'integer|min:0|max:7',
-            'assign_users'         => 'sometimes|array',
-            'assign_users.*'       => 'integer|exists:users,id',
+            'assign_rules'           => 'sometimes|array',
+            'assign_rules.*.user_id' => 'required|integer|exists:users,id',
+            'assign_rules.*.statuses'   => 'array',
+            'assign_rules.*.statuses.*' => 'integer|min:0|max:7',
             'marks'                => 'sometimes|array',
             'marks.gap'            => 'nullable|integer|min:0|max:1000',
             'marks.arm'            => 'nullable|integer|min:0|max:1000',
@@ -476,11 +495,12 @@ class GangsheetGroupController extends Controller
         if (isset($data['group_size'])) {
             AppSetting::setJson('gangsheet_group_size', ['size' => (int) $data['group_size']]);
         }
-        if (isset($data['assign_statuses'])) {
-            AppSetting::setJson('gangsheet_assign_statuses', array_values(array_map('intval', $data['assign_statuses'])));
-        }
-        if (isset($data['assign_users'])) {
-            AppSetting::setJson('gangsheet_assign_users', array_values(array_map('intval', $data['assign_users'])));
+        if (isset($data['assign_rules'])) {
+            $rules = array_map(fn ($r) => [
+                'user_id'  => (int) $r['user_id'],
+                'statuses' => array_values(array_map('intval', (array) ($r['statuses'] ?? []))),
+            ], $data['assign_rules']);
+            AppSetting::setJson('gangsheet_assign_rules', array_values($rules));
         }
         if (isset($data['marks'])) {
             $cur = AppSetting::getJson('gangsheet_marks', []);

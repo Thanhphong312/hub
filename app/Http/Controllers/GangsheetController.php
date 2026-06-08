@@ -111,9 +111,15 @@ class GangsheetController extends Controller
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
         }
-        // Optional fulfill_status (= order.status) multi-filter.
+        // Optional fulfill_status (= order.status) multi-filter (manual chips).
         if ($request->filled('statuses')) {
             $query->whereIn('status', array_map('intval', (array) $request->statuses));
+        }
+        // Per-user assign rules (shared with group assign): compose pending only
+        // shows orders allowed by each user's status rule, when configured.
+        $rules = (array) \App\Models\AppSetting::getJson('gangsheet_assign_rules', []);
+        if (!empty($rules)) {
+            \App\Http\Controllers\GangsheetGroupController::applyAssignRules($query, $rules);
         }
 
         return response()->json($query->paginate($request->get('per_page', 100)));
