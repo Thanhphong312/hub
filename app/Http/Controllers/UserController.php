@@ -70,9 +70,11 @@ class UserController extends Controller
             'status' => 'nullable|integer|in:0,1',
             'wallet' => 'nullable|numeric',
             'convert' => 'nullable|boolean',
+            'auto_pay' => 'sometimes|boolean',
+            'auto_pay_delay_hours' => 'sometimes|integer|min:0|max:72',
         ]);
 
-        $data = $request->only('name', 'email', 'role_id', 'tier_id', 'status', 'wallet', 'convert');
+        $data = $request->only('name', 'email', 'role_id', 'tier_id', 'status', 'wallet', 'convert', 'auto_pay', 'auto_pay_delay_hours');
 
         if ($request->has('password') && $request->password) {
             $data['password'] = $request->password;
