@@ -414,10 +414,17 @@ class GangsheetGroupController extends Controller
         $size  = AppSetting::getJson('gangsheet_group_size', ['size' => 10]);
         $auto  = AppSetting::getJson('gangsheet_auto_close', ['enabled' => false, 'hooks' => []]);
         $marks = AppSetting::getJson('gangsheet_close_marks', ['date' => null, 'fired' => []]);
+        $reg   = AppSetting::getJson('gangsheet_marks', []);
 
         return response()->json([
             'group_size'      => (int) ($size['size'] ?? 10),
             'assign_statuses' => array_values(array_map('intval', (array) AppSetting::getJson('gangsheet_assign_statuses', []))),
+            'marks'           => [
+                'gap'   => (int) ($reg['gap']   ?? 30),
+                'arm'   => (int) ($reg['arm']   ?? 90),
+                'thick' => (int) ($reg['thick'] ?? 10),
+                'tick'  => (int) ($reg['tick']  ?? 70),
+            ],
             'auto_close'     => [
                 'enabled' => (bool) ($auto['enabled'] ?? false),
                 'hooks'   => array_values($auto['hooks'] ?? []),
@@ -433,6 +440,11 @@ class GangsheetGroupController extends Controller
             'group_size'           => 'sometimes|integer|min:1|max:1000',
             'assign_statuses'      => 'sometimes|array',
             'assign_statuses.*'    => 'integer|min:0|max:7',
+            'marks'                => 'sometimes|array',
+            'marks.gap'            => 'nullable|integer|min:0|max:1000',
+            'marks.arm'            => 'nullable|integer|min:0|max:1000',
+            'marks.thick'          => 'nullable|integer|min:0|max:200',
+            'marks.tick'           => 'nullable|integer|min:0|max:1000',
             'auto_close'           => 'sometimes|array',
             'auto_close.enabled'   => 'nullable|boolean',
             'auto_close.hooks'     => 'nullable|array',
@@ -444,6 +456,10 @@ class GangsheetGroupController extends Controller
         }
         if (isset($data['assign_statuses'])) {
             AppSetting::setJson('gangsheet_assign_statuses', array_values(array_map('intval', $data['assign_statuses'])));
+        }
+        if (isset($data['marks'])) {
+            $cur = AppSetting::getJson('gangsheet_marks', []);
+            AppSetting::setJson('gangsheet_marks', array_merge($cur, array_map('intval', $data['marks'])));
         }
         if (isset($data['auto_close'])) {
             $cur = AppSetting::getJson('gangsheet_auto_close', ['enabled' => false, 'hooks' => []]);
