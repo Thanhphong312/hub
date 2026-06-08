@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderItemMeta;
+use App\Services\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
@@ -597,5 +598,29 @@ class ConversionController extends Controller
             ]);
 
         return response()->json(['items' => $orders]);
+    }
+
+    /** Send a Telegram digest of newly black-flagged system_ids (one message
+     *  per scan tick). Best-effort: silently no-ops if Telegram isn't set up. */
+    public function qrBgNotify(Request $request)
+    {
+        $data = $request->validate([
+            'system_ids'   => 'required|array|min:1',
+            'system_ids.*' => 'string',
+        ]);
+        $ids = array_values(array_unique(array_filter(array_map('trim', $data['system_ids']))));
+        if (empty($ids)) {
+            return response()->json(['ok' => true, 'sent' => 0]);
+        }
+
+        $lines = array_map(fn ($s) => '• <code>' . e($s) . '</code>', $ids);
+        $text = implode("\n", array_merge([
+            '⚠️ <b>QR nền đen — barcode khó quét</b>',
+            count($ids) . ' đơn (chưa shipped) cần kiểm tra/fix:',
+        ], $lines));
+
+        app(TelegramService::class)->notifyTopup($text);
+
+        return response()->json(['ok' => true, 'sent' => count($ids)]);
     }
 }

@@ -154,6 +154,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/conversion/qr-bg/pending', [ConversionController::class, 'qrBgPending']);
     Route::post('/conversion/qr-bg/result', [ConversionController::class, 'qrBgResult']);
     Route::get('/conversion/qr-bg/flagged', [ConversionController::class, 'qrBgFlagged']);
+    Route::post('/conversion/qr-bg/notify', [ConversionController::class, 'qrBgNotify']);
 
     // Shared upload credentials for OrderCreate B2 uploads (mockups, shipping
     // label, meta values). Any authenticated user — including sellers — gets
