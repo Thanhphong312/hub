@@ -397,6 +397,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $request->validate([
             'ref_id' => 'required|string',
+            'note' => 'nullable|string|max:5000',
             'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
@@ -467,6 +468,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 'user_id' => $request->user()->id,
                 'system_id' => $this->generateSystemId(), // temporary, updated after we have order.id
                 'ref_id' => $finalRefId,
+                'note' => $request->input('note'),
                 'status' => Order::STATUS_NEW_ORDER,
                 'ship_type' => $byStamp ? Order::SHIP_STAMP : ($hasLabel ? Order::SHIP_TIKTOK : Order::SHIP_SELLER),
                 'shipping_label' => $hasLabel ? $request->shipping_label : null,
@@ -534,6 +536,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function update(Request $request, Order $order)
     {
         $request->validate([
+            'note' => 'nullable|string|max:5000',
             'shipping_label' => 'nullable|string',
             'tracking_id' => 'nullable|string',
             'shipping_cost' => 'nullable|numeric|min:0',
@@ -558,12 +561,19 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         ]);
 
         $user = $request->user();
+        // Only block when a seller actually CHANGES the status to a disallowed
+        // value. Edit forms resend the current status alongside other fields
+        // (e.g. note), which must not trip this guard.
         if ($user && $user->hasRole('seller') && $request->filled('status')
+            && (int) $request->status !== (int) $order->status
             && !in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
             return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
         }
 
         $data = $request->only('shipping_label', 'tracking_id', 'shipping_cost', 'print_cost', 'status', 'proof_image');
+        if ($request->has('note')) {
+            $data['note'] = $request->input('note');
+        }
 
         // Ship-type change — only staff. Each transition recomputes the
         // shipping cost from the items + the variant price table so the
@@ -2789,6 +2799,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $request->validate([
             'ref_id' => 'nullable|string',
+            'note' => 'nullable|string|max:5000',
             'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
@@ -2844,6 +2855,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 'user_id' => $user->id,
                 'system_id' => $this->generateSystemId(), // temporary, updated after we have order.id
                 'ref_id' => $rawRefId,
+                'note' => $request->input('note'),
                 'status' => Order::STATUS_NEW_ORDER,
                 'ship_type' => $byStamp ? Order::SHIP_STAMP : ($hasLabel ? Order::SHIP_TIKTOK : Order::SHIP_SELLER),
                 'shipping_label' => $hasLabel ? $request->shipping_label : null,
