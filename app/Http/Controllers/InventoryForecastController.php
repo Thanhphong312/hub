@@ -181,7 +181,11 @@ class InventoryForecastController extends Controller
         ];
     }
 
-    /** Send the forecast data to the configured LLM and return its prediction. */
+    /**
+     * Ask the LLM for a structured purchase plan (buy qty per item) so it can be
+     * saved and shown on the Đặt hàng page, plus a short markdown summary. The
+     * model is forced into a JSON shape (Anthropic tool-use / OpenAI json mode).
+     */
     public function aiForecast(Request $request)
     {
         $cfg = $this->cfg();
@@ -190,51 +194,119 @@ class InventoryForecastController extends Controller
         }
         $data = $this->computeForecast();
 
+        // ref = the order-items key (label → supply) so the plan maps 1:1.
+        $refOf = fn ($r) => ($r['kind'] === 'label' ? 'supply' : $r['kind']) . '-' . $r['id'];
         $lines = array_map(
-            fn ($r) => sprintf('- %s [%s]: dùng %d/%dngày, tồn %d, đã đặt %d, tồn-tối-thiểu-tháng %d',
-                $r['label'], $r['kind'], $r['used'], $data['meta']['lookback_days'], $r['stock'], $r['pending'], $r['monthly_need']),
+            fn ($r) => sprintf('- [ref:%s] %s: dùng %d/%d ngày, tồn %d, đã đặt %d, cần-dùng-kỳ %d',
+                $refOf($r), $r['label'], $r['used'], $data['meta']['lookback_days'], $r['stock'], $r['pending'], $r['monthly_need']),
             $data['rows']
         );
-        $prompt = "Bạn là trợ lý dự báo tồn kho. Dữ liệu tiêu thụ {$data['meta']['lookback_days']} ngày qua "
-            . "(chỉ đơn đã ship, {$data['meta']['shipped_orders']} đơn), ước chừng {$data['meta']['orders_per_day']} đơn/ngày "
-            . "(~{$data['meta']['projected_orders']} đơn trong kỳ), dự báo cho {$data['meta']['forecast_days']} ngày tới:\n" . implode("\n", $lines)
-            . "\n\nHãy dự đoán số lượng nên nhập thêm cho mỗi mục trong 1 tháng tới (xét tồn hiện có + đã đặt chờ về), "
-            . "chỉ rõ mục nào sắp thiếu và mức ưu tiên mua. Trả lời ngắn gọn tiếng Việt, dạng danh sách.";
+        $prompt = "Bạn là trợ lý dự báo tồn kho. Dữ liệu {$data['meta']['lookback_days']} ngày qua "
+            . "(chỉ đơn đã ship, {$data['meta']['shipped_orders']} đơn), ước chừng {$data['meta']['orders_per_day']} đơn/ngày, "
+            . "dự báo {$data['meta']['forecast_days']} ngày tới (~{$data['meta']['projected_orders']} đơn):\n" . implode("\n", $lines)
+            . "\n\nMỗi mục có 'cần-dùng-kỳ' = nhu cầu tiêu thụ trong kỳ dự báo. Hãy tính SỐ LƯỢNG NÊN NHẬP THÊM (buy) cho TỪNG mục "
+            . "sao cho KHÔNG bị thiếu (xét tồn hiện có + đã đặt chờ về), và cộng thêm biên an toàn ~10–20% cho mục tiêu thụ cao hoặc đang âm tồn. "
+            . "Mục đang dư đủ thì buy=0. Trả về cho TẤT CẢ các mục kèm đúng 'ref', mức 'priority' (high/medium/low), "
+            . "và 'summary' tóm tắt ngắn tiếng Việt (markdown) nêu mục khẩn cấp + thứ tự ưu tiên.";
 
         try {
-            $text = $cfg['provider'] === 'openai'
-                ? $this->callOpenAi($cfg, $prompt)
-                : $this->callAnthropic($cfg, $prompt);
+            $plan = $cfg['provider'] === 'openai'
+                ? $this->callOpenAiPlan($cfg, $prompt)
+                : $this->callAnthropicPlan($cfg, $prompt);
         } catch (\Throwable $e) {
             return response()->json(['message' => 'AI call failed: ' . $e->getMessage()], 502);
         }
 
-        return response()->json(['forecast' => $data, 'ai_text' => $text, 'model' => $cfg['model']]);
+        // Normalize the plan into a ref → {buy, priority, note} map and persist it.
+        $map = [];
+        foreach ((is_array($plan['items'] ?? null) ? $plan['items'] : []) as $pi) {
+            if (empty($pi['ref'])) continue;
+            $map[$pi['ref']] = [
+                'buy'      => max(0, (int) ($pi['buy'] ?? 0)),
+                'priority' => $pi['priority'] ?? null,
+                'note'     => $pi['note'] ?? null,
+            ];
+        }
+        AppSetting::setJson('inventory_ai_suggestion', [
+            'generated_at'   => now()->toIso8601String(),
+            'model'          => $cfg['model'],
+            'forecast_days'  => $data['meta']['forecast_days'],
+            'orders_per_day' => $data['meta']['orders_per_day'],
+            'items'          => $map,
+        ]);
+
+        return response()->json([
+            'forecast' => $data,
+            'ai_text'  => $plan['summary'] ?? '',
+            'saved'    => count($map),
+            'model'    => $cfg['model'],
+        ]);
     }
 
-    private function callAnthropic(array $cfg, string $prompt): string
+    /** JSON schema shared by both providers for the purchase plan. */
+    private function planProperties(): array
+    {
+        return [
+            'summary' => ['type' => 'string', 'description' => 'Tóm tắt ngắn tiếng Việt (markdown): mục khẩn cấp + thứ tự ưu tiên.'],
+            'items' => [
+                'type' => 'array',
+                'description' => 'Mỗi mục một dòng, gồm tất cả mục được cung cấp.',
+                'items' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'ref'      => ['type' => 'string', 'description' => 'Mã mục, đúng như cung cấp (vd material-5).'],
+                        'buy'      => ['type' => 'integer', 'description' => 'Số lượng nên nhập thêm (>=0).'],
+                        'priority' => ['type' => 'string', 'enum' => ['high', 'medium', 'low']],
+                        'note'     => ['type' => 'string'],
+                    ],
+                    'required' => ['ref', 'buy'],
+                ],
+            ],
+        ];
+    }
+
+    private function callAnthropicPlan(array $cfg, string $prompt): array
     {
         $res = Http::withHeaders([
             'x-api-key' => $cfg['api_key'],
             'anthropic-version' => '2023-06-01',
-        ])->timeout(60)->post('https://api.anthropic.com/v1/messages', [
+        ])->timeout(90)->post('https://api.anthropic.com/v1/messages', [
             'model' => $cfg['model'],
-            'max_tokens' => 1024,
+            'max_tokens' => 4096,
+            'tools' => [[
+                'name' => 'submit_purchase_plan',
+                'description' => 'Nộp kế hoạch nhập hàng: số lượng nên mua cho từng mục để không thiếu trong kỳ dự báo.',
+                'input_schema' => ['type' => 'object', 'properties' => $this->planProperties(), 'required' => ['items']],
+            ]],
+            'tool_choice' => ['type' => 'tool', 'name' => 'submit_purchase_plan'],
             'messages' => [['role' => 'user', 'content' => $prompt]],
         ]);
         if (!$res->successful()) throw new \RuntimeException('HTTP ' . $res->status() . ' ' . $res->body());
-        return $res->json('content.0.text') ?? '';
+        foreach ($res->json('content', []) as $block) {
+            if (($block['type'] ?? '') === 'tool_use' && ($block['name'] ?? '') === 'submit_purchase_plan') {
+                return $block['input'] ?? [];
+            }
+        }
+        throw new \RuntimeException('AI không trả về kế hoạch (tool_use).');
     }
 
-    private function callOpenAi(array $cfg, string $prompt): string
+    private function callOpenAiPlan(array $cfg, string $prompt): array
     {
-        $res = Http::withToken($cfg['api_key'])->timeout(60)
+        $res = Http::withToken($cfg['api_key'])->timeout(90)
             ->post('https://api.openai.com/v1/chat/completions', [
                 'model' => $cfg['model'],
-                'messages' => [['role' => 'user', 'content' => $prompt]],
+                'response_format' => ['type' => 'json_object'],
+                'messages' => [
+                    ['role' => 'system', 'content' => 'Trả về DUY NHẤT một JSON object đúng schema: '
+                        . '{"summary": string, "items": [{"ref": string, "buy": integer, "priority": "high"|"medium"|"low", "note": string}]}. '
+                        . 'Bao gồm tất cả mục được cung cấp.'],
+                    ['role' => 'user', 'content' => $prompt],
+                ],
             ]);
         if (!$res->successful()) throw new \RuntimeException('HTTP ' . $res->status() . ' ' . $res->body());
-        return $res->json('choices.0.message.content') ?? '';
+        $parsed = json_decode($res->json('choices.0.message.content') ?? '{}', true);
+        if (!is_array($parsed)) throw new \RuntimeException('AI trả về JSON không hợp lệ.');
+        return $parsed;
     }
 
     // ── Đặt hàng: orderable items + reusable buy-link ─────────────────────
@@ -251,6 +323,28 @@ class InventoryForecastController extends Controller
             elseif ($po->supply_id)      $poBy['supply'][$po->supply_id]       = ($poBy['supply'][$po->supply_id] ?? 0) + $po->quantity;
         }
 
+        // Forecast suggestion per item, keyed by "kind-id" (label → supply).
+        $fc = $this->computeForecast();
+        $fcBy = [];
+        foreach ($fc['rows'] as $r) {
+            $kind = $r['kind'] === 'label' ? 'supply' : $r['kind'];
+            $fcBy[$kind . '-' . $r['id']] = ['suggest' => $r['suggest'], 'monthly_need' => $r['monthly_need'], 'used' => $r['used']];
+        }
+
+        // Saved AI plan (from "🤖 Hỏi AI" on the forecast page), keyed by ref.
+        $aiSug = AppSetting::getJson('inventory_ai_suggestion', []);
+        $aiItems = is_array($aiSug['items'] ?? null) ? $aiSug['items'] : [];
+
+        $extraOf = function ($kind, $id) use ($fcBy, $aiItems) {
+            $base = $fcBy["$kind-$id"] ?? ['suggest' => 0, 'monthly_need' => 0, 'used' => 0];
+            $ai = $aiItems["$kind-$id"] ?? null;
+            return $base + [
+                'ai_suggest'  => $ai ? (int) $ai['buy'] : null,
+                'ai_priority' => $ai['priority'] ?? null,
+            ];
+        };
+        $fcOf = $extraOf;
+
         $items = [];
 
         foreach (Material::with('product:id,name')->orderBy('id')->get() as $m) {
@@ -259,7 +353,7 @@ class InventoryForecastController extends Controller
                 'label' => ($m->product?->name ? $m->product->name . ' · ' : '') . $m->name,
                 'stock' => (int) $m->stock, 'pending' => $poBy['material'][$m->id] ?? 0,
                 'purchase_url' => $m->purchase_url,
-            ];
+            ] + $fcOf('material', $m->id);
         }
 
         // Accessories — canonical price row per (accessory_id, code); stock lives there.
@@ -273,7 +367,7 @@ class InventoryForecastController extends Controller
                 'kind' => 'accessory', 'id' => $ap->id, 'label' => $name,
                 'stock' => (int) $ap->stock, 'pending' => $poBy['accessory_price'][$ap->id] ?? 0,
                 'purchase_url' => $ap->purchase_url,
-            ];
+            ] + $fcOf('accessory', $ap->id);
         }
 
         foreach (Supply::orderBy('id')->get() as $s) {
@@ -282,10 +376,18 @@ class InventoryForecastController extends Controller
                 'label' => $s->name . ($s->is_default_label ? ' (label)' : ''),
                 'stock' => (int) $s->stock, 'pending' => $poBy['supply'][$s->id] ?? 0,
                 'purchase_url' => $s->purchase_url,
-            ];
+            ] + $fcOf('supply', $s->id);
         }
 
-        return response()->json(['items' => $items]);
+        return response()->json([
+            'items' => $items,
+            'meta'  => $fc['meta'],
+            'ai_meta' => [
+                'generated_at' => $aiSug['generated_at'] ?? null,
+                'model'        => $aiSug['model'] ?? null,
+                'forecast_days'=> $aiSug['forecast_days'] ?? null,
+            ],
+        ]);
     }
 
     /** Save the reusable "where to buy" link on a stock target. */
