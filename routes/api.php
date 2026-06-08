@@ -171,6 +171,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // by the desktop app — no server scheduler. Static paths before the
         // wildcard {group} so they don't get swallowed by route binding.
         Route::get('/gangsheet-groups/automation-config', [GangsheetGroupController::class, 'getAutomationConfig']);
+        Route::get('/gangsheet-groups/assign-user-options', [GangsheetGroupController::class, 'assignUserOptions']);
         Route::put('/gangsheet-groups/automation-config', [GangsheetGroupController::class, 'updateAutomationConfig']);
         Route::post('/gangsheet-groups/assign', [GangsheetGroupController::class, 'assign']);
         Route::post('/gangsheet-groups/claim', [GangsheetGroupController::class, 'claim']);

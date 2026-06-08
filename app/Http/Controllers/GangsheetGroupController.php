@@ -56,12 +56,19 @@ class GangsheetGroupController extends Controller
             ? array_map('intval', (array) $request->statuses)
             : array_map('intval', (array) AppSetting::getJson('gangsheet_assign_statuses', []));
 
-        $summary = DB::transaction(function () use ($groupSize, $statuses) {
+        // Optional: only gom orders belonging to these users (sellers). Empty =
+        // every user. From request, else the saved setting.
+        $users = $request->filled('users')
+            ? array_map('intval', (array) $request->users)
+            : array_map('intval', (array) AppSetting::getJson('gangsheet_assign_users', []));
+
+        $summary = DB::transaction(function () use ($groupSize, $statuses, $users) {
             $pending = Order::with($this->orderEagerLoads())
                 ->where('production', false)
                 ->whereNull('gangsheet_group_id')
                 ->where('status', '!=', Order::STATUS_SHIPPED)
                 ->when(!empty($statuses), fn ($q) => $q->whereIn('status', $statuses))
+                ->when(!empty($users), fn ($q) => $q->whereIn('user_id', $users))
                 ->whereHas('items.metas', fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX)->where('production', false))
                 ->orderBy('id', 'asc')
                 ->lockForUpdate()
@@ -408,6 +415,18 @@ class GangsheetGroupController extends Controller
             ]);
     }
 
+    /** Users for the "gom theo user" picker (id, name, role). */
+    public function assignUserOptions()
+    {
+        return response()->json(
+            \App\Models\User::with('role:id,slug')
+                ->select('id', 'name', 'email', 'role_id')
+                ->orderBy('name')
+                ->get()
+                ->map(fn ($u) => ['id' => $u->id, 'name' => $u->name, 'email' => $u->email, 'role' => $u->role?->slug])
+        );
+    }
+
     // ── Automation config (group size + auto-close hooks) ─────────────────────
     public function getAutomationConfig()
     {
@@ -419,6 +438,7 @@ class GangsheetGroupController extends Controller
         return response()->json([
             'group_size'      => (int) ($size['size'] ?? 10),
             'assign_statuses' => array_values(array_map('intval', (array) AppSetting::getJson('gangsheet_assign_statuses', []))),
+            'assign_users'    => array_values(array_map('intval', (array) AppSetting::getJson('gangsheet_assign_users', []))),
             'marks'           => [
                 'gap'   => (int) ($reg['gap']   ?? 30),
                 'arm'   => (int) ($reg['arm']   ?? 90),
@@ -440,6 +460,8 @@ class GangsheetGroupController extends Controller
             'group_size'           => 'sometimes|integer|min:1|max:1000',
             'assign_statuses'      => 'sometimes|array',
             'assign_statuses.*'    => 'integer|min:0|max:7',
+            'assign_users'         => 'sometimes|array',
+            'assign_users.*'       => 'integer|exists:users,id',
             'marks'                => 'sometimes|array',
             'marks.gap'            => 'nullable|integer|min:0|max:1000',
             'marks.arm'            => 'nullable|integer|min:0|max:1000',
@@ -456,6 +478,9 @@ class GangsheetGroupController extends Controller
         }
         if (isset($data['assign_statuses'])) {
             AppSetting::setJson('gangsheet_assign_statuses', array_values(array_map('intval', $data['assign_statuses'])));
+        }
+        if (isset($data['assign_users'])) {
+            AppSetting::setJson('gangsheet_assign_users', array_values(array_map('intval', $data['assign_users'])));
         }
         if (isset($data['marks'])) {
             $cur = AppSetting::getJson('gangsheet_marks', []);
