@@ -413,9 +413,6 @@
                             shipBtn.addEventListener('click', async () => {
                                 if (shipBtn.disabled) return;
 
-                                // Trigger Ctrl+P on the current page via hidden iframe.
-                                printLabel(shipBtn.dataset.imageUrl);
-
                                 shipBtn.disabled = true;
                                 const orig = shipBtn.innerHTML;
                                 shipBtn.innerHTML = '… marking shipped';
@@ -440,6 +437,11 @@
                                     shipBtn.innerHTML = '✓ Shipped';
                                     shipBtn.classList.remove('bg-green-500', 'text-white', 'border-green-600', 'hover:bg-green-600');
                                     shipBtn.classList.add('bg-green-100', 'text-green-700', 'border-green-200', 'cursor-not-allowed', 'opacity-60');
+
+                                    // Ship succeeded → auto-trigger print (Ctrl+P via hidden
+                                    // iframe). Printing after the status update means the
+                                    // native dialog can't block/delay the ship request.
+                                    printLabel(shipBtn.dataset.imageUrl);
                                 } catch (err) {
                                     shipBtn.disabled = false;
                                     shipBtn.innerHTML = orig;
