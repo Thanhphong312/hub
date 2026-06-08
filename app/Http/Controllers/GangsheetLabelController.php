@@ -183,6 +183,61 @@ class GangsheetLabelController extends Controller
     }
 
     /**
+     * Create a master GSL straight from a pasted list of system_ids (no
+     * existing child labels needed). The desktop app then builds the merged
+     * label PDF (page per convert_label + final QR) exactly like merge().
+     */
+    public function mergeBySystemIds(Request $request)
+    {
+        $request->validate([
+            'system_ids'   => 'required|array|min:1',
+            'system_ids.*' => 'string',
+        ]);
+
+        $ids = array_values(array_unique(array_filter(array_map('trim', $request->system_ids))));
+        if (empty($ids)) {
+            return response()->json(['message' => 'No system_ids provided'], 422);
+        }
+
+        $orders = Order::whereIn('system_id', $ids)->get(['id', 'system_id']);
+        $bySid = $orders->keyBy('system_id');
+
+        // Preserve the pasted order, dedupe.
+        $orderIds = [];
+        foreach ($ids as $sid) {
+            if ($bySid->has($sid)) $orderIds[] = (int) $bySid[$sid]->id;
+        }
+        $orderIds = array_values(array_unique($orderIds));
+        $missing = array_values(array_diff($ids, $orders->pluck('system_id')->all()));
+
+        if (empty($orderIds)) {
+            return response()->json(['message' => 'No matching orders for the given system_ids', 'missing' => $missing], 422);
+        }
+
+        $totalItemsQty = (int) \App\Models\OrderItem::whereIn('order_id', $orderIds)->sum('quantity');
+
+        $merged = GangsheetLabel::create([
+            'gangsheet_id'          => null,
+            'created_by_user_id'    => $request->user()?->id,
+            'name'                  => 'labels_' . now()->format('Ymd_His'),
+            'line_id'               => null,
+            'order_ids'             => $orderIds,
+            'merged_from_label_ids' => null,
+            'orders_count'          => count($orderIds),
+            'total_items_qty'       => $totalItemsQty,
+            'status'                => 'pending',
+        ]);
+
+        return response()->json([
+            'message'      => 'Created label for ' . count($orderIds) . ' order(s)',
+            'merged_label' => $merged->fresh(),
+            'scan_code'    => $merged->scan_code,
+            'order_ids'    => $orderIds,
+            'missing'      => $missing,
+        ], 201);
+    }
+
+    /**
      * PUT /api/gangsheet-labels/{gangsheetLabel}/file-url — store the B2
      * public URL of the merged PDF after the desktop app uploads it.
      */
