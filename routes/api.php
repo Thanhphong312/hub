@@ -235,6 +235,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // decrements stock automatically (see Order::decrementStockForShipment).
     Route::middleware(CheckRole::class . ':admin')->group(function () {
         Route::get('/inventory/stock', [InventoryController::class, 'stock']);
+        Route::put('/inventory/stock', [InventoryController::class, 'setStockValue']);
         Route::post('/inventory/resync', [InventoryController::class, 'resyncStock']);
         Route::get('/inventory/imports/template', [InventoryController::class, 'exportTemplate']);
         Route::post('/inventory/imports/bulk', [InventoryController::class, 'importCsv']);
@@ -287,6 +288,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/vnpay-merchant', [SettingController::class, 'getVnpayMerchant']);
         Route::put('/vnpay-merchant', [SettingController::class, 'updateVnpayMerchant']);
         Route::put('/stamp-config', [SettingController::class, 'updateStampConfig']);
+
+        Route::get('/qr-config', [SettingController::class, 'getQrConfig']);
+        Route::put('/qr-config', [SettingController::class, 'updateQrConfig']);
 
         Route::get('/telegram',         [TelegramController::class, 'getSettings']);
         Route::put('/telegram',         [TelegramController::class, 'updateSettings']);

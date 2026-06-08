@@ -195,6 +195,29 @@ class SettingController extends Controller
         return response()->json(\App\Models\Order::stampConfig());
     }
 
+    // ----------------------------------------------------------------------
+    // QR portal behaviour. auto_ship_print: when opening /qr/{systemId} for a
+    // not-yet-shipped order, automatically mark it shipped then print the label
+    // (scan-to-fulfil workflow). Toggled from the desktop Settings page; the
+    // blade reads the same app_settings key directly.
+    // ----------------------------------------------------------------------
+    public function getQrConfig()
+    {
+        return response()->json(AppSetting::getJson('qr_config', [
+            'auto_ship_print' => false,
+        ]));
+    }
+
+    public function updateQrConfig(Request $request)
+    {
+        $data = $request->validate([
+            'auto_ship_print' => 'required|boolean',
+        ]);
+        $current = AppSetting::getJson('qr_config', []);
+        AppSetting::setJson('qr_config', array_merge($current, $data));
+        return $this->getQrConfig();
+    }
+
     public function getVnpayMerchant()
     {
         $merchant = AppSetting::getJson('vnpay_merchant', []);

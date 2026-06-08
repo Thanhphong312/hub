@@ -449,6 +449,15 @@
                                 }
                             });
                         }
+
+@if ($autoShipPrint)
+                        // Auto ship+print on page load (Settings → QR toggle).
+                        // Only when the order isn't already shipped — shipBtn is
+                        // disabled for shipped orders, so guard on that.
+                        if (shipBtn && !shipBtn.disabled) {
+                            setTimeout(() => shipBtn.click(), 350);
+                        }
+@endif
                     })();
                 </script>
             </div>

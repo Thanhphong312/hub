@@ -35,6 +35,9 @@ class QrController extends Controller
         return view('qr.show', [
             'order' => $order,
             'user' => $user,
+            // When enabled (Settings → QR), opening a not-yet-shipped order
+            // auto-marks it shipped then prints the label on page load.
+            'autoShipPrint' => (bool) (\App\Models\AppSetting::getJson('qr_config', [])['auto_ship_print'] ?? false),
         ]);
     }
 
