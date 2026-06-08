@@ -18,8 +18,11 @@ use Illuminate\Support\Facades\Http;
  *
  * Forecast basis (decided with the user): SHIPPED orders in the last N days
  * (default 7). 1 shipped order = 1 label; accessory/material usage = Σ
- * order_item.quantity that used it. Monthly need = usage/lookback * forecast
- * days * (1 + growth%). Suggested buy = need − stock − (đã đặt chờ về).
+ * order_item.quantity that used it. Forecast is driven by an ESTIMATED orders
+ * per day (defaults to the recent average shipped/lookback, overridable):
+ * per-order usage = usage / shipped_orders, and
+ * monthly need = per-order usage × orders/day × forecast_days.
+ * Suggested buy = need − stock − (đã đặt chờ về).
  */
 class InventoryForecastController extends Controller
 {
@@ -30,7 +33,9 @@ class InventoryForecastController extends Controller
             'provider'      => $c['provider']      ?? 'anthropic',         // anthropic | openai
             'model'         => $c['model']         ?? 'claude-sonnet-4-6',
             'api_key'       => $c['api_key']       ?? '',
-            'growth_pct'    => (float) ($c['growth_pct']    ?? 20),        // % tăng trưởng
+            // null/0 = auto (recent average shipped/day); a positive value overrides it.
+            'orders_per_day'=> isset($c['orders_per_day']) && $c['orders_per_day'] !== '' && $c['orders_per_day'] !== null
+                ? (float) $c['orders_per_day'] : null,
             'lookback_days' => (int)   ($c['lookback_days'] ?? 7),
             'forecast_days' => (int)   ($c['forecast_days'] ?? 30),
         ];
@@ -52,7 +57,7 @@ class InventoryForecastController extends Controller
             'provider'      => 'sometimes|in:anthropic,openai',
             'model'         => 'sometimes|string|max:80',
             'api_key'       => 'sometimes|nullable|string|max:200',
-            'growth_pct'    => 'sometimes|numeric|min:0|max:1000',
+            'orders_per_day'=> 'sometimes|nullable|numeric|min:0|max:100000',
             'lookback_days' => 'sometimes|integer|min:1|max:90',
             'forecast_days' => 'sometimes|integer|min:1|max:365',
         ]);
@@ -75,12 +80,20 @@ class InventoryForecastController extends Controller
     {
         $cfg = $this->cfg();
         $lookback = max(1, $cfg['lookback_days']);
-        $growth = 1 + ($cfg['growth_pct'] / 100);
-        $factor = ($cfg['forecast_days'] / $lookback) * $growth;
         $since = now()->subDays($lookback);
 
         $shippedCount = (int) Order::where('status', Order::STATUS_SHIPPED)
             ->where('completed_time', '>=', $since)->count();
+
+        // Estimated orders/day: explicit override, else the recent average.
+        $avgPerDay = $shippedCount / $lookback;
+        $auto = $cfg['orders_per_day'] === null || $cfg['orders_per_day'] <= 0;
+        $ordersPerDay = $auto ? $avgPerDay : $cfg['orders_per_day'];
+
+        // Project total orders over the forecast window, then scale each line by
+        // its per-order usage (used / shipped_orders). factor = projected/shipped.
+        $projOrders = $ordersPerDay * $cfg['forecast_days'];
+        $factor = $shippedCount > 0 ? ($projOrders / $shippedCount) : 0;
 
         // Open (not-yet-received) purchase-order qty per target.
         $poOpen = StockPurchaseOrder::whereIn('status', StockPurchaseOrder::OPEN_STATUSES)->get();
@@ -145,11 +158,14 @@ class InventoryForecastController extends Controller
 
         return [
             'meta' => [
-                'lookback_days' => $lookback,
-                'forecast_days' => $cfg['forecast_days'],
-                'growth_pct'    => $cfg['growth_pct'],
-                'shipped_orders'=> $shippedCount,
-                'since'         => $since->toDateString(),
+                'lookback_days'   => $lookback,
+                'forecast_days'   => $cfg['forecast_days'],
+                'orders_per_day'  => round($ordersPerDay, 2),
+                'orders_per_day_auto' => $auto,
+                'avg_per_day'     => round($avgPerDay, 2),
+                'projected_orders'=> (int) ceil($projOrders),
+                'shipped_orders'  => $shippedCount,
+                'since'           => $since->toDateString(),
             ],
             'rows' => $rows,
         ];
@@ -170,8 +186,8 @@ class InventoryForecastController extends Controller
             $data['rows']
         );
         $prompt = "Bạn là trợ lý dự báo tồn kho. Dữ liệu tiêu thụ {$data['meta']['lookback_days']} ngày qua "
-            . "(chỉ đơn đã ship, {$data['meta']['shipped_orders']} đơn), tăng trưởng dự kiến {$data['meta']['growth_pct']}%, "
-            . "dự báo cho {$data['meta']['forecast_days']} ngày tới:\n" . implode("\n", $lines)
+            . "(chỉ đơn đã ship, {$data['meta']['shipped_orders']} đơn), ước chừng {$data['meta']['orders_per_day']} đơn/ngày "
+            . "(~{$data['meta']['projected_orders']} đơn trong kỳ), dự báo cho {$data['meta']['forecast_days']} ngày tới:\n" . implode("\n", $lines)
             . "\n\nHãy dự đoán số lượng nên nhập thêm cho mỗi mục trong 1 tháng tới (xét tồn hiện có + đã đặt chờ về), "
             . "chỉ rõ mục nào sắp thiếu và mức ưu tiên mua. Trả lời ngắn gọn tiếng Việt, dạng danh sách.";
 
