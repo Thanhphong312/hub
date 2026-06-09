@@ -96,4 +96,62 @@ class DashboardController extends Controller
 
         return response()->json($stats);
     }
+
+    /**
+     * Shipped-orders-per-day report. Group key is a Vietnam-local calendar day
+     * (+7h offset, since timestamps are stored UTC) of either created_at or
+     * completed_time. Also reports how many shipped orders are missing
+     * completed_time so the UI can warn that the "completed" view is partial.
+     */
+    public function shippedReport(Request $request)
+    {
+        $user = $request->user();
+        $field = $request->input('date_field') === 'completed_time' ? 'completed_time' : 'created_at';
+        $from = $request->input('date_from');
+        $to   = $request->input('date_to');
+
+        $base = Order::where('status', Order::STATUS_SHIPPED);
+        if ($user->hasRole('seller')) {
+            $base->where('user_id', $user->id);
+        }
+
+        // Health check on completed_time (answers "do orders have it yet?").
+        $totalShipped     = (clone $base)->count();
+        $missingCompleted = (clone $base)->whereNull('completed_time')->count();
+
+        // VN-local day bucket. $field is whitelisted above, safe to interpolate.
+        $dayExpr = "DATE(DATE_ADD({$field}, INTERVAL 7 HOUR))";
+
+        $query = (clone $base)->whereNotNull($field);
+        if ($from) $query->whereRaw("{$dayExpr} >= ?", [$from]);
+        if ($to)   $query->whereRaw("{$dayExpr} <= ?", [$to]);
+
+        $rows = $query
+            ->select(
+                DB::raw("{$dayExpr} as day"),
+                DB::raw('COUNT(*) as count'),
+                DB::raw('SUM(total_cost) as revenue')
+            )
+            ->groupBy('day')
+            ->orderBy('day')
+            ->get()
+            ->map(fn ($r) => [
+                'day'     => $r->day,
+                'count'   => (int) $r->count,
+                'revenue' => round((float) $r->revenue, 2),
+            ]);
+
+        return response()->json([
+            'rows' => $rows,
+            'meta' => [
+                'date_field'        => $field,
+                'date_from'         => $from,
+                'date_to'           => $to,
+                'total_shipped'     => $totalShipped,
+                'missing_completed' => $missingCompleted,
+                'total_count'       => (int) $rows->sum('count'),
+                'total_revenue'     => round((float) $rows->sum('revenue'), 2),
+            ],
+        ]);
+    }
 }

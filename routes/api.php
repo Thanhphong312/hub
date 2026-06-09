@@ -50,6 +50,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Dashboard
     Route::get('/dashboard', [DashboardController::class, 'index']);
+    Route::get('/dashboard/shipped-report', [DashboardController::class, 'shippedReport']);
 
     // Stamp shipping config — any auth user can read (OrderCreate fee preview).
     Route::get('/settings/stamp-config', [SettingController::class, 'getStampConfig']);
