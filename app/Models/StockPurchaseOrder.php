@@ -14,9 +14,13 @@ class StockPurchaseOrder extends Model
     // Statuses that still count as "đã đặt, chờ hàng về" (not yet in stock).
     const OPEN_STATUSES = ['pending', 'approved'];
 
+    const MODE_PER_ITEM    = 'per_item';
+    const MODE_PER_PACKAGE = 'per_package';
+
     protected $fillable = [
         'product_variant_id', 'accessory_price_id', 'material_id', 'supply_id',
-        'quantity', 'unit_price', 'status', 'notes',
+        'quantity', 'price_mode', 'package_size', 'package_count',
+        'unit_price', 'total_cost', 'status', 'notes',
         'created_by_user_id', 'approved_by_user_id', 'received_at',
     ];
 
@@ -24,6 +28,7 @@ class StockPurchaseOrder extends Model
     {
         return [
             'unit_price'  => 'decimal:2',
+            'total_cost'  => 'decimal:2',
             'received_at' => 'datetime',
         ];
     }
