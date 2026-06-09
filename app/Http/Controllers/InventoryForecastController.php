@@ -76,6 +76,76 @@ class InventoryForecastController extends Controller
         return response()->json($this->computeForecast());
     }
 
+    /**
+     * Daily usage series for accessories + materials over the last N days
+     * (VN calendar days). Used by the forecast page charts. Usage = Σ shipped
+     * order_item.quantity bucketed by the VN date of completed_time.
+     */
+    public function usageDaily(Request $request)
+    {
+        $tz = 'Asia/Ho_Chi_Minh';
+        $days = max(1, min(120, (int) ($request->get('days') ?: 30)));
+        $today = now()->setTimezone($tz)->startOfDay();
+        $start = $today->copy()->subDays($days - 1);
+        $sinceUtc = $start->copy()->utc();
+        $untilUtc = $today->copy()->endOfDay()->utc();
+
+        $dayList = [];
+        for ($i = 0; $i < $days; $i++) $dayList[] = $start->copy()->addDays($i)->toDateString();
+        $idx = array_flip($dayList);                 // 'YYYY-MM-DD' → position
+        $blank = array_fill(0, $days, 0);
+        // completed_time is UTC; bucket by the VN calendar date.
+        $vnDate = "DATE(CONVERT_TZ(o.completed_time, '+00:00', '+07:00'))";
+
+        // Accessories — per (accessory_id, code).
+        $accRows = DB::table('order_items as oi')
+            ->join('orders as o', 'o.id', '=', 'oi.order_id')
+            ->join('order_item_accessories as oia', 'oia.order_item_id', '=', 'oi.id')
+            ->join('accessory_prices as ap', 'ap.id', '=', 'oia.accessory_price_id')
+            ->join('accessories as a', 'a.id', '=', 'ap.accessory_id')
+            ->where('o.status', Order::STATUS_SHIPPED)
+            ->whereBetween('o.completed_time', [$sinceUtc, $untilUtc])
+            ->groupBy('ap.accessory_id', 'ap.accessory_code', 'd')
+            ->selectRaw("ap.accessory_id, ap.accessory_code, a.name as aname, {$vnDate} as d, SUM(oi.quantity) as used")
+            ->get();
+        $acc = [];
+        foreach ($accRows as $r) {
+            $key = $r->accessory_id . '|' . ($r->accessory_code ?? '');
+            if (!isset($acc[$key])) {
+                $acc[$key] = ['label' => $r->aname . ($r->accessory_code ? " [{$r->accessory_code}]" : ''), 'series' => $blank, 'total' => 0];
+            }
+            if (isset($idx[$r->d])) { $acc[$key]['series'][$idx[$r->d]] = (int) $r->used; $acc[$key]['total'] += (int) $r->used; }
+        }
+
+        // Materials — per material_id.
+        $matRows = DB::table('order_items as oi')
+            ->join('orders as o', 'o.id', '=', 'oi.order_id')
+            ->join('materials as m', 'm.id', '=', 'oi.material_id')
+            ->leftJoin('products as p', 'p.id', '=', 'm.product_id')
+            ->where('o.status', Order::STATUS_SHIPPED)
+            ->whereBetween('o.completed_time', [$sinceUtc, $untilUtc])
+            ->groupBy('oi.material_id', 'd')
+            ->selectRaw("oi.material_id, m.name as mname, p.name as pname, {$vnDate} as d, SUM(oi.quantity) as used")
+            ->get();
+        $mat = [];
+        foreach ($matRows as $r) {
+            if (!isset($mat[$r->material_id])) {
+                $mat[$r->material_id] = ['label' => ($r->pname ? $r->pname . ' · ' : '') . $r->mname, 'series' => $blank, 'total' => 0];
+            }
+            if (isset($idx[$r->d])) { $mat[$r->material_id]['series'][$idx[$r->d]] = (int) $r->used; $mat[$r->material_id]['total'] += (int) $r->used; }
+        }
+
+        $byTotalDesc = fn ($a, $b) => $b['total'] - $a['total'];
+        $accOut = array_values($acc); usort($accOut, $byTotalDesc);
+        $matOut = array_values($mat); usort($matOut, $byTotalDesc);
+
+        return response()->json([
+            'days'        => $dayList,
+            'accessories' => $accOut,
+            'materials'   => $matOut,
+        ]);
+    }
+
     private function computeForecast(): array
     {
         $cfg = $this->cfg();
@@ -433,7 +503,10 @@ class InventoryForecastController extends Controller
             'accessory_price_id' => 'nullable|exists:accessory_prices,id',
             'material_id'        => 'nullable|exists:materials,id',
             'supply_id'          => 'nullable|exists:supplies,id',
-            'quantity'           => 'required|integer|min:1',
+            'price_mode'         => 'nullable|in:per_item,per_package',
+            'quantity'           => 'nullable|integer|min:1',
+            'package_size'       => 'nullable|integer|min:1',
+            'package_count'      => 'nullable|integer|min:1',
             'unit_price'         => 'nullable|numeric|min:0',
             'notes'              => 'nullable|string|max:500',
             'purchase_url'       => 'nullable|string|max:1000',
@@ -446,6 +519,26 @@ class InventoryForecastController extends Controller
         if ($targets !== 1) {
             return response()->json(['message' => 'Provide exactly one target'], 422);
         }
+
+        // Resolve quantity (total units) + total_cost from the price mode.
+        $mode = $data['price_mode'] ?? StockPurchaseOrder::MODE_PER_ITEM;
+        $unitPrice = $data['unit_price'] ?? null;
+        if ($mode === StockPurchaseOrder::MODE_PER_PACKAGE) {
+            if (empty($data['package_size']) || empty($data['package_count'])) {
+                return response()->json(['message' => 'package_size và package_count bắt buộc khi đặt theo package'], 422);
+            }
+            $data['quantity']   = (int) $data['package_size'] * (int) $data['package_count'];
+            $data['total_cost'] = $unitPrice !== null ? round((float) $unitPrice * (int) $data['package_count'], 2) : null;
+        } else {
+            if (empty($data['quantity'])) {
+                return response()->json(['message' => 'quantity bắt buộc khi đặt theo cái'], 422);
+            }
+            $data['package_size']  = null;
+            $data['package_count'] = null;
+            $data['total_cost']    = $unitPrice !== null ? round((float) $unitPrice * (int) $data['quantity'], 2) : null;
+        }
+        $data['price_mode'] = $mode;
+
         $po = StockPurchaseOrder::create($data + [
             'status' => StockPurchaseOrder::STATUS_PENDING,
             'created_by_user_id' => $request->user()->id,

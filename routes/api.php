@@ -254,6 +254,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // AI forecast + purchase orders
         Route::get('/inventory/forecast', [InventoryForecastController::class, 'forecast']);
+        Route::get('/inventory/usage-daily', [InventoryForecastController::class, 'usageDaily']);
         Route::post('/inventory/forecast/ai', [InventoryForecastController::class, 'aiForecast']);
         Route::get('/inventory/ai-config', [InventoryForecastController::class, 'getAiConfig']);
         Route::put('/inventory/ai-config', [InventoryForecastController::class, 'updateAiConfig']);
