@@ -26,7 +26,36 @@ class GangsheetController extends Controller
             $query->whereDate('created_at', '<=', $request->date_to);
         }
         if ($request->filled('line_id')) {
-            $query->where('line_id', $request->line_id);
+            $term = trim($request->line_id);
+            // Escape LIKE metacharacters so the underscores in line ids
+            // (e.g. "PS_C2899") match literally instead of as the single-char
+            // wildcard "_".
+            $esc  = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term);
+            $like = "%{$esc}%";
+
+            // The `line_id` column only records each gang's DOMINANT line.
+            // Gangs are bucketed by side/accessory/material — NOT by line — so a
+            // single gang can hold several product lines. Exact-matching the
+            // dominant value alone misses gangs where the searched line isn't
+            // dominant (e.g. "PS_C2899" present but not the majority). Also
+            // match gangs that CONTAIN an order whose product line_id matches,
+            // by intersecting the stored order_ids JSON.
+            $orderIds = Order::whereHas(
+                    'items.productVariant.product',
+                    fn ($q) => $q->where('line_id', 'like', $like)
+                )->limit(20000)->pluck('id')->all();
+
+            $query->where(function ($q) use ($like, $orderIds) {
+                $q->where('line_id', 'like', $like);
+                if (!empty($orderIds)) {
+                    // JSON_OVERLAPS (MySQL 8.0.17+): true when the gang's
+                    // order_ids array shares any element with the matched set.
+                    $q->orWhereRaw(
+                        'JSON_OVERLAPS(order_ids, CAST(? AS JSON))',
+                        [json_encode(array_map('intval', $orderIds))]
+                    );
+                }
+            });
         }
         if ($request->filled('page_format')) {
             // Legacy gangs (null format) were Letter 11×8.5 → group them there.
