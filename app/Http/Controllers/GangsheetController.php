@@ -27,27 +27,27 @@ class GangsheetController extends Controller
         }
         if ($request->filled('line_id')) {
             $term = trim($request->line_id);
-            $like = '%' . $term . '%';   // partial, e.g. "PS" finds "PS_C3071"
+            $like = '%' . $term . '%';
 
-            // The `line_id` column only records each gang's DOMINANT line.
-            // Gangs are bucketed by side/accessory/material — NOT by line — so a
-            // single gang can hold several product lines. Exact-matching the
-            // dominant value alone misses gangs where the searched line isn't
-            // dominant (e.g. "PS_C3071" present but not the majority). Also
-            // match gangs that CONTAIN an order whose product line_id matches,
-            // by looking through the stored order_ids JSON. Capped so a broad
-            // term ("PS") can't build a runaway query — the dominant-line LIKE
-            // still covers those gangs.
-            $orderIds = Order::whereHas(
-                    'items.productVariant.product',
-                    fn ($q) => $q->where('line_id', 'like', $like)
-                )->orderByDesc('id')->limit(2000)->pluck('id')->all();
+            // The box is labelled "Line ID" but operators routinely paste an
+            // order's SYSTEM_ID into it (e.g. "PS_C3071") to find the gang that
+            // order landed in — system_id is "<line_id><order_id>", so it looks
+            // like a line id. Match all of:
+            //   1. the gang's dominant line_id           ("PS_C")
+            //   2. its first/last_system_id boundary tags ("PS_C3071")
+            //   3. any order it CONTAINS — by that order's system_id OR its
+            //      product line_id — resolved through the stored order_ids JSON.
+            $orderIds = Order::where('system_id', 'like', $like)
+                ->orWhereHas('items.productVariant.product', fn ($q) => $q->where('line_id', 'like', $like))
+                ->orderByDesc('id')->limit(2000)->pluck('id')->all();
 
             $query->where(function ($q) use ($like, $orderIds) {
-                $q->where('line_id', 'like', $like);
-                // JSON_CONTAINS is portable (MySQL 5.7+ / MariaDB 10.2+); unlike
-                // JSON_OVERLAPS (MySQL 8.0.17+ / MariaDB 10.9+) it runs on the
-                // XAMPP MariaDB dev box too. One membership test per matched id.
+                $q->where('line_id', 'like', $like)
+                  ->orWhere('first_system_id', 'like', $like)
+                  ->orWhere('last_system_id', 'like', $like);
+                // JSON_CONTAINS is portable (MySQL 5.7+ / MariaDB 10.2+). One
+                // membership test per matched id; capped above so a broad term
+                // can't build a runaway query (the line_id LIKE still covers it).
                 foreach ($orderIds as $oid) {
                     $q->orWhereRaw('JSON_CONTAINS(order_ids, ?)', [(string) (int) $oid]);
                 }
