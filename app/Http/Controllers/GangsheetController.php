@@ -26,32 +26,42 @@ class GangsheetController extends Controller
             $query->whereDate('created_at', '<=', $request->date_to);
         }
         if ($request->filled('line_id')) {
-            $term = trim($request->line_id);
-            $like = '%' . $term . '%';
+            // Accept a LIST: one or many terms separated by comma / semicolon /
+            // whitespace / newline. A gang matches if it matches ANY term.
+            $terms = array_values(array_unique(array_filter(
+                array_map('trim', preg_split('/[\s,;]+/', (string) $request->line_id))
+            )));
 
-            // The box is labelled "Line ID" but operators routinely paste an
-            // order's SYSTEM_ID into it (e.g. "PS_C3071") to find the gang that
-            // order landed in — system_id is "<line_id><order_id>", so it looks
-            // like a line id. Match all of:
-            //   1. the gang's dominant line_id           ("PS_C")
-            //   2. its first/last_system_id boundary tags ("PS_C3071")
-            //   3. any order it CONTAINS — by that order's system_id OR its
-            //      product line_id — resolved through the stored order_ids JSON.
-            $orderIds = Order::where('system_id', 'like', $like)
-                ->orWhereHas('items.productVariant.product', fn ($q) => $q->where('line_id', 'like', $like))
-                ->orderByDesc('id')->limit(2000)->pluck('id')->all();
+            if (!empty($terms)) {
+                $likes = array_map(fn ($t) => '%' . $t . '%', $terms);
 
-            $query->where(function ($q) use ($like, $orderIds) {
-                $q->where('line_id', 'like', $like)
-                  ->orWhere('first_system_id', 'like', $like)
-                  ->orWhere('last_system_id', 'like', $like);
-                // JSON_CONTAINS is portable (MySQL 5.7+ / MariaDB 10.2+). One
-                // membership test per matched id; capped above so a broad term
-                // can't build a runaway query (the line_id LIKE still covers it).
-                foreach ($orderIds as $oid) {
-                    $q->orWhereRaw('JSON_CONTAINS(order_ids, ?)', [(string) (int) $oid]);
-                }
-            });
+                // Each term is matched as a "Line ID" OR an order "System ID".
+                // system_id is "<line_id><order_id>" (e.g. PS_C + 3071 =
+                // "PS_C3071"), so operators paste either into this one box.
+                // Collect the order ids matching any term (by system_id or by
+                // product line_id) so we can find the gangs that contain them.
+                $orderIds = Order::where(function ($oq) use ($likes) {
+                        foreach ($likes as $lk) {
+                            $oq->orWhere('system_id', 'like', $lk)
+                               ->orWhereHas('items.productVariant.product', fn ($q) => $q->where('line_id', 'like', $lk));
+                        }
+                    })
+                    ->orderByDesc('id')->limit(2000)->pluck('id')->all();
+
+                $query->where(function ($q) use ($likes, $orderIds) {
+                    foreach ($likes as $lk) {
+                        $q->orWhere('line_id', 'like', $lk)
+                          ->orWhere('first_system_id', 'like', $lk)
+                          ->orWhere('last_system_id', 'like', $lk);
+                    }
+                    // JSON_CONTAINS is portable (MySQL 5.7+ / MariaDB 10.2+).
+                    // One membership test per matched id; the order set is capped
+                    // above so a broad term can't build a runaway query.
+                    foreach ($orderIds as $oid) {
+                        $q->orWhereRaw('JSON_CONTAINS(order_ids, ?)', [(string) (int) $oid]);
+                    }
+                });
+            }
         }
         if ($request->filled('page_format')) {
             // Legacy gangs (null format) were Letter 11×8.5 → group them there.
