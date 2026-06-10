@@ -1145,6 +1145,40 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     }
 
     /**
+     * Update an order item's mockup_front / mockup_back image URLs. Used by the
+     * OrderDetail inline mockup editor so users can re-upload / replace mockups
+     * after an order is created.
+     *
+     * Authorization mirrors updateItemMetas: admin/support, or the order's owner.
+     * Mockups are customer-facing preview images — they are NOT gangsheet design
+     * sources — so changing them does not reset production or _qr metas.
+     */
+    public function updateItemMockups(Request $request, OrderItem $item)
+    {
+        $user = $request->user();
+        $isStaff = $user?->role && in_array($user->role->slug, ['admin', 'support']);
+        $isOwner = $item->order && $item->order->user_id === $user?->id;
+        if (!$isStaff && !$isOwner) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $data = $request->validate([
+            'mockup_front' => 'nullable|string',
+            'mockup_back'  => 'nullable|string',
+        ]);
+
+        $item->update([
+            'mockup_front' => $data['mockup_front'] ?? null,
+            'mockup_back'  => $data['mockup_back'] ?? null,
+        ]);
+
+        return response()->json([
+            'message' => 'Mockups updated',
+            'item' => $item->only(['id', 'mockup_front', 'mockup_back']),
+        ]);
+    }
+
+    /**
      * Replace the accessories attached to an order item, then recompute the
      * parent order's print_cost / total_cost. Used by the OrderDetail "Edit
      * accessories" inline editor.

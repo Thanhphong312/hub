@@ -93,6 +93,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{order}/reconvert', [OrderController::class, 'reconvert']);
     Route::post('/orders/{order}/reconvert-label', [OrderController::class, 'reconvertLabel']);
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
+    Route::put('/order-items/{item}/mockups', [OrderController::class, 'updateItemMockups']);
     Route::put('/order-items/{item}/accessories', [OrderController::class, 'updateItemAccessories']);
 
     // Server-side proxy for fetching convert_label image bytes — bypasses
