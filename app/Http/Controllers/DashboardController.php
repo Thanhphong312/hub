@@ -59,25 +59,6 @@ class DashboardController extends Controller
             ->orderBy('date')
             ->get();
 
-        // ── End-of-month projection ───────────────────────────────────
-        // Average orders/day for THIS calendar month (Vietnam-local, matching
-        // the +7h convention used elsewhere) and a naive linear projection to
-        // the full month. Built from a fresh, seller-scoped base so it ignores
-        // any date_from/date_to filter on the page. The per-order profit rate
-        // ($1.8) is applied client-side so operators can tweak it live.
-        $monthBase = Order::query()->where('status', '!=', Order::STATUS_CANCELLED);
-        if ($user->hasRole('seller')) {
-            $monthBase->where('user_id', $user->id);
-        }
-        $vnNow = now('Asia/Ho_Chi_Minh');
-        $monthOrders = $monthBase
-            ->whereRaw("DATE_FORMAT(DATE_ADD(created_at, INTERVAL 7 HOUR), '%Y-%m') = ?", [$vnNow->format('Y-m')])
-            ->count();
-        $daysElapsed = (int) $vnNow->day;
-        $daysInMonth = (int) $vnNow->daysInMonth;
-        $avgOrdersPerDay = $daysElapsed > 0 ? $monthOrders / $daysElapsed : 0;
-        $projectedMonthOrders = (int) round($avgOrdersPerDay * $daysInMonth);
-
         // Recent orders — keep all so admin can see the full timeline.
         $recentOrders = (clone $query)
             ->with('user')
@@ -95,12 +76,6 @@ class DashboardController extends Controller
             'total_shipping_cost' => round($totalShippingCost, 2),
             'orders_per_day' => $ordersPerDay,
             'recent_orders' => $recentOrders,
-            // End-of-month projection (current VN month).
-            'avg_orders_per_day' => round($avgOrdersPerDay, 1),
-            'month_orders' => $monthOrders,
-            'days_elapsed' => $daysElapsed,
-            'days_in_month' => $daysInMonth,
-            'projected_month_orders' => $projectedMonthOrders,
         ];
 
         // Admin extra stats
