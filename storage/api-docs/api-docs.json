@@ -1,0 +1,1789 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "BullStart Seller API",
+        "description": "API dành cho **seller** của BullStart — tạo đơn, theo dõi shipping, quản lý ví. Endpoint admin-only (Inventory, Gangsheet, Users, Settings, refund, approve deposit, bulk-merge…) không có trong doc này.\n\n## Hai phương thức xác thực\n\n| Scheme | Routes | Lấy ở đâu |\n|---|---|---|\n| **Bearer (Sanctum)** | hầu hết các route `/api/*` | `POST /api/login` |\n| **X-API-KEY header** | `POST /api/fulfill`, `GET /api/fulfill`, `GET /api/catalog/*` (external integration) | Profile page hoặc `GET /api/me/api-key` |\n\n## Cách test nhanh\n\n1. Vào tab **Auth → POST /login** → click **Try it out** → điền email/password seller → Execute\n2. Copy `token` từ response\n3. Bấm nút **Authorize 🔒** góc trên phải → paste vào ô `bearerAuth` (chỉ chuỗi token, KHÔNG cần `Bearer` prefix)\n4. Mọi endpoint có lock icon từ đó tự đính kèm `Authorization: Bearer <token>`\n5. Endpoint Public API (X-API-KEY): trong Authorize popup, paste `bsk_...` vào ô `apiKeyAuth`\n\n## Order status code\n\n`0`=new_order, `1`=processing, `2`=wrongsize, `3`=fixed, `4`=reprint, `5`=onhold, `6`=shipped, `7`=cancelled.\n\nSeller chỉ được tự set status `5` (onhold) hoặc `7` (cancelled) cho đơn của mình. Các transition khác do admin/support thực hiện.\n",
+        "contact": {
+            "name": "BullStart Team",
+            "email": "admin@bullstart.us"
+        },
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "https://bullstart.us/api",
+            "description": "Production"
+        },
+        {
+            "url": "https://dev.bullstart.us/api",
+            "description": "Develop"
+        }
+    ],
+    "paths": {
+        "/login": {
+            "post": {
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Login (Sanctum)",
+                "description": "Trả về token Sanctum + thông tin user. Mọi route khác (trừ /fulfill + /catalog) cần header `Authorization: Bearer <token>`.",
+                "operationId": "2dd578ff7aba2721293dac66833b27d1",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "email",
+                                    "password"
+                                ],
+                                "properties": {
+                                    "email": {
+                                        "type": "string",
+                                        "format": "email",
+                                        "example": "seller@bullstart.com"
+                                    },
+                                    "password": {
+                                        "type": "string",
+                                        "example": "password"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "token": {
+                                            "type": "string",
+                                            "example": "1|abcdef..."
+                                        },
+                                        "user": {
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Bad credentials"
+                    },
+                    "403": {
+                        "description": "Account inactive"
+                    }
+                }
+            }
+        },
+        "/me": {
+            "get": {
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Get current user",
+                "operationId": "e18baa7d6dfc432241dca2fc1985ce40",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Unauthenticated"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/orders": {
+            "get": {
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "List orders",
+                "description": "Paginated + filter status / ship_type / ref_id / date range / paid. Seller chỉ thấy đơn của mình.",
+                "operationId": "325fd3d55bbe9bb39645269928fa4983",
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "description": "Status 0–7 (6=shipped)",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "ship_type",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "tiktok_ship",
+                                "seller_ship"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "ref_id",
+                        "in": "query",
+                        "description": "Contains match",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "system_id",
+                        "in": "query",
+                        "description": "Contains match",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "tracking_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "date_from",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "date_to",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "paid",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "paid",
+                                "unpaid"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "user_id",
+                        "in": "query",
+                        "description": "Admin only — filter by owner",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "page",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "default": 1
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "default": 20
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Paginated list"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            },
+            "post": {
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Create order (Sanctum)",
+                "description": "Tạo 1 đơn mới. Phải gửi 1 trong 2: `shipping_label` URL HOẶC `address` đầy đủ. Items hỗ trợ multi-accessory qua `accessory_ids[]`.\n\n### `items[].metas` keys\n\nMảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{ key, value }` — `value` là URL ảnh design (Drive/B2/direct image), `key` là tên mặt in. Các key cho phép:\n\n| key | Mặt in | Khi nào dùng |\n|-----|--------|--------------|\n| `front` | Mặt trước | Đa số sản phẩm 1 hoặc 2 mặt. Thường bắt buộc. |\n| `back` | Mặt sau | Đơn 2 mặt. Tự cộng thêm `2nd_fee` vào item price (vd \\$0.50). |\n| `left` | Mặt trái | Đơn có 3 mặt+ (vd áo có in tay trái). |\n| `right` | Mặt phải | Tương tự `left`. |\n| `neck` | Phần cổ | Thường cho áo / pass sleeve cần in tag cổ. |\n| `special` | Mặt đặc biệt | Mọi case khác — packer xem hint trong gangsheet. |\n\n**Pricing rule:** `item.price = base_cost + (N − 1) × 2nd_fee` với N là số meta key có giá trị (counted distinct). Variant prices lấy theo `(product_variant_id, tier_id)` từ table `product_variant_prices`.\n\n**Bỏ qua meta key trống** — backend filter mọi entry có `value` rỗng trước khi save.\n\n**Không truyền `*_qr` key** — đó là các meta server tự sinh sau khi convert (overlay barcode), không nhận từ client.",
+                "operationId": "445bab4f7dc9ea6fcd54f286c0209478",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "ref_id",
+                                    "items"
+                                ],
+                                "properties": {
+                                    "ref_id": {
+                                        "description": "ID đơn nội bộ (unique per seller)",
+                                        "type": "string",
+                                        "example": "TIKTOK-1234567"
+                                    },
+                                    "shipping_label": {
+                                        "description": "URL carrier label. Nếu có thì không cần address.",
+                                        "type": "string",
+                                        "example": "https://drive.google.com/file/d/ABC/view"
+                                    },
+                                    "address": {
+                                        "description": "Bắt buộc nếu KHÔNG có shipping_label.",
+                                        "properties": {
+                                            "first_name": {
+                                                "type": "string",
+                                                "example": "John"
+                                            },
+                                            "last_name": {
+                                                "type": "string",
+                                                "example": "Doe"
+                                            },
+                                            "address_1": {
+                                                "type": "string",
+                                                "example": "123 Main St"
+                                            },
+                                            "address_2": {
+                                                "type": "string",
+                                                "example": "Apt 5"
+                                            },
+                                            "city": {
+                                                "type": "string",
+                                                "example": "Boston"
+                                            },
+                                            "state": {
+                                                "type": "string",
+                                                "example": "MA"
+                                            },
+                                            "zipcode": {
+                                                "type": "string",
+                                                "example": "02101"
+                                            },
+                                            "country": {
+                                                "type": "string",
+                                                "example": "US"
+                                            }
+                                        },
+                                        "type": "object"
+                                    },
+                                    "items": {
+                                        "type": "array",
+                                        "items": {
+                                            "required": [
+                                                "product_variant_id"
+                                            ],
+                                            "properties": {
+                                                "product_variant_id": {
+                                                    "type": "integer",
+                                                    "example": 42
+                                                },
+                                                "material_id": {
+                                                    "description": "Optional. Material (chất liệu) id — must belong to the product. Lấy ds qua GET /products (each product has materials[]).",
+                                                    "type": "integer",
+                                                    "example": 7
+                                                },
+                                                "accessory_ids": {
+                                                    "description": "Mảng accessory_prices.id (multi-acc)",
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "integer"
+                                                    },
+                                                    "example": [
+                                                        18,
+                                                        19
+                                                    ]
+                                                },
+                                                "accessory_item_id": {
+                                                    "description": "Legacy single-acc",
+                                                    "type": "integer",
+                                                    "example": 18
+                                                },
+                                                "quantity": {
+                                                    "type": "integer",
+                                                    "default": 1,
+                                                    "example": 2
+                                                },
+                                                "mockup_front": {
+                                                    "type": "string",
+                                                    "example": "https://drive.google.com/file/d/FRONT/view"
+                                                },
+                                                "mockup_back": {
+                                                    "type": "string",
+                                                    "example": "https://drive.google.com/file/d/BACK/view"
+                                                },
+                                                "order_type": {
+                                                    "description": "0=Greeting Card, 1=Pass Sleeve",
+                                                    "type": "integer",
+                                                    "default": 0,
+                                                    "enum": [
+                                                        0,
+                                                        1
+                                                    ]
+                                                },
+                                                "metas": {
+                                                    "description": "Artwork URLs theo từng mặt in. Xem bảng đầy đủ ở description chính. Mỗi entry: { key, value }. Mỗi mặt thêm (ngoài front) cộng thêm 2nd_fee vào item price.",
+                                                    "type": "array",
+                                                    "items": {
+                                                        "required": [
+                                                            "key",
+                                                            "value"
+                                                        ],
+                                                        "properties": {
+                                                            "key": {
+                                                                "description": "front=mặt trước (bắt buộc cho hầu hết) · back=mặt sau (+2nd_fee) · left=tay trái · right=tay phải · neck=cổ áo · special=mặt đặc biệt",
+                                                                "type": "string",
+                                                                "enum": [
+                                                                    "front",
+                                                                    "back",
+                                                                    "left",
+                                                                    "right",
+                                                                    "neck",
+                                                                    "special"
+                                                                ],
+                                                                "example": "front"
+                                                            },
+                                                            "value": {
+                                                                "description": "URL ảnh design (Drive / B2 / direct image). Để rỗng để skip (backend tự filter).",
+                                                                "type": "string",
+                                                                "example": "https://drive.google.com/file/d/ABC/view"
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    }
+                                                }
+                                            },
+                                            "type": "object"
+                                        },
+                                        "minItems": 1
+                                    },
+                                    "ship_by_stamp": {
+                                        "description": "Đơn ship tem — không có tracking, qty ≤ 4. Khi true, address bắt buộc + shipping_label bỏ qua.",
+                                        "type": "boolean",
+                                        "default": false
+                                    },
+                                    "force": {
+                                        "description": "Bỏ qua check 409 duplicate ref_id",
+                                        "type": "boolean",
+                                        "default": false
+                                    },
+                                    "rename": {
+                                        "description": "Auto thêm suffix `_r_1` nếu trùng",
+                                        "type": "boolean",
+                                        "default": false
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Order created"
+                    },
+                    "409": {
+                        "description": "Duplicate ref_id"
+                    },
+                    "422": {
+                        "description": "Validation error"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/orders/{order}/pay": {
+            "post": {
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Pay order from wallet",
+                "description": "Trừ (total_cost - paid_cost) khỏi ví seller. Idempotent: đơn đã paid trả 400.",
+                "operationId": "0f3ac843784e2e14a5a0854959445730",
+                "parameters": [
+                    {
+                        "name": "order",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 123
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Paid"
+                    },
+                    "400": {
+                        "description": "Already paid or insufficient wallet"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/orders/bulk-pay": {
+            "post": {
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Bulk pay orders from wallet",
+                "description": "Pay nhiều đơn cùng lúc từ ví owner. Atomic — nếu owner thiếu ví, abort toàn batch không trừ ai.",
+                "operationId": "f63369f841a4fd26aba28eb22a82819f",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "order_ids"
+                                ],
+                                "properties": {
+                                    "order_ids": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "integer"
+                                        },
+                                        "example": [
+                                            123,
+                                            124,
+                                            125
+                                        ]
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Paid"
+                    },
+                    "400": {
+                        "description": "Insufficient wallet or all paid"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/orders/import-csv": {
+            "post": {
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Import orders from CSV",
+                "description": "Upload CSV để tạo nhiều đơn 1 lần. Download template tại GET /orders/export-csv-template. Hỗ trợ multi-accessory qua cột accessory_code (comma/pipe separated).",
+                "operationId": "f8bcfd99810cd01550c7715e9d5bb090",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "required": [
+                                    "file"
+                                ],
+                                "properties": {
+                                    "file": {
+                                        "description": "CSV file",
+                                        "type": "string",
+                                        "format": "binary"
+                                    },
+                                    "force": {
+                                        "description": "Bỏ qua check 409 duplicate ref_id",
+                                        "type": "boolean",
+                                        "default": false
+                                    },
+                                    "rename": {
+                                        "description": "Auto thêm suffix _r_1 nếu trùng",
+                                        "type": "boolean",
+                                        "default": false
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Import result"
+                    },
+                    "409": {
+                        "description": "Duplicate ref_id detected"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/orders/export": {
+            "get": {
+                "tags": [
+                    "Orders"
+                ],
+                "summary": "Export orders to CSV",
+                "description": "Streamed CSV với cùng filter như GET /orders. Hoặc truyền order_ids để export riêng các đơn đã chọn.",
+                "operationId": "3187102ad5bc324cd82796d625a0eb23",
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "date_from",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "date_to",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "order_ids",
+                        "in": "query",
+                        "description": "Comma-separated",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "123,124,125"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "CSV file",
+                        "content": {
+                            "text/csv": {}
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/catalog/products": {
+            "get": {
+                "tags": [
+                    "Public API"
+                ],
+                "summary": "List products + variants (X-API-KEY)",
+                "description": "Catalog product với tier-scoped prices của caller. Dùng để biết product_variant_id trước khi POST /fulfill.",
+                "operationId": "bac66c8ad5518c06ff17b8d6be5fb7d2",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "401": {
+                        "description": "Invalid X-API-KEY"
+                    }
+                },
+                "security": [
+                    {
+                        "apiKeyAuth": []
+                    }
+                ]
+            }
+        },
+        "/catalog/accessories": {
+            "get": {
+                "tags": [
+                    "Public API"
+                ],
+                "summary": "List accessories (X-API-KEY)",
+                "description": "Accessory + tier-scoped prices. Dùng để biết accessory_ids[] trước khi POST /fulfill.",
+                "operationId": "b5be0227b90570e8f440a0c19699cb8a",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                },
+                "security": [
+                    {
+                        "apiKeyAuth": []
+                    }
+                ]
+            }
+        },
+        "/fulfill": {
+            "get": {
+                "tags": [
+                    "Public API"
+                ],
+                "summary": "List orders (X-API-KEY)",
+                "description": "Liệt kê đơn của caller. Filter giống GET /orders.",
+                "operationId": "b88a898d03a2fade0bf1e2b2ce579611",
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "ref_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "date_from",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "date_to",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "default": 20
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Paginated list"
+                    }
+                },
+                "security": [
+                    {
+                        "apiKeyAuth": []
+                    }
+                ]
+            },
+            "post": {
+                "tags": [
+                    "Public API"
+                ],
+                "summary": "Create order (X-API-KEY)",
+                "description": "Tạo đơn từ external system. Auth bằng header X-API-KEY (lấy từ Profile page hoặc GET /me/api-key). Body payload identical với POST /orders.",
+                "operationId": "3bf0c888cca7c2783a062d5a4b19347f",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "ref_id",
+                                    "items"
+                                ],
+                                "properties": {
+                                    "ref_id": {
+                                        "type": "string",
+                                        "example": "SHOP-987"
+                                    },
+                                    "shipping_label": {
+                                        "type": "string",
+                                        "example": "https://drive.google.com/file/d/ABC/view"
+                                    },
+                                    "address": {
+                                        "description": "Required nếu KHÔNG có shipping_label",
+                                        "type": "object"
+                                    },
+                                    "items": {
+                                        "type": "array",
+                                        "items": {
+                                            "properties": {
+                                                "product_variant_id": {
+                                                    "type": "integer",
+                                                    "example": 42
+                                                },
+                                                "accessory_ids": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "integer"
+                                                    },
+                                                    "example": [
+                                                        18
+                                                    ]
+                                                },
+                                                "quantity": {
+                                                    "type": "integer",
+                                                    "default": 1,
+                                                    "example": 1
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Order created"
+                    },
+                    "401": {
+                        "description": "Invalid or missing X-API-KEY"
+                    },
+                    "409": {
+                        "description": "Duplicate ref_id"
+                    }
+                },
+                "security": [
+                    {
+                        "apiKeyAuth": []
+                    }
+                ]
+            }
+        },
+        "/fulfill/{idOrRef}": {
+            "get": {
+                "tags": [
+                    "Public API"
+                ],
+                "summary": "Get order (X-API-KEY)",
+                "description": "Numeric → order.id. String → order.ref_id.",
+                "operationId": "b213bf1937fb30a2313ef58824056784",
+                "parameters": [
+                    {
+                        "name": "idOrRef",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "SHOP-987"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not found"
+                    }
+                },
+                "security": [
+                    {
+                        "apiKeyAuth": []
+                    }
+                ]
+            }
+        },
+        "/products": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "List products",
+                "description": "Paginated list với variants + tier prices + accessories nested. Dùng khi muốn browse cả catalog 1 lần. Để tìm variant theo SKU, dùng GET /variants nhanh hơn.",
+                "operationId": "c1ff6f862214e1896c59cfe0491ce0e8",
+                "parameters": [
+                    {
+                        "name": "search",
+                        "in": "query",
+                        "description": "Contains match on product name",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "Greeting"
+                    },
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "description": "1=active, 0=inactive",
+                        "schema": {
+                            "type": "integer",
+                            "enum": [
+                                0,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "name": "style",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "default": 20
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Paginated products. Each product is eager-loaded with `variants[]`, `accessories[]`, and `materials[]` (chất liệu — id/name/description/is_default)."
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/products/{product}": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Get product (with variants + accessories + tier prices)",
+                "operationId": "960e17d05ed63211b20fb4b8505f1263",
+                "parameters": [
+                    {
+                        "name": "product",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 1
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Product full detail",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "product": {
+                                            "properties": {
+                                                "id": {
+                                                    "type": "integer",
+                                                    "example": 1
+                                                },
+                                                "name": {
+                                                    "type": "string",
+                                                    "example": "Greeting Card"
+                                                },
+                                                "style": {
+                                                    "type": "string"
+                                                },
+                                                "line_id": {
+                                                    "type": "string",
+                                                    "example": "GC"
+                                                },
+                                                "status": {
+                                                    "type": "integer",
+                                                    "example": 1
+                                                },
+                                                "variants": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object"
+                                                    }
+                                                },
+                                                "accessories": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object"
+                                                    }
+                                                },
+                                                "materials": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "properties": {
+                                                            "id": {
+                                                                "type": "integer",
+                                                                "example": 7
+                                                            },
+                                                            "name": {
+                                                                "type": "string",
+                                                                "example": "Gloss 300gsm"
+                                                            },
+                                                            "description": {
+                                                                "type": "string",
+                                                                "nullable": true
+                                                            },
+                                                            "is_default": {
+                                                                "type": "boolean",
+                                                                "example": true
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    }
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not found"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/variants": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Search product variants",
+                "description": "Flat list of variants with filters. Use this to look up `product_variant_id` for POST /orders.",
+                "operationId": "69547bbf21735089e24aaddb8e2134c8",
+                "parameters": [
+                    {
+                        "name": "sku",
+                        "in": "query",
+                        "description": "Exact SKU match",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "TSHIRT-RED-M"
+                    },
+                    {
+                        "name": "product_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 1
+                    },
+                    {
+                        "name": "product_name",
+                        "in": "query",
+                        "description": "Contains match on product name",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "Greeting"
+                    },
+                    {
+                        "name": "color",
+                        "in": "query",
+                        "description": "Exact match",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "size",
+                        "in": "query",
+                        "description": "Exact match",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "paper_type",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "description": "1=active, 0=inactive",
+                        "schema": {
+                            "type": "integer",
+                            "enum": [
+                                0,
+                                1
+                            ]
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "default": 50
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Paginated variants",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "properties": {
+                                                    "id": {
+                                                        "type": "integer",
+                                                        "example": 42
+                                                    },
+                                                    "sku": {
+                                                        "type": "string",
+                                                        "example": "TSHIRT-RED-M"
+                                                    },
+                                                    "color": {
+                                                        "type": "string",
+                                                        "example": "Red"
+                                                    },
+                                                    "size": {
+                                                        "type": "string",
+                                                        "example": "M"
+                                                    },
+                                                    "paper_type": {
+                                                        "type": "string",
+                                                        "nullable": true
+                                                    },
+                                                    "stock": {
+                                                        "type": "integer",
+                                                        "example": 100
+                                                    },
+                                                    "product": {
+                                                        "properties": {
+                                                            "id": {
+                                                                "type": "integer"
+                                                            },
+                                                            "name": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    }
+                                                },
+                                                "type": "object"
+                                            }
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/accessories": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Search accessories (with tier-scoped prices)",
+                "description": "Flat list of accessories. Use this to look up `accessory_ids[]` for POST /orders. Returns accessory_prices scoped to caller's tier — chỉ pick `accessory_prices.id` cùng tier seller mới hợp lệ.",
+                "operationId": "4f3afb9ae05d99a53eb2d5f61793d357",
+                "parameters": [
+                    {
+                        "name": "product_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 1
+                    },
+                    {
+                        "name": "name",
+                        "in": "query",
+                        "description": "Contains match on accessory name",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "Envelope"
+                    },
+                    {
+                        "name": "code",
+                        "in": "query",
+                        "description": "Exact match on any accessory_price.accessory_code",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "W"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Accessories with prices",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "properties": {
+                                            "id": {
+                                                "type": "integer",
+                                                "example": 5
+                                            },
+                                            "name": {
+                                                "type": "string",
+                                                "example": "Envelope"
+                                            },
+                                            "product_id": {
+                                                "type": "integer",
+                                                "example": 1
+                                            },
+                                            "stock": {
+                                                "type": "integer",
+                                                "example": 200
+                                            },
+                                            "prices": {
+                                                "type": "array",
+                                                "items": {
+                                                    "properties": {
+                                                        "id": {
+                                                            "description": "accessory_price_id — pass into accessory_ids[]",
+                                                            "type": "integer",
+                                                            "example": 18
+                                                        },
+                                                        "style": {
+                                                            "type": "string",
+                                                            "example": "White"
+                                                        },
+                                                        "accessory_code": {
+                                                            "type": "string",
+                                                            "example": "W"
+                                                        },
+                                                        "price": {
+                                                            "type": "number",
+                                                            "example": 0.5
+                                                        },
+                                                        "tier_id": {
+                                                            "type": "integer",
+                                                            "example": 1
+                                                        }
+                                                    },
+                                                    "type": "object"
+                                                }
+                                            }
+                                        },
+                                        "type": "object"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/products/{product}/variants": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "List variants of one product",
+                "description": "Khi đã biết product_id, lấy nhanh list variants. Để cross-product search dùng GET /variants.",
+                "operationId": "ee01f6d8c3b09ae578357830c1fcc5c4",
+                "parameters": [
+                    {
+                        "name": "product",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 1
+                    },
+                    {
+                        "name": "color",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "Red"
+                    },
+                    {
+                        "name": "size",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "M"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Variants array (with tier-scoped prices)"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/products/{product}/prices": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "List variant prices for a product",
+                "description": "Flat list price rows (1 row per variant × tier × key). Key = `base_cost`, `label_fee`, `shipping_cost`, `addition_fee`, `2nd_fee`.",
+                "operationId": "326cc45fea2573a095e9fa3935bd9282",
+                "parameters": [
+                    {
+                        "name": "product",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 1
+                    },
+                    {
+                        "name": "tier_id",
+                        "in": "query",
+                        "description": "Filter by tier",
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 1
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Prices array"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/products/{product}/materials": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "List a product's materials",
+                "operationId": "502a146726ef1ac89073d123b39b2139",
+                "parameters": [
+                    {
+                        "name": "product",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 1
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Material list",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "properties": {
+                                            "id": {
+                                                "type": "integer",
+                                                "example": 7
+                                            },
+                                            "product_id": {
+                                                "type": "integer",
+                                                "example": 1
+                                            },
+                                            "name": {
+                                                "type": "string",
+                                                "example": "Gloss 300gsm"
+                                            },
+                                            "description": {
+                                                "type": "string",
+                                                "nullable": true
+                                            },
+                                            "is_default": {
+                                                "type": "boolean",
+                                                "example": true
+                                            }
+                                        },
+                                        "type": "object"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Product not found"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            },
+            "post": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Add a material (chất liệu) to a product [admin]",
+                "operationId": "27ecb7b00b0d2fc84917eec7dabd3b17",
+                "parameters": [
+                    {
+                        "name": "product",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 1
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "name"
+                                ],
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "example": "Gloss 300gsm"
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "example": "Bóng, dày, dùng cho thiệp cao cấp",
+                                        "nullable": true
+                                    },
+                                    "is_default": {
+                                        "description": "Setting true auto-clears the flag on other materials of the same product",
+                                        "type": "boolean",
+                                        "example": false
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Material created",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Material created"
+                                        },
+                                        "material": {
+                                            "properties": {
+                                                "id": {
+                                                    "type": "integer",
+                                                    "example": 7
+                                                },
+                                                "product_id": {
+                                                    "type": "integer",
+                                                    "example": 1
+                                                },
+                                                "name": {
+                                                    "type": "string",
+                                                    "example": "Gloss 300gsm"
+                                                },
+                                                "description": {
+                                                    "type": "string",
+                                                    "nullable": true
+                                                },
+                                                "is_default": {
+                                                    "type": "boolean",
+                                                    "example": false
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (non-admin)"
+                    },
+                    "422": {
+                        "description": "Validation error"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/materials/{material}": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Get one material",
+                "operationId": "316842351fcca533a990a2cfbe50e302",
+                "parameters": [
+                    {
+                        "name": "material",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 7
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Material detail"
+                    },
+                    "404": {
+                        "description": "Not found"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            },
+            "put": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Update a material [admin]",
+                "operationId": "8a918be41c7729752f3e912d2994ee9b",
+                "parameters": [
+                    {
+                        "name": "material",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 7
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "example": "Matte 250gsm"
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "nullable": true
+                                    },
+                                    "is_default": {
+                                        "description": "Setting true clears the flag on other materials of the same product",
+                                        "type": "boolean"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Material updated",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Material updated"
+                                        },
+                                        "material": {
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "description": "Not found"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            },
+            "delete": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Delete a material [admin]",
+                "operationId": "3d9c102b8aedbb3397bd8468692da180",
+                "parameters": [
+                    {
+                        "name": "material",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "example": 7
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Material deleted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "message": {
+                                            "type": "string",
+                                            "example": "Material deleted"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "description": "Not found"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/wallet/deposit": {
+            "post": {
+                "tags": [
+                    "Wallet"
+                ],
+                "summary": "Submit deposit request",
+                "description": "Tạo deposit request (status=pending). Admin sẽ approve qua /wallet/deposit/{id}/approve để cộng tiền vào ví. Seller tự deposit vào ví của chính mình; admin có thể deposit cho user khác qua user_id.",
+                "operationId": "566a24fb27cc48c154aa4e021a49547b",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "amount",
+                                    "method",
+                                    "transaction_id"
+                                ],
+                                "properties": {
+                                    "user_id": {
+                                        "description": "Admin only — target user. Seller auto = self.",
+                                        "type": "integer",
+                                        "example": 2
+                                    },
+                                    "amount": {
+                                        "type": "number",
+                                        "minimum": 0.01,
+                                        "example": 100.5
+                                    },
+                                    "method": {
+                                        "type": "string",
+                                        "enum": [
+                                            "paypal",
+                                            "pingpong"
+                                        ]
+                                    },
+                                    "transaction_id": {
+                                        "type": "string",
+                                        "example": "PP-9F87B342K"
+                                    },
+                                    "note": {
+                                        "type": "string",
+                                        "example": "Top-up via PayPal"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Deposit pending approval"
+                    },
+                    "422": {
+                        "description": "Validation error (duplicate transaction_id, etc.)"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/wallet/balance": {
+            "get": {
+                "tags": [
+                    "Wallet"
+                ],
+                "summary": "Get wallet balance + lifetime totals",
+                "operationId": "12ec0a5ab01a00de6e977fe116be6b84",
+                "responses": {
+                    "200": {
+                        "description": "Balance summary",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "wallet": {
+                                            "type": "number",
+                                            "example": 523.5
+                                        },
+                                        "total_deposited": {
+                                            "type": "number",
+                                            "example": 2000
+                                        },
+                                        "total_paid": {
+                                            "type": "number",
+                                            "example": 1476.5
+                                        },
+                                        "total_refunded": {
+                                            "type": "number",
+                                            "example": 0
+                                        },
+                                        "pending_deposits": {
+                                            "type": "number",
+                                            "example": 100
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        }
+    },
+    "components": {
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "description": "Sanctum personal access token returned by POST /login. Paste token only (no 'Bearer ' prefix).",
+                "bearerFormat": "Sanctum",
+                "scheme": "bearer"
+            },
+            "apiKeyAuth": {
+                "type": "apiKey",
+                "description": "Per-user API key (format `bsk_...`). Used by /fulfill + /catalog endpoints. Get it from Profile page or GET /me/api-key.",
+                "name": "X-API-KEY",
+                "in": "header"
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "Auth",
+            "description": "Login, logout, change password, profile, API key"
+        },
+        {
+            "name": "Orders",
+            "description": "Tạo / xem / pay đơn (Sanctum). Seller chỉ thấy đơn của mình."
+        },
+        {
+            "name": "Wallet",
+            "description": "Balance, deposit (manual + VNPay), pay history"
+        },
+        {
+            "name": "Products",
+            "description": "Catalog read-only (variants + tier prices)"
+        },
+        {
+            "name": "Public API",
+            "description": "External integrations qua X-API-KEY header (vd Shopify webhook, custom script)"
+        }
+    ]
+}

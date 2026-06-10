@@ -526,14 +526,9 @@
                                     @if ($style)
                                         / <span class="px-2 py-0.5 rounded {{ $styleColor }} font-extrabold text-base uppercase tracking-wide">{{ $style }}</span>
                                     @endif
-                                    <span class="text-neutral-400">(+${{ $item->accessoryPrice->price }})</span>
                                 </span>
                             @endif
                         </div>
-                    </div>
-                    <div class="text-right text-xs">
-                        <div class="text-neutral-500">Price <span class="text-neutral-800 font-medium">${{ $item->price }}</span></div>
-                        <div class="text-sm font-semibold text-neutral-800">${{ number_format($subtotal, 2) }}</div>
                     </div>
                 </div>
 
