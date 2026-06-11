@@ -36,6 +36,10 @@ class ReprintController extends Controller
         if ($request->boolean('no_reason')) {
             $q->whereNull('reason_id');
         }
+        // done=0/1 → filter by whether a gangsheet has been made.
+        if ($request->filled('done')) {
+            $q->where('gangsheet_done', $request->boolean('done'));
+        }
         if ($request->filled('system_id')) {
             $q->where('system_id', 'like', '%' . trim($request->system_id) . '%');
         }
@@ -91,6 +95,31 @@ class ReprintController extends Controller
         $this->authorizeOwner($request, $reprint);
         $reprint->delete();
         return response()->json(['ok' => true]);
+    }
+
+    /**
+     * Mark a set of reprints as having been put on a gangsheet. Called after the
+     * client builds the gang from the selected reprints. Owner/admin scoped.
+     */
+    public function markGangsheet(Request $request)
+    {
+        $data = $request->validate([
+            'ids'   => 'required|array|min:1',
+            'ids.*' => 'integer',
+            'done'  => 'nullable|boolean',
+        ]);
+        $done = $request->boolean('done', true);
+
+        $q = Reprint::whereIn('id', $data['ids']);
+        if (!$request->user()->hasRole('admin')) {
+            $q->where('user_id', $request->user()->id);
+        }
+        $affected = $q->update([
+            'gangsheet_done'    => $done,
+            'gangsheet_done_at' => $done ? now() : null,
+        ]);
+
+        return response()->json(['ok' => true, 'updated' => $affected]);
     }
 
     private function authorizeOwner(Request $request, Reprint $reprint): void

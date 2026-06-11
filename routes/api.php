@@ -161,6 +161,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reasons/by-code/{code}', [ReasonController::class, 'byCode']);
     Route::get('/reprints', [ReprintController::class, 'index']);
     Route::post('/reprints', [ReprintController::class, 'store']);
+    Route::post('/reprints/mark-gangsheet', [ReprintController::class, 'markGangsheet']);
     Route::put('/reprints/{reprint}', [ReprintController::class, 'update']);
     Route::delete('/reprints/{reprint}', [ReprintController::class, 'destroy']);
     Route::middleware(CheckRole::class . ':admin')->group(function () {
