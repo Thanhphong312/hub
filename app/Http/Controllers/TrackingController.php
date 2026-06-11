@@ -4,8 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\OrderTracking;
+use App\Services\ShipEngine\TrackingChecker;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Artisan;
 
 /**
  * Admin config + manual control for the ShipEngine delivery-tracking cron
@@ -55,26 +55,30 @@ class TrackingController extends Controller
     }
 
     /**
-     * Trigger a check now (admin button). Runs synchronously with a capped
-     * limit so the request doesn't hang; returns the command output.
+     * Process ONE batch now and return counts. This is the endpoint the
+     * bullstart desktop app polls at the configured run hours (app-driven cron,
+     * matching the auto-pay pattern). `checked` < `limit` means the pending
+     * queue was drained, so the app can stop looping for this cycle.
      */
-    public function run(Request $request)
+    public function run(Request $request, TrackingChecker $checker)
     {
         $data = $request->validate([
             'limit' => 'nullable|integer|min:1|max:500',
             'order' => 'nullable|string',
         ]);
 
-        $params = ['--force' => true, '--limit' => $data['limit'] ?? 50];
-        if (!empty($data['order'])) {
-            $params['--order'] = $data['order'];
+        if (!$checker->hasKey()) {
+            return response()->json(['ok' => false, 'message' => 'ShipEngine API key not configured'], 422);
         }
 
-        Artisan::call('tracking:check', $params);
+        $limit = (int) ($data['limit'] ?? 100);
+        $result = $checker->run($limit, $data['order'] ?? null);
 
         return response()->json([
             'ok'     => true,
-            'output' => Artisan::output(),
+            'limit'  => $limit,
+            'result' => $result,        // {checked,changed,delivered,intransit,errors}
+            'drained' => $result['checked'] < $limit,
         ]);
     }
 }
