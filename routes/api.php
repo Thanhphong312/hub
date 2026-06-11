@@ -17,6 +17,7 @@ use App\Http\Controllers\UploadController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WalletController;
 use App\Http\Middleware\CheckApiKey;
+use App\Http\Controllers\TrackingController;
 use App\Http\Middleware\CheckRole;
 use Illuminate\Support\Facades\Route;
 
@@ -141,6 +142,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/products/{product}/materials', [ProductController::class, 'storeMaterial']);
         Route::put('/materials/{material}', [ProductController::class, 'updateMaterial']);
         Route::delete('/materials/{material}', [ProductController::class, 'destroyMaterial']);
+    });
+
+    // Delivery tracking (ShipEngine) — config + manual control (admin only).
+    Route::middleware(CheckRole::class . ':admin')->prefix('tracking')->group(function () {
+        Route::get('/settings', [TrackingController::class, 'settings']);
+        Route::put('/settings', [TrackingController::class, 'updateSettings']);
+        Route::get('/stats', [TrackingController::class, 'stats']);
+        Route::post('/run', [TrackingController::class, 'run']);
     });
 
     // Conversion (only for users with convert=1)

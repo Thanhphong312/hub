@@ -8,6 +8,13 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
+// ShipEngine delivery-tracking poll. Scheduled hourly but self-gates inside the
+// command on the AppSetting `tracking_check.run_hours` (Vietnam-local) and the
+// `enabled` flag, so operators pick the run hours from settings. This is the
+// one server-side cron — it requires the host crontab entry:
+//   * * * * * cd /path/to/hub && php artisan schedule:run >> /dev/null 2>&1
+Schedule::command('tracking:check')->hourly()->withoutOverlapping(30);
+
 // Background tasks are triggered manually from the admin frontend:
 //   - POST /api/orders/refresh-duplicates  → "Refresh Duplicates" button
 //   - POST /api/orders/fetch-tracking      → "Fetch Tracking" button

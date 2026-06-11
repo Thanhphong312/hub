@@ -103,6 +103,12 @@ class Order extends Model
         return $this->belongsTo(GangsheetGroup::class);
     }
 
+    // Delivery tracking state from ShipEngine (filled by the tracking:check cron).
+    public function tracking()
+    {
+        return $this->hasOne(OrderTracking::class);
+    }
+
     public function address()
     {
         return $this->hasOne(Address::class);
