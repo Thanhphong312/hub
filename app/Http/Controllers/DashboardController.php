@@ -66,6 +66,30 @@ class DashboardController extends Controller
             ->limit(10)
             ->get();
 
+        // Stale orders: created more than 24h ago and still NOT shipped (and not
+        // cancelled) — an SLA warning. Fresh seller-scoped base so it ignores the
+        // page date filter. Oldest first so the worst offenders surface.
+        $staleBase = Order::query()
+            ->whereNotIn('status', [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED])
+            ->where('created_at', '<=', now()->subDay());
+        if ($user->hasRole('seller')) {
+            $staleBase->where('user_id', $user->id);
+        }
+        $staleCount = (clone $staleBase)->count();
+        $staleItems = (clone $staleBase)
+            ->with('user:id,name')
+            ->orderBy('created_at')
+            ->limit(100)
+            ->get(['id', 'system_id', 'status', 'created_at', 'user_id'])
+            ->map(fn ($o) => [
+                'id'         => $o->id,
+                'system_id'  => $o->system_id,
+                'status'     => Order::STATUS_MAP[$o->status] ?? 'unknown',
+                'status_id'  => $o->status,
+                'created_at' => optional($o->created_at)->toIso8601String(),
+                'user'       => $o->user?->name,
+            ]);
+
         $stats = [
             'total_orders' => $totalOrders,
             'orders_by_status' => $ordersByStatus,
@@ -76,6 +100,10 @@ class DashboardController extends Controller
             'total_shipping_cost' => round($totalShippingCost, 2),
             'orders_per_day' => $ordersPerDay,
             'recent_orders' => $recentOrders,
+            'stale_unshipped' => [
+                'count' => $staleCount,
+                'items' => $staleItems,
+            ],
         ];
 
         // Admin extra stats
