@@ -2227,6 +2227,14 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'order_id' => $order->id,
                     'product_variant_id' => $variantId,
                     'accessory_item_id' => $accessoryItemId,
+                    // Material (chất liệu): use the CSV value when given, else fall
+                    // back to the variant's default material (is_default) — same
+                    // rule as the manual create form, so imported rows always get
+                    // a material instead of null.
+                    'material_id' => $this->resolveMaterialId(
+                        (isset($data['material_id']) && $data['material_id'] !== '') ? (int) $data['material_id'] : null,
+                        $variantId
+                    ),
                     'mockup_front' => $data['mockup_front'] ?? null,
                     'mockup_back' => $data['mockup_back'] ?? null,
                     'order_type' => (int)($data['order_type'] ?? 0),
