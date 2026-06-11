@@ -17,6 +17,8 @@ use App\Http\Controllers\UploadController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WalletController;
 use App\Http\Middleware\CheckApiKey;
+use App\Http\Controllers\ReasonController;
+use App\Http\Controllers\ReprintController;
 use App\Http\Controllers\TrackingController;
 use App\Http\Middleware\CheckRole;
 use Illuminate\Support\Facades\Route;
@@ -150,6 +152,21 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/settings', [TrackingController::class, 'updateSettings']);
         Route::get('/stats', [TrackingController::class, 'stats']);
         Route::post('/run', [TrackingController::class, 'run']);
+    });
+
+    // Reprints (user-scoped) + reasons. Reason writes are admin-only; reading
+    // reasons + all reprint ops are available to any authenticated user (the
+    // controller scopes reprints to the owner).
+    Route::get('/reasons', [ReasonController::class, 'index']);
+    Route::get('/reasons/by-code/{code}', [ReasonController::class, 'byCode']);
+    Route::get('/reprints', [ReprintController::class, 'index']);
+    Route::post('/reprints', [ReprintController::class, 'store']);
+    Route::put('/reprints/{reprint}', [ReprintController::class, 'update']);
+    Route::delete('/reprints/{reprint}', [ReprintController::class, 'destroy']);
+    Route::middleware(CheckRole::class . ':admin')->group(function () {
+        Route::post('/reasons', [ReasonController::class, 'store']);
+        Route::put('/reasons/{reason}', [ReasonController::class, 'update']);
+        Route::delete('/reasons/{reason}', [ReasonController::class, 'destroy']);
     });
 
     // Conversion (only for users with convert=1)
