@@ -107,17 +107,19 @@ class DashboardController extends Controller
         ];
 
         // Tracking-ran rate over the last 7 days, EXCLUDING today (today's orders
-        // were just shipped — tracking hasn't had time to move yet). Window =
-        // orders shipped in the 7 Vietnam-local days before today (same +7h
-        // bucket as shippedReport). "Ran" = an order_trackings row whose status
-        // is set and != 'pre_shipment' (moved past label creation). A low rate
-        // means labels were created but carriers haven't scanned the parcels.
-        $nowVn  = now()->setTimezone('Asia/Ho_Chi_Minh');
-        $fromVn = $nowVn->copy()->subDays(7)->toDateString();   // 7 days ago
-        $toVn   = $nowVn->copy()->subDay()->toDateString();     // yesterday (today excluded)
+        // were just shipped — tracking hasn't had time to move yet). Days are
+        // bucketed in US Central time (America/Chicago); we compute the window
+        // edges in Chicago then convert to UTC so the comparison against the
+        // UTC-stored completed_time is DST-safe (no fixed-offset hack). "Ran" =
+        // an order_trackings row whose status is set and != 'pre_shipment'.
+        $tz      = 'America/Chicago';
+        $nowCt   = now()->setTimezone($tz);
+        $startCt = $nowCt->copy()->startOfDay()->subDays(7);    // midnight Chicago, 7 days ago
+        $endCt   = $nowCt->copy()->startOfDay();                // midnight Chicago today (excl.)
         $shippedRangeBase = Order::where('status', Order::STATUS_SHIPPED)
             ->whereNotNull('completed_time')
-            ->whereRaw('DATE(DATE_ADD(completed_time, INTERVAL 7 HOUR)) BETWEEN ? AND ?', [$fromVn, $toVn]);
+            ->where('completed_time', '>=', $startCt->copy()->utc())
+            ->where('completed_time', '<', $endCt->copy()->utc());
         if ($user->hasRole('seller')) {
             $shippedRangeBase->where('user_id', $user->id);
         }
@@ -126,8 +128,9 @@ class DashboardController extends Controller
             ->whereHas('tracking', fn ($q) => $q->whereNotNull('status')->where('status', '!=', 'pre_shipment'))
             ->count();
         $stats['shipped_tracking'] = [
-            'from'         => $fromVn,
-            'to'           => $toVn,
+            'from'         => $startCt->toDateString(),
+            'to'           => $nowCt->copy()->subDay()->toDateString(),
+            'timezone'     => $tz,
             'shipped'      => $shippedCount,
             'tracking_ran' => $trackingRan,
             'rate'         => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 1) : null,
