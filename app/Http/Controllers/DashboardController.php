@@ -127,13 +127,41 @@ class DashboardController extends Controller
         $trackingRan = (clone $shippedRangeBase)
             ->whereHas('tracking', fn ($q) => $q->whereNotNull('status')->where('status', '!=', 'pre_shipment'))
             ->count();
+
+        // The complement — shipped in-window orders whose tracking hasn't run
+        // (no tracking row, or still 'pre_shipment'), grouped by seller so admins
+        // can chase the right person. Detail list capped to keep the payload sane.
+        $notRunOrders = (clone $shippedRangeBase)
+            ->whereDoesntHave('tracking', fn ($q) => $q->whereNotNull('status')->where('status', '!=', 'pre_shipment'))
+            ->with(['user:id,name', 'tracking:id,order_id,status'])
+            ->orderBy('user_id')
+            ->orderByDesc('completed_time')
+            ->limit(500)
+            ->get(['id', 'system_id', 'user_id', 'completed_time']);
+        $notRunBySeller = $notRunOrders
+            ->groupBy('user_id')
+            ->map(fn ($g) => [
+                'user_id' => $g->first()->user_id,
+                'user'    => $g->first()->user?->name,
+                'count'   => $g->count(),
+                'orders'  => $g->map(fn ($o) => [
+                    'id'        => $o->id,
+                    'system_id' => $o->system_id,
+                    'status'    => $o->tracking?->status ?: 'none',
+                ])->values(),
+            ])
+            ->sortByDesc('count')
+            ->values();
+
         $stats['shipped_tracking'] = [
-            'from'         => $startCt->toDateString(),
-            'to'           => $nowCt->copy()->subDay()->toDateString(),
-            'timezone'     => $tz,
-            'shipped'      => $shippedCount,
-            'tracking_ran' => $trackingRan,
-            'rate'         => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 2) : null,
+            'from'              => $startCt->toDateString(),
+            'to'                => $nowCt->copy()->subDay()->toDateString(),
+            'timezone'          => $tz,
+            'shipped'           => $shippedCount,
+            'tracking_ran'      => $trackingRan,
+            'not_run'           => $shippedCount - $trackingRan,
+            'rate'              => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 2) : null,
+            'not_run_by_seller' => $notRunBySeller,
         ];
 
         // Admin extra stats
