@@ -133,7 +133,7 @@ class DashboardController extends Controller
             'timezone'     => $tz,
             'shipped'      => $shippedCount,
             'tracking_ran' => $trackingRan,
-            'rate'         => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 1) : null,
+            'rate'         => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 2) : null,
         ];
 
         // Admin extra stats
