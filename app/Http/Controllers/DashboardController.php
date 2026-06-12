@@ -106,6 +106,30 @@ class DashboardController extends Controller
             ],
         ];
 
+        // Tracking-ran rate: of orders shipped YESTERDAY (Vietnam-local
+        // completed_time day, same +7h bucket as shippedReport), how many have
+        // tracking that actually moved past label creation — i.e. an
+        // order_trackings row whose status is set and != 'pre_shipment'. A low
+        // rate means labels were created but the carrier hasn't scanned the
+        // parcels yet (a "shipped but not really moving" warning).
+        $yesterdayVn = now()->setTimezone('Asia/Ho_Chi_Minh')->subDay()->toDateString();
+        $shippedYdayBase = Order::where('status', Order::STATUS_SHIPPED)
+            ->whereNotNull('completed_time')
+            ->whereRaw('DATE(DATE_ADD(completed_time, INTERVAL 7 HOUR)) = ?', [$yesterdayVn]);
+        if ($user->hasRole('seller')) {
+            $shippedYdayBase->where('user_id', $user->id);
+        }
+        $shippedYday = (clone $shippedYdayBase)->count();
+        $trackingRan = (clone $shippedYdayBase)
+            ->whereHas('tracking', fn ($q) => $q->whereNotNull('status')->where('status', '!=', 'pre_shipment'))
+            ->count();
+        $stats['shipped_tracking'] = [
+            'date'         => $yesterdayVn,
+            'shipped'      => $shippedYday,
+            'tracking_ran' => $trackingRan,
+            'rate'         => $shippedYday > 0 ? round($trackingRan / $shippedYday * 100, 1) : null,
+        ];
+
         // Admin extra stats
         if ($user->hasRole('admin')) {
             $stats['total_users'] = User::count();
