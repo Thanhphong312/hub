@@ -106,28 +106,31 @@ class DashboardController extends Controller
             ],
         ];
 
-        // Tracking-ran rate: of orders shipped YESTERDAY (Vietnam-local
-        // completed_time day, same +7h bucket as shippedReport), how many have
-        // tracking that actually moved past label creation — i.e. an
-        // order_trackings row whose status is set and != 'pre_shipment'. A low
-        // rate means labels were created but the carrier hasn't scanned the
-        // parcels yet (a "shipped but not really moving" warning).
-        $yesterdayVn = now()->setTimezone('Asia/Ho_Chi_Minh')->subDay()->toDateString();
-        $shippedYdayBase = Order::where('status', Order::STATUS_SHIPPED)
+        // Tracking-ran rate over the last 7 days, EXCLUDING today (today's orders
+        // were just shipped — tracking hasn't had time to move yet). Window =
+        // orders shipped in the 7 Vietnam-local days before today (same +7h
+        // bucket as shippedReport). "Ran" = an order_trackings row whose status
+        // is set and != 'pre_shipment' (moved past label creation). A low rate
+        // means labels were created but carriers haven't scanned the parcels.
+        $nowVn  = now()->setTimezone('Asia/Ho_Chi_Minh');
+        $fromVn = $nowVn->copy()->subDays(7)->toDateString();   // 7 days ago
+        $toVn   = $nowVn->copy()->subDay()->toDateString();     // yesterday (today excluded)
+        $shippedRangeBase = Order::where('status', Order::STATUS_SHIPPED)
             ->whereNotNull('completed_time')
-            ->whereRaw('DATE(DATE_ADD(completed_time, INTERVAL 7 HOUR)) = ?', [$yesterdayVn]);
+            ->whereRaw('DATE(DATE_ADD(completed_time, INTERVAL 7 HOUR)) BETWEEN ? AND ?', [$fromVn, $toVn]);
         if ($user->hasRole('seller')) {
-            $shippedYdayBase->where('user_id', $user->id);
+            $shippedRangeBase->where('user_id', $user->id);
         }
-        $shippedYday = (clone $shippedYdayBase)->count();
-        $trackingRan = (clone $shippedYdayBase)
+        $shippedCount = (clone $shippedRangeBase)->count();
+        $trackingRan = (clone $shippedRangeBase)
             ->whereHas('tracking', fn ($q) => $q->whereNotNull('status')->where('status', '!=', 'pre_shipment'))
             ->count();
         $stats['shipped_tracking'] = [
-            'date'         => $yesterdayVn,
-            'shipped'      => $shippedYday,
+            'from'         => $fromVn,
+            'to'           => $toVn,
+            'shipped'      => $shippedCount,
             'tracking_ran' => $trackingRan,
-            'rate'         => $shippedYday > 0 ? round($trackingRan / $shippedYday * 100, 1) : null,
+            'rate'         => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 1) : null,
         ];
 
         // Admin extra stats
