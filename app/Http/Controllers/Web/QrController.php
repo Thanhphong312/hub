@@ -180,13 +180,13 @@ class QrController extends Controller
 
     /**
      * Pick which URL to print: prefer convert_label (system_id overlay) for
-     * admin/support; fall back to the original carrier shipping_label. Sellers
-     * only ever see the original — convert_label is an internal artifact.
+     * admin/support/staff; fall back to the original carrier shipping_label.
+     * Sellers only ever see the original — convert_label is an internal artifact.
      */
     private function pickPrintLabel(Request $request, Order $order): ?string
     {
         $user = $request->user();
-        $isStaff = $user && ($user->hasRole('admin') || $user->hasRole('support'));
+        $isStaff = $user && ($user->hasRole('admin') || $user->hasRole('support') || $user->hasRole('staff'));
         if ($isStaff && !empty($order->convert_label)) {
             return $order->convert_label;
         }

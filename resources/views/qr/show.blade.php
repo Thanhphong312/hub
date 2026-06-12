@@ -277,10 +277,11 @@
         @endif
 
         @php
-            $isStaff = $user && ($user->hasRole('admin') || $user->hasRole('support'));
+            $isStaff = $user && ($user->hasRole('admin') || $user->hasRole('support') || $user->hasRole('staff'));
             // print_label is the source of truth for what gets printed: prefer
             // the converted overlay, fall back to the original carrier label.
-            // Sellers only ever see the carrier label.
+            // admin/support/staff get the converted label; sellers only ever see
+            // the carrier label.
             $printLabel = ($isStaff && $order->convert_label) ? $order->convert_label : $order->shipping_label;
         @endphp
         @if ($isImageish($printLabel))
