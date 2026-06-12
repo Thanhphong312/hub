@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Gangsheet;
 use App\Models\Order;
+use App\Models\OrderItemMeta;
 use Illuminate\Http\Request;
 
 /**
@@ -13,6 +14,19 @@ use Illuminate\Http\Request;
  */
 class PartnerController extends Controller
 {
+    private const QR_KEY_REGEX = '_qr(_[0-9]+)?$';
+
+    /** Distinct order ids across all gangsheets assigned to this partner. */
+    private function assignedOrderIds($user): array
+    {
+        $gangs = $user->assignedGangsheets()->get(['gangsheets.id', 'order_ids']);
+        $ids = [];
+        foreach ($gangs as $g) {
+            foreach (($g->order_ids ?? []) as $oid) $ids[(int) $oid] = true;
+        }
+        return array_keys($ids);
+    }
+
     /** Dashboard totals: assigned gangsheets + distinct orders across them. */
     public function dashboard(Request $request)
     {
@@ -83,5 +97,151 @@ class PartnerController extends Controller
         $printedAt = $request->boolean('printed') ? now() : null;
         $user->assignedGangsheets()->updateExistingPivot($gangsheet->id, ['printed_at' => $printedAt]);
         return response()->json(['gangsheet_id' => $gangsheet->id, 'printed_at' => $printedAt]);
+    }
+
+    /**
+     * Orders the partner may compose / reconvert: every order that sits inside a
+     * gangsheet assigned to them. Same eager-load shape as the admin
+     * lookup-orders so the desktop compose pipeline can build the PDF. These
+     * orders are already production=true (the admin ganged them), so the client
+     * builds with includeProduced=true (re-gang semantics).
+     */
+    public function myOrders(Request $request)
+    {
+        $orderIds = $this->assignedOrderIds($request->user());
+        if (empty($orderIds)) {
+            return response()->json(['orders' => []]);
+        }
+
+        $orders = Order::with([
+            'items.metas' => fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX),
+            'items.productVariant.product:id,name,line_id',
+            'items.material:id,name',
+            'items.accessoryPrice.accessory:id,name,product_id,gangsheet_split',
+            'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
+        ])
+            ->whereIn('id', $orderIds)
+            ->orderBy('id', 'asc')
+            ->get();
+
+        return response()->json(['orders' => $orders]);
+    }
+
+    /**
+     * B2 credentials so the partner desktop app can upload its composed PDF
+     * directly to Backblaze (same contract as GangsheetController). Date-scoped
+     * folder; the client appends the filename.
+     */
+    public function storageCredentials(Request $request)
+    {
+        $cfg = config('filesystems.disks.b2');
+        return response()->json([
+            'access_key_id' => $cfg['key'] ?? null,
+            'secret_access_key' => $cfg['secret'] ?? null,
+            'region' => $cfg['region'] ?? 'us-west-004',
+            'endpoint' => $cfg['endpoint'] ?? null,
+            'bucket' => $cfg['bucket'] ?? null,
+            'public_url_base' => rtrim($cfg['url'] ?? '', '/'),
+            'folder' => 'gangsheet/' . now()->format('Y-m-d'),
+        ]);
+    }
+
+    /**
+     * Record a gangsheet the partner composed + uploaded, then auto-assign it to
+     * that partner so it shows up in their list. Every order must belong to a
+     * gang already assigned to this partner (a partner can only re-gang their
+     * own orders, never reach an arbitrary order id).
+     */
+    public function storeGangsheet(Request $request)
+    {
+        $request->validate([
+            'filename' => 'required|string',
+            'file_url' => 'required|url',
+            'line_id' => 'nullable|string|max:16',
+            'page_format' => 'nullable|string|max:16',
+            'first_system_id' => 'nullable|string',
+            'last_system_id' => 'nullable|string',
+            'orders_count' => 'required|integer|min:1',
+            'metas_count' => 'required|integer|min:1',
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer',
+            'meta_ids' => 'required|array|min:1',
+            'meta_ids.*' => 'integer',
+        ]);
+
+        $user = $request->user();
+        $allowed = array_flip($this->assignedOrderIds($user));
+        $orderIds = array_values(array_unique(array_map('intval', $request->order_ids)));
+        foreach ($orderIds as $oid) {
+            if (!isset($allowed[$oid])) {
+                return response()->json(['message' => "Order {$oid} is not assigned to you"], 403);
+            }
+        }
+        $metaIds = array_values(array_unique(array_map('intval', $request->meta_ids)));
+
+        try {
+            $gangsheet = app(\App\Services\GangsheetService::class)->record([
+                'filename'        => $request->filename,
+                'file_url'        => $request->file_url,
+                'line_id'         => $request->line_id,
+                'page_format'     => $request->page_format,
+                'first_system_id' => $request->first_system_id,
+                'last_system_id'  => $request->last_system_id,
+                'orders_count'    => (int) $request->orders_count,
+                'metas_count'     => (int) $request->metas_count,
+                'order_ids'       => $orderIds,
+                'meta_ids'        => $metaIds,
+            ], $user->id);
+        } catch (\Throwable $e) {
+            \Log::error('[partner-gangsheet] DB save failed: ' . $e->getMessage(), ['filename' => $request->filename]);
+            return response()->json(['message' => 'Failed to record gang sheet: ' . $e->getMessage()], 500);
+        }
+
+        // Auto-assign the new gang to this partner (keep any other partners).
+        $gangsheet->partners()->syncWithoutDetaching([$user->id]);
+
+        return response()->json([
+            'message' => 'Gangsheet saved',
+            'gangsheet' => $gangsheet->load('creator:id,name'),
+        ], 201);
+    }
+
+    /**
+     * Reconvert the _qr designs of the partner's own orders: delete their _qr
+     * metas + unset production so the converter cron rebuilds them from the
+     * mockup URLs. Scoped — only orders inside this partner's assigned gangs.
+     */
+    public function reconvert(Request $request)
+    {
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer',
+        ]);
+
+        $allowed = array_flip($this->assignedOrderIds($request->user()));
+        $orderIds = array_values(array_filter(
+            array_unique(array_map('intval', $request->order_ids)),
+            fn ($id) => isset($allowed[$id])
+        ));
+        if (empty($orderIds)) {
+            return response()->json(['message' => 'No accessible orders to reconvert', 'count' => 0, 'deleted' => 0], 403);
+        }
+
+        $orders = Order::whereIn('id', $orderIds)->get();
+        $totalDeleted = 0;
+        foreach ($orders as $order) {
+            $itemIds = $order->items()->pluck('id');
+            $totalDeleted += OrderItemMeta::whereIn('order_item_id', $itemIds)
+                ->where('key', 'regexp', self::QR_KEY_REGEX)
+                ->delete();
+            $order->update(['production' => false]);
+        }
+
+        return response()->json([
+            'message' => "Reconvert queued for {$orders->count()} order(s); removed {$totalDeleted} _qr meta(s). The converter cron will rebuild them.",
+            'count' => $orders->count(),
+            'deleted' => $totalDeleted,
+            'skipped' => count($request->order_ids) - $orders->count(),
+        ]);
     }
 }

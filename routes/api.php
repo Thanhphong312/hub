@@ -238,6 +238,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/gangsheets', [PartnerController::class, 'gangsheets']);
         Route::post('/gangsheets/{gangsheet}/printed', [PartnerController::class, 'markPrinted']);
         Route::get('/gangsheets/{gangsheet}', [PartnerController::class, 'show']);
+        // Compose + reconvert, scoped to orders inside the partner's assigned gangs.
+        Route::get('/orders', [PartnerController::class, 'myOrders']);
+        Route::get('/storage-credentials', [PartnerController::class, 'storageCredentials']);
+        Route::post('/gangsheets', [PartnerController::class, 'storeGangsheet']);
+        Route::post('/orders/reconvert', [PartnerController::class, 'reconvert']);
     });
 
     // VNPay (authenticated — seller initiates a deposit)
