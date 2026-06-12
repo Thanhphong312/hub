@@ -47,6 +47,12 @@ class OrderController extends Controller
 
         $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
 
+        // Delivery tracking state (skip the heavy `raw` JSON column).
+        $query->with(['tracking' => fn ($q) => $q->select(
+            'id', 'order_id', 'tracking_id', 'status', 'status_description',
+            'date_intransit', 'delivered_at', 'last_event_at', 'checked_at'
+        )]);
+
         // Seller chỉ thấy đơn của mình
         if ($request->user()->hasRole('seller')) {
             $query->where('user_id', $request->user()->id);
@@ -90,6 +96,17 @@ class OrderController extends Controller
         // Search by tracking_id
         if ($request->has('tracking_id')) {
             $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
+        }
+
+        // Filter by delivery tracking status (from order_trackings). Special
+        // value "none" = orders not checked yet (no tracking row).
+        if ($request->filled('tracking_status')) {
+            $ts = $request->tracking_status;
+            if ($ts === 'none') {
+                $query->whereDoesntHave('tracking');
+            } else {
+                $query->whereHas('tracking', fn ($q) => $q->where('status', $ts));
+            }
         }
 
         // Filter by date range
