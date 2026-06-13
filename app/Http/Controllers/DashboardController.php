@@ -116,23 +116,31 @@ class DashboardController extends Controller
         $nowCt   = now()->setTimezone($tz);
         $startCt = $nowCt->copy()->startOfDay()->subDays(7);    // midnight Chicago, 7 days ago
         $endCt   = $nowCt->copy()->startOfDay();                // midnight Chicago today (excl.)
+        // Only orders ELIGIBLE for a tracking judgement count toward the ratio:
+        // shipped in-window AND they have a tracking_id AND an order_trackings
+        // row with a status (carrier checked at least once). Orders with no
+        // tracking_id / never checked are excluded from both numerator and
+        // denominator. Among the eligible: "ran" = status != 'pre_shipment',
+        // "not run" = still 'pre_shipment'.
         $shippedRangeBase = Order::where('status', Order::STATUS_SHIPPED)
             ->whereNotNull('completed_time')
             ->where('completed_time', '>=', $startCt->copy()->utc())
-            ->where('completed_time', '<', $endCt->copy()->utc());
+            ->where('completed_time', '<', $endCt->copy()->utc())
+            ->whereNotNull('tracking_id')->where('tracking_id', '!=', '')
+            ->whereHas('tracking', fn ($q) => $q->whereNotNull('status'));
         if ($user->hasRole('seller')) {
             $shippedRangeBase->where('user_id', $user->id);
         }
         $shippedCount = (clone $shippedRangeBase)->count();
         $trackingRan = (clone $shippedRangeBase)
-            ->whereHas('tracking', fn ($q) => $q->whereNotNull('status')->where('status', '!=', 'pre_shipment'))
+            ->whereHas('tracking', fn ($q) => $q->where('status', '!=', 'pre_shipment'))
             ->count();
 
-        // The complement — shipped in-window orders whose tracking hasn't run
-        // (no tracking row, or still 'pre_shipment'), grouped by seller so admins
-        // can chase the right person. Detail list capped to keep the payload sane.
+        // Eligible orders still at 'pre_shipment' (label made, carrier hasn't
+        // scanned) — grouped by seller so admins can chase the right person.
+        // Detail list capped to keep the payload sane.
         $notRunOrders = (clone $shippedRangeBase)
-            ->whereDoesntHave('tracking', fn ($q) => $q->whereNotNull('status')->where('status', '!=', 'pre_shipment'))
+            ->whereHas('tracking', fn ($q) => $q->where('status', 'pre_shipment'))
             ->with(['user:id,name', 'tracking:id,order_id,status'])
             ->orderBy('user_id')
             ->orderByDesc('completed_time')
