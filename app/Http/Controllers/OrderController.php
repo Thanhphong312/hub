@@ -586,6 +586,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             && !in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
             return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
         }
+        // A shipped order is final for sellers — they can't cancel/un-ship it.
+        if ($user && $user->hasRole('seller') && $request->filled('status')
+            && (int) $order->status === Order::STATUS_SHIPPED
+            && (int) $request->status !== Order::STATUS_SHIPPED) {
+            return response()->json(['message' => 'Đơn đã shipped — seller không thể huỷ/đổi trạng thái. Liên hệ admin.'], 403);
+        }
 
         $data = $request->only('shipping_label', 'tracking_id', 'shipping_cost', 'print_cost', 'status', 'proof_image');
         if ($request->has('note')) {
@@ -1485,6 +1491,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             && !in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
             return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
         }
+        // A shipped order is final for sellers — they can't cancel/un-ship it.
+        if ($user && $user->hasRole('seller')
+            && (int) $order->status === Order::STATUS_SHIPPED
+            && (int) $request->status !== Order::STATUS_SHIPPED) {
+            return response()->json(['message' => 'Đơn đã shipped — seller không thể huỷ/đổi trạng thái. Liên hệ admin.'], 403);
+        }
 
         $data = ['status' => $request->status];
         if ($request->status == Order::STATUS_SHIPPED) {
@@ -1514,28 +1526,50 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
         }
 
+        // Sellers can't cancel/un-ship a shipped order — skip any shipped ones
+        // from their selection and process the rest. (Setting → shipped is fine.)
+        $orderIds = $request->order_ids;
+        $skippedShipped = 0;
+        if ($user && $user->hasRole('seller') && (int) $request->status !== Order::STATUS_SHIPPED) {
+            $shippedIds = Order::whereIn('id', $orderIds)
+                ->where('status', Order::STATUS_SHIPPED)
+                ->pluck('id')->all();
+            $skippedShipped = count($shippedIds);
+            $orderIds = array_values(array_diff($orderIds, $shippedIds));
+            if (empty($orderIds)) {
+                return response()->json([
+                    'message' => 'Đơn đã shipped — seller không thể huỷ/đổi trạng thái. Liên hệ admin.',
+                    'count' => 0,
+                    'skipped_shipped' => $skippedShipped,
+                ], 403);
+            }
+        }
+
         $data = ['status' => $request->status];
         if ($request->status == Order::STATUS_SHIPPED) {
             $data['completed_time'] = now();
         }
 
-        Order::whereIn('id', $request->order_ids)->update($data);
+        Order::whereIn('id', $orderIds)->update($data);
 
         if ($request->status == Order::STATUS_SHIPPED) {
             // Decrement stock per-order (each call is idempotent via
             // stock_decremented), so re-shipping orders in a bulk batch is safe.
-            Order::with('items')->whereIn('id', $request->order_ids)->get()
+            Order::with('items')->whereIn('id', $orderIds)->get()
                 ->each(fn ($o) => $o->decrementStockForShipment());
         } else {
             // Leaving shipped → return label stock for the ones that had it
             // deducted. The flag guard keeps never-shipped orders untouched.
-            Order::whereIn('id', $request->order_ids)->where('stock_decremented', true)->get()
+            Order::whereIn('id', $orderIds)->where('stock_decremented', true)->get()
                 ->each(fn ($o) => $o->restockForUnship());
         }
 
         return response()->json([
-            'message' => 'Bulk status updated',
-            'count' => count($request->order_ids),
+            'message' => $skippedShipped > 0
+                ? "Đã cập nhật " . count($orderIds) . " đơn; bỏ qua {$skippedShipped} đơn đã shipped (seller không được huỷ)."
+                : 'Bulk status updated',
+            'count' => count($orderIds),
+            'skipped_shipped' => $skippedShipped,
         ]);
     }
 
