@@ -42,6 +42,9 @@ class TrackingController extends Controller
         $delivered = OrderTracking::where('status', 'delivered')->count();
         $inTransit = OrderTracking::whereNotNull('date_intransit')->where('status', '!=', 'delivered')->count();
         $checked   = OrderTracking::count();
+        // Per-status breakdown (one box per tracking status in the UI).
+        $byStatus = OrderTracking::selectRaw("COALESCE(NULLIF(status, ''), 'unknown') as s, COUNT(*) as c")
+            ->groupBy('s')->pluck('c', 's');
 
         return response()->json([
             'orders_with_tracking' => $withTracking,
@@ -51,6 +54,7 @@ class TrackingController extends Controller
             // Not delivered yet (= still polled by the cron).
             'pending'              => max(0, $withTracking - $delivered),
             'never_checked'        => max(0, $withTracking - $checked),
+            'by_status'            => $byStatus,
         ]);
     }
 
