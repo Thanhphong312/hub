@@ -17,7 +17,7 @@ class GangsheetController extends Controller
 
     public function index(Request $request)
     {
-        $query = Gangsheet::with('creator:id,name', 'partners:id,name')->orderBy('id', 'desc');
+        $query = Gangsheet::with('creator:id,name', 'partners:id,name', 'downloadedBy:id,name')->orderBy('id', 'desc');
 
         if ($request->filled('date_from')) {
             $query->whereDate('created_at', '>=', $request->date_from);
@@ -72,7 +72,41 @@ class GangsheetController extends Controller
             }
         }
 
-        return response()->json($query->paginate($request->get('per_page', 20)));
+        $paginated = $query->paginate($request->get('per_page', 20));
+
+        // Duplicate detection: a gang is flagged when it shares an order_id with
+        // another gang (the same order ended up on more than one gangsheet).
+        // Cheap to do in PHP across all gangs — there are only a few dozen.
+        $orderToGangs = [];
+        foreach (Gangsheet::select('id', 'order_ids')->get() as $g) {
+            foreach (($g->order_ids ?? []) as $oid) {
+                $orderToGangs[(int) $oid][] = $g->id;
+            }
+        }
+        $paginated->getCollection()->each(function ($g) use ($orderToGangs) {
+            $others = [];
+            foreach (($g->order_ids ?? []) as $oid) {
+                foreach ($orderToGangs[(int) $oid] ?? [] as $gid) {
+                    if ($gid !== $g->id) $others[$gid] = true;
+                }
+            }
+            $g->is_duplicate = !empty($others);
+            $g->duplicate_gang_ids = array_values(array_map('intval', array_keys($others)));
+        });
+
+        return response()->json($paginated);
+    }
+
+    /** Toggle the "downloaded / đã làm" mark (shared across machines). */
+    public function toggleDownloaded(Request $request, Gangsheet $gangsheet)
+    {
+        if ($gangsheet->downloaded_at) {
+            $gangsheet->update(['downloaded_at' => null, 'downloaded_by_user_id' => null]);
+        } else {
+            $gangsheet->update(['downloaded_at' => now(), 'downloaded_by_user_id' => $request->user()->id]);
+        }
+
+        return response()->json($gangsheet->fresh()->load('downloadedBy:id,name'));
     }
 
     /** Users with the 'partner' role — for the admin "assign to partner" picker. */

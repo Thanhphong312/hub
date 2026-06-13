@@ -18,6 +18,8 @@ class Gangsheet extends Model
         'metas_count',
         'order_ids',
         'meta_ids',
+        'downloaded_at',
+        'downloaded_by_user_id',
     ];
 
     protected function casts(): array
@@ -25,12 +27,18 @@ class Gangsheet extends Model
         return [
             'order_ids' => 'array',
             'meta_ids' => 'array',
+            'downloaded_at' => 'datetime',
         ];
     }
 
     public function creator()
     {
         return $this->belongsTo(User::class, 'created_by_user_id');
+    }
+
+    public function downloadedBy()
+    {
+        return $this->belongsTo(User::class, 'downloaded_by_user_id');
     }
 
     // Partner users this gangsheet is assigned to (visible in partner-bullstart).
