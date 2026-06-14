@@ -3037,16 +3037,31 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $methodKeys = array_column($cfg['methods'], 'key');
         $reasonKeys = array_column($cfg['reasons'], 'key');
         $data = $request->validate([
-            'method' => 'required|in:' . implode(',', $methodKeys),
-            'reason' => 'required|in:' . implode(',', $reasonKeys),
-            'note'   => 'nullable|string',
+            'method'             => 'required|in:' . implode(',', $methodKeys),
+            'reason'             => 'required|in:' . implode(',', $reasonKeys),
+            'note'               => 'nullable|string',
+            // Optional shipping address override (resend often goes to a
+            // corrected address). Falls back to the original order's address.
+            'address'            => 'nullable|array',
+            'address.first_name' => 'nullable|string',
+            'address.last_name'  => 'nullable|string',
+            'address.address_1'  => 'nullable|string',
+            'address.address_2'  => 'nullable|string',
+            'address.city'       => 'nullable|string',
+            'address.state'      => 'nullable|string',
+            'address.zipcode'    => 'nullable|string',
+            'address.country'    => 'nullable|string',
+            'address.phone'      => 'nullable|string',
+            'address.email'      => 'nullable|string',
         ]);
 
         $order->load(['items.metas', 'items.accessoryPrices', 'address']);
         $owner = $order->user;   // resend belongs to the original order's seller
         $pricing = $this->computeResendPricing($order, $data['method'], $data['reason'], $owner);
 
-        return DB::transaction(function () use ($order, $owner, $data, $pricing) {
+        $addressOverride = $request->input('address');
+
+        return DB::transaction(function () use ($order, $owner, $data, $pricing, $addressOverride) {
             $firstVariantId = (int) ($order->items->first()->product_variant_id ?? 0) ?: null;
             $resend = Order::create([
                 'user_id'            => $owner->id,
@@ -3086,7 +3101,15 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 if (!empty($accIds)) $item->accessoryPrices()->sync($accIds);
             }
 
-            if ($order->address) {
+            // Address: use the override when provided, else copy the original's.
+            $addrData = array_filter($addressOverride ?? [], fn ($v) => $v !== null && $v !== '');
+            if (!empty($addrData)) {
+                Address::create(array_merge(
+                    $order->address ? $order->address->only(['first_name', 'last_name', 'address_1', 'address_2', 'city', 'state', 'zipcode', 'country', 'phone', 'email']) : [],
+                    $addrData,
+                    ['order_id' => $resend->id]
+                ));
+            } elseif ($order->address) {
                 $addr = $order->address->replicate();
                 $addr->order_id = $resend->id;
                 $addr->save();

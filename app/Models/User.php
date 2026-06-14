@@ -24,6 +24,7 @@ class User extends Authenticatable
         'convert',
         'auto_pay',
         'auto_pay_delay_hours',
+        'resend_free_quota',
     ];
 
     protected $hidden = [
