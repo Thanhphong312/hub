@@ -97,6 +97,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/orders/{order}', [OrderController::class, 'destroy']);
     Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
     Route::post('/orders/{order}/pay', [OrderController::class, 'pay']);
+    Route::post('/orders/{order}/resend-preview', [OrderController::class, 'resendPreview']);
     Route::post('/orders/{order}/resend', [OrderController::class, 'storeResend']);
     Route::post('/orders/{order}/reconvert', [OrderController::class, 'reconvert']);
     Route::post('/orders/{order}/reconvert-label', [OrderController::class, 'reconvertLabel']);

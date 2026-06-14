@@ -3004,6 +3004,22 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         ]);
     }
 
+    /** Price a resend without creating it (modal preview). */
+    public function resendPreview(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if ($user->hasRole('seller') && $order->user_id !== $user->id) {
+            abort(403);
+        }
+        $cfg = Order::resendConfig();
+        $data = $request->validate([
+            'method' => 'required|in:' . implode(',', array_column($cfg['methods'], 'key')),
+            'reason' => 'required|in:' . implode(',', array_column($cfg['reasons'], 'key')),
+        ]);
+        $order->load('items');
+        return response()->json($this->computeResendPricing($order, $data['method'], $data['reason'], $order->user));
+    }
+
     /**
      * Create a resend order from an existing one: copies its items + source
      * designs + address, ships via the chosen method (label ⇒ seller_ship with
