@@ -3173,51 +3173,53 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $accFee += $accUnit * $qty;
         }
 
-        // Which components the support covers.
-        $covers = $reason['covers'] ?? ['base_cost'];
         $shipping = (float) ($method['price'] ?? 0);
-        $mode = $reason['base_support'] ?? 'none';
+        $supportPct = $reason['support'] ?? [];     // per-component % (0–100)
+        $quotaBased = !empty($reason['quota_based']);
 
-        // Support fraction (per the quota rules) applied to covered components.
-        $fraction = 0.0;
-        if ($mode === 'full') {
-            $fraction = 1.0;
-        } elseif ($mode === 'quota') {
+        // Past the monthly free quota, scale every component's support down.
+        $afterFactor = 1.0;
+        if ($quotaBased) {
             $freeQuota = $owner->resend_free_quota ?? ($cfg['quota']['default_free'] ?? 20);
-            $fraction = $this->resendQuotaUsed($owner) < $freeQuota
-                ? 1.0
-                : (((float) ($cfg['quota']['after_free_support_pct'] ?? 50)) / 100);
+            if ($this->resendQuotaUsed($owner) >= $freeQuota) {
+                $afterFactor = ((float) ($cfg['quota']['after_free_support_pct'] ?? 50)) / 100;
+            }
         }
 
-        $comps = [
-            ['key' => 'base_cost', 'label' => 'Base cost', 'amount' => round($baseCost, 2)],
-            ['key' => '2nd_fee',   'label' => 'Phí mặt thêm', 'amount' => round($faceFee, 2)],
-            ['key' => 'accessory', 'label' => 'Accessory',  'amount' => round($accFee, 2)],
-            ['key' => 'shipping',  'label' => 'Shipping',    'amount' => round($shipping, 2)],
+        $rawComps = [
+            ['key' => 'base_cost', 'label' => 'Base cost',    'amount' => $baseCost],
+            ['key' => '2nd_fee',   'label' => 'Phí mặt thêm', 'amount' => $faceFee],
+            ['key' => 'accessory', 'label' => 'Accessory',    'amount' => $accFee],
+            ['key' => 'shipping',  'label' => 'Shipping',      'amount' => $shipping],
         ];
+        $comps = [];
         $support = 0.0;
-        foreach ($comps as &$c) {
-            // Shipping is never supported. Other components only when covered.
-            $covered = $c['key'] !== 'shipping' && in_array($c['key'], $covers, true) && $c['amount'] > 0;
-            $c['supported'] = $covered;
-            $c['support_amount'] = $covered ? round($c['amount'] * $fraction, 2) : 0.0;
-            $c['charged'] = round($c['amount'] - $c['support_amount'], 2);
-            $support += $c['support_amount'];
+        foreach ($rawComps as $c) {
+            // Shipping is always seller-paid; others use the reason's % × afterFactor.
+            $pct = $c['key'] === 'shipping' ? 0.0 : ((float) ($supportPct[$c['key']] ?? 0)) * $afterFactor;
+            $supAmt = round($c['amount'] * $pct / 100, 2);
+            $support += $supAmt;
+            $comps[] = [
+                'key'            => $c['key'],
+                'label'          => $c['label'],
+                'amount'         => round($c['amount'], 2),
+                'support_pct'    => round($pct, 0),
+                'support_amount' => $supAmt,
+                'charged'        => round($c['amount'] - $supAmt, 2),
+                'supported'      => $supAmt > 0,
+            ];
         }
-        unset($c);
 
         $subtotal = $baseCost + $faceFee + $accFee + $shipping;
         $support = round($support, 2);
 
         return [
-            'ship_type'    => $method['ship_type'] ?? Order::SHIP_SELLER,
-            'shipping'     => round($shipping, 2),
-            // `base` kept for back-compat = supportable print cost (no shipping).
-            'base'         => round($baseCost + $faceFee + $accFee, 2),
-            'support'      => $support,
-            'support_pct'  => round($fraction * 100, 0),
-            'components'   => $comps,
-            'total'        => round($subtotal - $support, 2),
+            'ship_type'  => $method['ship_type'] ?? Order::SHIP_SELLER,
+            'shipping'   => round($shipping, 2),
+            'base'       => round($baseCost + $faceFee + $accFee, 2),
+            'support'    => $support,
+            'components' => $comps,
+            'total'      => round($subtotal - $support, 2),
         ];
     }
 

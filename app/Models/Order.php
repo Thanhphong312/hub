@@ -115,11 +115,22 @@ class Order extends Model
                 ['key' => 'label', 'label' => 'Gửi lại bằng label có tracking', 'price' => 5.99, 'ship_type' => self::SHIP_SELLER, 'desc' => 'Khách nhận trong 1–5 ngày làm việc'],
                 ['key' => 'stamp', 'label' => 'Gửi lại bằng stamp (không tracking)', 'price' => 1.30, 'ship_type' => self::SHIP_STAMP, 'desc' => 'Khách nhận trong 1–5 ngày làm việc'],
             ],
+            // Each reason sets the workshop support % per fee component (0–100).
+            // quota_based: when true, the support only applies within the monthly
+            // free quota; past it, support is scaled by quota.after_free_support_pct.
             'reasons' => [
-                ['key' => 'third_party', 'label' => 'Lỗi từ bên thứ ba', 'base_support' => 'quota', 'covers' => ['base_cost']],
-                ['key' => 'seller', 'label' => 'Lỗi từ seller', 'base_support' => 'none', 'covers' => []],
+                ['key' => 'third_party', 'label' => 'Lỗi từ bên thứ ba', 'quota_based' => true,
+                    'support' => ['base_cost' => 100, '2nd_fee' => 0, 'accessory' => 0]],
+                ['key' => 'seller', 'label' => 'Lỗi từ seller', 'quota_based' => false,
+                    'support' => ['base_cost' => 0, '2nd_fee' => 0, 'accessory' => 0]],
             ],
             'quota' => ['default_free' => 20, 'after_free_support_pct' => 50],
+            // Fee components that can appear on an order (for the settings UI).
+            'fee_components' => [
+                ['key' => 'base_cost', 'label' => 'Base cost'],
+                ['key' => '2nd_fee', 'label' => 'Phí mặt thêm'],
+                ['key' => 'accessory', 'label' => 'Accessory'],
+            ],
         ];
 
         $stored = AppSetting::getJson('resend_config', []);
