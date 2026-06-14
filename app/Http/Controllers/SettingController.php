@@ -217,6 +217,8 @@ class SettingController extends Controller
             'reasons.*.key'             => 'required|string|max:32',
             'reasons.*.label'           => 'required|string|max:120',
             'reasons.*.base_support'    => 'required|in:quota,full,none',
+            'reasons.*.covers'          => 'nullable|array',
+            'reasons.*.covers.*'        => 'in:base_cost,2nd_fee,accessory',
             'quota'                     => 'required|array',
             'quota.default_free'        => 'required|integer|min:0|max:1000',
             'quota.after_free_support_pct' => 'required|numeric|min:0|max:100',

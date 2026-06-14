@@ -3016,7 +3016,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             'method' => 'required|in:' . implode(',', array_column($cfg['methods'], 'key')),
             'reason' => 'required|in:' . implode(',', array_column($cfg['reasons'], 'key')),
         ]);
-        $order->load('items');
+        $order->load('items.metas', 'items.accessoryPrices', 'items.accessoryPrice');
         return response()->json($this->computeResendPricing($order, $data['method'], $data['reason'], $order->user));
     }
 
@@ -3055,7 +3055,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             'address.email'      => 'nullable|string',
         ]);
 
-        $order->load(['items.metas', 'items.accessoryPrices', 'address']);
+        $order->load(['items.metas', 'items.accessoryPrices', 'items.accessoryPrice', 'address']);
         $owner = $order->user;   // resend belongs to the original order's seller
         $pricing = $this->computeResendPricing($order, $data['method'], $data['reason'], $owner);
 
@@ -3138,41 +3138,86 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     }
 
     /**
-     * @return array{ship_type:string,shipping:float,base:float,support:float,base_charged:float,total:float}
+     * Full resend pricing with a per-component breakdown. Each item contributes
+     * base_cost + face fee (2nd_fee × extra designs) + accessory cost (× qty).
+     * The workshop support (quota/full/none) is applied ONLY to the fee
+     * components the reason is configured to cover (reason.covers, default
+     * ['base_cost']); the seller always pays shipping + uncovered components.
      */
     private function computeResendPricing(Order $order, string $methodKey, string $reasonKey, $owner): array
     {
         $cfg = Order::resendConfig();
         $method = collect($cfg['methods'])->firstWhere('key', $methodKey) ?? [];
         $reason = collect($cfg['reasons'])->firstWhere('key', $reasonKey) ?? [];
+        $tierId = $owner->tier_id;
 
-        $base = 0.0;
+        // Aggregate the three fee components across all items.
+        $baseCost = 0.0; $faceFee = 0.0; $accFee = 0.0;
         foreach ($order->items as $it) {
-            $base += $this->getVariantPriceByKey($it->product_variant_id, $owner->tier_id, 'base_cost')
-                * max(1, (int) $it->quantity);
-        }
-        $shipping = (float) ($method['price'] ?? 0);
+            $qty = max(1, (int) $it->quantity);
+            $baseCost += $this->getVariantPriceByKey($it->product_variant_id, $tierId, 'base_cost') * $qty;
 
-        $support = 0.0;
+            // Face fee: 2nd_fee × (distinct design faces − 1).
+            $designKeys = ['front', 'back', 'left', 'right', 'neck', 'special'];
+            $faces = $it->relationLoaded('metas')
+                ? $it->metas->filter(fn ($m) => in_array($m->key, $designKeys, true) && trim((string) $m->value) !== '')->count()
+                : 1;
+            if ($faces > 1) {
+                $faceFee += ($faces - 1) * $this->getVariantPriceByKey($it->product_variant_id, $tierId, '2nd_fee') * $qty;
+            }
+
+            // Accessory cost (multi-pivot, else legacy single).
+            $accUnit = $it->relationLoaded('accessoryPrices') && $it->accessoryPrices->isNotEmpty()
+                ? (float) $it->accessoryPrices->sum('price')
+                : (float) ($it->accessoryPrice->price ?? 0);
+            $accFee += $accUnit * $qty;
+        }
+
+        // Which components the support covers.
+        $covers = $reason['covers'] ?? ['base_cost'];
+        $shipping = (float) ($method['price'] ?? 0);
         $mode = $reason['base_support'] ?? 'none';
+
+        // Support fraction (per the quota rules) applied to covered components.
+        $fraction = 0.0;
         if ($mode === 'full') {
-            $support = $base;
+            $fraction = 1.0;
         } elseif ($mode === 'quota') {
             $freeQuota = $owner->resend_free_quota ?? ($cfg['quota']['default_free'] ?? 20);
-            $support = $this->resendQuotaUsed($owner) < $freeQuota
-                ? $base
-                : $base * (((float) ($cfg['quota']['after_free_support_pct'] ?? 50)) / 100);
+            $fraction = $this->resendQuotaUsed($owner) < $freeQuota
+                ? 1.0
+                : (((float) ($cfg['quota']['after_free_support_pct'] ?? 50)) / 100);
         }
-        $base = round($base, 2);
+
+        $comps = [
+            ['key' => 'base_cost', 'label' => 'Base cost', 'amount' => round($baseCost, 2)],
+            ['key' => '2nd_fee',   'label' => 'Phí mặt thêm', 'amount' => round($faceFee, 2)],
+            ['key' => 'accessory', 'label' => 'Accessory',  'amount' => round($accFee, 2)],
+            ['key' => 'shipping',  'label' => 'Shipping',    'amount' => round($shipping, 2)],
+        ];
+        $support = 0.0;
+        foreach ($comps as &$c) {
+            // Shipping is never supported. Other components only when covered.
+            $covered = $c['key'] !== 'shipping' && in_array($c['key'], $covers, true) && $c['amount'] > 0;
+            $c['supported'] = $covered;
+            $c['support_amount'] = $covered ? round($c['amount'] * $fraction, 2) : 0.0;
+            $c['charged'] = round($c['amount'] - $c['support_amount'], 2);
+            $support += $c['support_amount'];
+        }
+        unset($c);
+
+        $subtotal = $baseCost + $faceFee + $accFee + $shipping;
         $support = round($support, 2);
 
         return [
             'ship_type'    => $method['ship_type'] ?? Order::SHIP_SELLER,
             'shipping'     => round($shipping, 2),
-            'base'         => $base,
+            // `base` kept for back-compat = supportable print cost (no shipping).
+            'base'         => round($baseCost + $faceFee + $accFee, 2),
             'support'      => $support,
-            'base_charged' => round($base - $support, 2),
-            'total'        => round($shipping + ($base - $support), 2),
+            'support_pct'  => round($fraction * 100, 0),
+            'components'   => $comps,
+            'total'        => round($subtotal - $support, 2),
         ];
     }
 

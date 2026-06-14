@@ -116,8 +116,8 @@ class Order extends Model
                 ['key' => 'stamp', 'label' => 'Gửi lại bằng stamp (không tracking)', 'price' => 1.30, 'ship_type' => self::SHIP_STAMP, 'desc' => 'Khách nhận trong 1–5 ngày làm việc'],
             ],
             'reasons' => [
-                ['key' => 'third_party', 'label' => 'Lỗi từ bên thứ ba', 'base_support' => 'quota'],
-                ['key' => 'seller', 'label' => 'Lỗi từ seller', 'base_support' => 'none'],
+                ['key' => 'third_party', 'label' => 'Lỗi từ bên thứ ba', 'base_support' => 'quota', 'covers' => ['base_cost']],
+                ['key' => 'seller', 'label' => 'Lỗi từ seller', 'base_support' => 'none', 'covers' => []],
             ],
             'quota' => ['default_free' => 20, 'after_free_support_pct' => 50],
         ];
