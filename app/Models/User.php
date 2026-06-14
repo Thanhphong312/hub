@@ -25,6 +25,7 @@ class User extends Authenticatable
         'auto_pay',
         'auto_pay_delay_hours',
         'resend_free_quota',
+        'resend_support_override',
     ];
 
     protected $hidden = [
@@ -42,6 +43,7 @@ class User extends Authenticatable
             'convert' => 'boolean',
             'auto_pay' => 'boolean',
             'auto_pay_delay_hours' => 'integer',
+            'resend_support_override' => 'array',
         ];
     }
 

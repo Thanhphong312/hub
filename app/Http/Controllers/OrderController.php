@@ -3174,7 +3174,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         }
 
         $shipping = (float) ($method['price'] ?? 0);
-        $supportPct = $reason['support'] ?? [];     // per-component % (0–100)
+        // Per-seller override of the support % for this reason (if any) wins.
+        $override = $owner->resend_support_override[$reasonKey] ?? null;
+        $supportPct = is_array($override) ? $override : ($reason['support'] ?? []);  // per-component % (0–100)
         $quotaBased = !empty($reason['quota_based']);
 
         // Past the monthly free quota, scale every component's support down.
