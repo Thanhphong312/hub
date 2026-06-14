@@ -196,6 +196,36 @@ class SettingController extends Controller
     }
 
     // ----------------------------------------------------------------------
+    // Resend config — shipping methods + prices, reason cases (+ which gets the
+    // base-cost support), and the monthly free-resend quota. Admin-editable.
+    // ----------------------------------------------------------------------
+    public function getResendConfig()
+    {
+        return response()->json(\App\Models\Order::resendConfig());
+    }
+
+    public function updateResendConfig(Request $request)
+    {
+        $data = $request->validate([
+            'methods'                   => 'present|array',
+            'methods.*.key'             => 'required|string|max:32',
+            'methods.*.label'           => 'required|string|max:120',
+            'methods.*.price'           => 'required|numeric|min:0|max:1000',
+            'methods.*.ship_type'       => 'required|in:seller_ship,stamp,tiktok_ship',
+            'methods.*.desc'            => 'nullable|string|max:255',
+            'reasons'                   => 'present|array',
+            'reasons.*.key'             => 'required|string|max:32',
+            'reasons.*.label'           => 'required|string|max:120',
+            'reasons.*.base_support'    => 'required|in:quota,full,none',
+            'quota'                     => 'required|array',
+            'quota.default_free'        => 'required|integer|min:0|max:1000',
+            'quota.after_free_support_pct' => 'required|numeric|min:0|max:100',
+        ]);
+        AppSetting::setJson('resend_config', $data);
+        return response()->json(\App\Models\Order::resendConfig());
+    }
+
+    // ----------------------------------------------------------------------
     // QR portal behaviour. auto_ship_print: when opening /qr/{systemId} for a
     // not-yet-shipped order, automatically mark it shipped then print the label
     // (scan-to-fulfil workflow). Toggled from the desktop Settings page; the

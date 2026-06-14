@@ -57,6 +57,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Stamp shipping config — any auth user can read (OrderCreate fee preview).
     Route::get('/settings/stamp-config', [SettingController::class, 'getStampConfig']);
+    // Resend config — readable by any auth user (resend modal methods/reasons).
+    Route::get('/settings/resend-config', [SettingController::class, 'getResendConfig']);
 
     // Generic B2 upload proxy for browser SPAs (web-bullstart). Desktop apps
     // upload directly via the Electron main process and skip this.
@@ -87,6 +89,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-merge-duplicates', [OrderController::class, 'bulkMergeDuplicates']);
     Route::post('/orders/refresh-duplicates', [OrderController::class, 'runDuplicateRefresh']);
     Route::get('/orders/pending-tracking', [OrderController::class, 'pendingTracking']);
+    Route::get('/orders/resend-quota', [OrderController::class, 'resendQuota']);
     Route::post('/orders/{order}/fetch-tracking', [OrderController::class, 'fetchTrackingOne']);
     Route::post('/orders/{order}/save-tracking', [OrderController::class, 'saveTracking']);
     Route::get('/orders/{order}', [OrderController::class, 'show']);
@@ -94,6 +97,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/orders/{order}', [OrderController::class, 'destroy']);
     Route::put('/orders/{order}/status', [OrderController::class, 'updateStatus']);
     Route::post('/orders/{order}/pay', [OrderController::class, 'pay']);
+    Route::post('/orders/{order}/resend', [OrderController::class, 'storeResend']);
     Route::post('/orders/{order}/reconvert', [OrderController::class, 'reconvert']);
     Route::post('/orders/{order}/reconvert-label', [OrderController::class, 'reconvertLabel']);
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
@@ -326,6 +330,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/vnpay-merchant', [SettingController::class, 'getVnpayMerchant']);
         Route::put('/vnpay-merchant', [SettingController::class, 'updateVnpayMerchant']);
         Route::put('/stamp-config', [SettingController::class, 'updateStampConfig']);
+        Route::put('/resend-config', [SettingController::class, 'updateResendConfig']);
 
         Route::get('/qr-config', [SettingController::class, 'getQrConfig']);
         Route::put('/qr-config', [SettingController::class, 'updateQrConfig']);

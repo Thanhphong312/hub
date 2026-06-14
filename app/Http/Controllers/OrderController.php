@@ -2984,6 +2984,159 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      * fall back to the product's default material (materials.is_default=1) for
      * the variant's product. Returns null when the product has no default.
      */
+    // ── Resend / re-ship ───────────────────────────────────────────────
+
+    /** Current seller's monthly resend quota usage + the config for the modal. */
+    public function resendQuota(Request $request)
+    {
+        $user = $request->user();
+        $cfg = Order::resendConfig();
+        $freeQuota = $user->resend_free_quota ?? ($cfg['quota']['default_free'] ?? 20);
+        $used = $this->resendQuotaUsed($user);
+
+        return response()->json([
+            'free_quota'             => (int) $freeQuota,
+            'used'                   => $used,
+            'free_remaining'         => max(0, $freeQuota - $used),
+            'after_free_support_pct' => (float) ($cfg['quota']['after_free_support_pct'] ?? 50),
+            'methods'                => $cfg['methods'],
+            'reasons'                => $cfg['reasons'],
+        ]);
+    }
+
+    /**
+     * Create a resend order from an existing one: copies its items + source
+     * designs + address, ships via the chosen method (label ⇒ seller_ship with
+     * tracking, stamp ⇒ no tracking), and prices it per the settings-driven
+     * support rules. Created unpaid — the seller pays it via the normal flow.
+     */
+    public function storeResend(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if ($user->hasRole('seller') && $order->user_id !== $user->id) {
+            abort(403);
+        }
+
+        $cfg = Order::resendConfig();
+        $methodKeys = array_column($cfg['methods'], 'key');
+        $reasonKeys = array_column($cfg['reasons'], 'key');
+        $data = $request->validate([
+            'method' => 'required|in:' . implode(',', $methodKeys),
+            'reason' => 'required|in:' . implode(',', $reasonKeys),
+            'note'   => 'nullable|string',
+        ]);
+
+        $order->load(['items.metas', 'items.accessoryPrices', 'address']);
+        $owner = $order->user;   // resend belongs to the original order's seller
+        $pricing = $this->computeResendPricing($order, $data['method'], $data['reason'], $owner);
+
+        return DB::transaction(function () use ($order, $owner, $data, $pricing) {
+            $firstVariantId = (int) ($order->items->first()->product_variant_id ?? 0) ?: null;
+            $resend = Order::create([
+                'user_id'            => $owner->id,
+                'resend_of_order_id' => $order->id,
+                'resend_method'      => $data['method'],
+                'resend_reason'      => $data['reason'],
+                'base_support'       => $pricing['support'],
+                'system_id'          => $this->generateSystemId(),
+                'ref_id'             => $order->ref_id,
+                'note'               => $data['note'] ?? ('Resend of ' . $order->system_id),
+                'status'             => Order::STATUS_NEW_ORDER,
+                'ship_type'          => $pricing['ship_type'],
+                'shipping_label'     => null,
+                'print_cost'         => $pricing['base'],
+                'shipping_cost'      => $pricing['shipping'],
+                'total_cost'         => $pricing['total'],
+            ]);
+            $resend->update(['system_id' => $this->buildSystemIdForOrder($resend->id, $firstVariantId)]);
+
+            foreach ($order->items as $src) {
+                $item = OrderItem::create([
+                    'order_id'           => $resend->id,
+                    'product_variant_id' => $src->product_variant_id,
+                    'material_id'        => $src->material_id,
+                    'mockup_front'       => $src->mockup_front,
+                    'mockup_back'        => $src->mockup_back,
+                    'order_type'         => $src->order_type,
+                    'price'              => $src->price,
+                    'quantity'           => $src->quantity,
+                ]);
+                foreach ($src->metas as $m) {
+                    // Copy SOURCE designs only — _qr is rebuilt by the convert cron.
+                    if (preg_match('/_qr(_\d+)?$/', $m->key)) continue;
+                    OrderItemMeta::create(['order_item_id' => $item->id, 'key' => $m->key, 'value' => $m->value]);
+                }
+                $accIds = $src->accessoryPrices->pluck('id')->all();
+                if (!empty($accIds)) $item->accessoryPrices()->sync($accIds);
+            }
+
+            if ($order->address) {
+                $addr = $order->address->replicate();
+                $addr->order_id = $resend->id;
+                $addr->save();
+            }
+
+            return response()->json([
+                'message' => 'Resend order created',
+                'order'   => $resend->fresh()->load(['items.metas', 'items.productVariant', 'address', 'resendOf:id,system_id']),
+                'pricing' => $pricing,
+            ], 201);
+        });
+    }
+
+    /** How many quota-bearing (third-party-style) resends this seller made this VN month. */
+    private function resendQuotaUsed($user): int
+    {
+        $quotaReasons = collect(Order::resendConfig()['reasons'])
+            ->where('base_support', 'quota')->pluck('key')->all();
+        if (empty($quotaReasons)) return 0;
+
+        $vnNow = now('Asia/Ho_Chi_Minh');
+        return Order::where('user_id', $user->id)
+            ->whereIn('resend_reason', $quotaReasons)
+            ->whereRaw("DATE_FORMAT(DATE_ADD(created_at, INTERVAL 7 HOUR), '%Y-%m') = ?", [$vnNow->format('Y-m')])
+            ->count();
+    }
+
+    /**
+     * @return array{ship_type:string,shipping:float,base:float,support:float,base_charged:float,total:float}
+     */
+    private function computeResendPricing(Order $order, string $methodKey, string $reasonKey, $owner): array
+    {
+        $cfg = Order::resendConfig();
+        $method = collect($cfg['methods'])->firstWhere('key', $methodKey) ?? [];
+        $reason = collect($cfg['reasons'])->firstWhere('key', $reasonKey) ?? [];
+
+        $base = 0.0;
+        foreach ($order->items as $it) {
+            $base += $this->getVariantPriceByKey($it->product_variant_id, $owner->tier_id, 'base_cost')
+                * max(1, (int) $it->quantity);
+        }
+        $shipping = (float) ($method['price'] ?? 0);
+
+        $support = 0.0;
+        $mode = $reason['base_support'] ?? 'none';
+        if ($mode === 'full') {
+            $support = $base;
+        } elseif ($mode === 'quota') {
+            $freeQuota = $owner->resend_free_quota ?? ($cfg['quota']['default_free'] ?? 20);
+            $support = $this->resendQuotaUsed($owner) < $freeQuota
+                ? $base
+                : $base * (((float) ($cfg['quota']['after_free_support_pct'] ?? 50)) / 100);
+        }
+        $base = round($base, 2);
+        $support = round($support, 2);
+
+        return [
+            'ship_type'    => $method['ship_type'] ?? Order::SHIP_SELLER,
+            'shipping'     => round($shipping, 2),
+            'base'         => $base,
+            'support'      => $support,
+            'base_charged' => round($base - $support, 2),
+            'total'        => round($shipping + ($base - $support), 2),
+        ];
+    }
+
     private function resolveMaterialId(?int $providedMaterialId, $variantId): ?int
     {
         if (!empty($providedMaterialId)) return (int) $providedMaterialId;

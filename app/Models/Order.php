@@ -12,6 +12,7 @@ class Order extends Model
         'tracking_id', 'print_cost', 'shipping_cost', 'total_cost',
         'paid_cost', 'completed_time', 'production', 'stock_decremented',
         'gangsheet_group_id', 'qr_bg_status', 'qr_bg_checked_at',
+        'resend_of_order_id', 'resend_method', 'resend_reason', 'base_support',
     ];
 
     // ship_type values.
@@ -95,6 +96,51 @@ class Order extends Model
     public function items()
     {
         return $this->hasMany(OrderItem::class);
+    }
+
+    /**
+     * Resend config (admin-editable via Settings → AppSetting `resend_config`).
+     *   methods[]: {key, label, price, ship_type, desc}
+     *   reasons[]: {key, label, base_support: 'quota'|'full'|'none'}
+     *     - quota: free base for the first N resends/month, then % support
+     *     - full:  base always free
+     *     - none:  seller pays full base
+     *   quota: {default_free, after_free_support_pct}
+     * Seller always pays the full shipping price.
+     */
+    public static function resendConfig(): array
+    {
+        $defaults = [
+            'methods' => [
+                ['key' => 'label', 'label' => 'Gửi lại bằng label có tracking', 'price' => 5.99, 'ship_type' => self::SHIP_SELLER, 'desc' => 'Khách nhận trong 1–5 ngày làm việc'],
+                ['key' => 'stamp', 'label' => 'Gửi lại bằng stamp (không tracking)', 'price' => 1.30, 'ship_type' => self::SHIP_STAMP, 'desc' => 'Khách nhận trong 1–5 ngày làm việc'],
+            ],
+            'reasons' => [
+                ['key' => 'third_party', 'label' => 'Lỗi từ bên thứ ba', 'base_support' => 'quota'],
+                ['key' => 'seller', 'label' => 'Lỗi từ seller', 'base_support' => 'none'],
+            ],
+            'quota' => ['default_free' => 20, 'after_free_support_pct' => 50],
+        ];
+
+        $stored = AppSetting::getJson('resend_config', []);
+        if (is_array($stored)) {
+            if (!empty($stored['methods'])) $defaults['methods'] = $stored['methods'];
+            if (!empty($stored['reasons'])) $defaults['reasons'] = $stored['reasons'];
+            if (!empty($stored['quota']))   $defaults['quota'] = array_merge($defaults['quota'], $stored['quota']);
+        }
+        return $defaults;
+    }
+
+    // The original order this is a resend of (null for normal orders).
+    public function resendOf()
+    {
+        return $this->belongsTo(Order::class, 'resend_of_order_id');
+    }
+
+    // Resend orders created from this order.
+    public function resends()
+    {
+        return $this->hasMany(Order::class, 'resend_of_order_id');
     }
 
     // Current automation gangsheet group (null = not assigned / back in pending).
