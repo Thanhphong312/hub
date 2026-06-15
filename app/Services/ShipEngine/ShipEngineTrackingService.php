@@ -2,6 +2,7 @@
 
 namespace App\Services\ShipEngine;
 
+use App\Models\AppSetting;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Support\Facades\Http;
 
@@ -18,8 +19,14 @@ class ShipEngineTrackingService
 
     public function __construct()
     {
-        $this->apiKey = (string) config('shipengine.api_key', '');
-        $this->defaultCarrier = (string) config('shipengine.carrier_code', 'usps');
+        // App-entered key (AppSetting 'shipengine', set from the desktop app)
+        // takes precedence over the server .env so operators can configure
+        // ShipEngine without shell access. Empty app value → fall back to env.
+        $override = AppSetting::getJson('shipengine', []);
+        $override = is_array($override) ? $override : [];
+
+        $this->apiKey = (string) (($override['api_key'] ?? '') ?: config('shipengine.api_key', ''));
+        $this->defaultCarrier = (string) (($override['carrier_code'] ?? '') ?: config('shipengine.carrier_code', 'usps'));
     }
 
     public function hasKey(): bool
@@ -54,10 +61,55 @@ class ShipEngineTrackingService
             return [];
         }
 
+        $results = array_fill(0, count($clean), null);
+        $pending = array_keys($clean);            // indices still awaiting a result
+
+        // Retry ONLY the entries that hit ShipEngine's 429 rate limit (~200/min),
+        // honoring Retry-After with exponential backoff, so a big batch
+        // self-throttles instead of failing en masse.
+        for ($round = 0; $round < 5 && $pending; $round++) {
+            $batch     = array_values($pending);
+            $responses = $this->poolTracking(array_map(fn ($i) => $clean[$i], $batch));
+
+            $retry      = [];
+            $retryAfter = 0;
+            foreach ($batch as $k => $i) {
+                $response = $responses[$k];
+                if (!($response instanceof \Throwable) && $response->status() === 429) {
+                    $retry[]    = $i;
+                    $retryAfter = max($retryAfter, (int) $response->header('Retry-After'));
+                    continue;
+                }
+                $results[$i] = $this->normalizeResponse($clean[$i], $response);
+            }
+
+            $pending = $retry;
+            if ($pending) {
+                $waitMs = $retryAfter > 0 ? $retryAfter * 1000 : min(8000, 500 * (2 ** $round));
+                usleep($waitMs * 1000);
+            }
+        }
+
+        // Still rate-limited after all rounds → explicit error result.
+        foreach ($pending as $i) {
+            $results[$i] = [
+                'success'         => false,
+                'tracking_number' => $clean[$i]['number'],
+                'error'           => 'ShipEngine rate limit (429)',
+                'code'            => 'RATE_LIMIT',
+            ];
+        }
+
+        return $results;
+    }
+
+    /** Fire one concurrent pool of tracking lookups; responses align to $reqs. */
+    private function poolTracking(array $reqs): array
+    {
         $apiKey  = $this->apiKey;
         $baseUrl = $this->baseUrl;
 
-        $responses = Http::pool(fn (Pool $pool) => array_map(
+        return Http::pool(fn (Pool $pool) => array_map(
             fn ($r) => $pool
                 ->withHeaders(['API-Key' => $apiKey, 'Content-Type' => 'application/json'])
                 ->timeout(20)
@@ -65,38 +117,35 @@ class ShipEngineTrackingService
                     'carrier_code'    => $r['carrier'],
                     'tracking_number' => $r['number'],
                 ]),
-            $clean
+            $reqs
         ));
+    }
 
-        $results = [];
-        foreach ($clean as $i => $req) {
-            $response = $responses[$i];
-            try {
-                if ($response instanceof \Throwable) {
-                    throw $response;
-                }
-                $data = $response->json();
-                if (!$response->successful()) {
-                    $results[] = [
-                        'success'         => false,
-                        'tracking_number' => $req['number'],
-                        'error'           => $data['errors'][0]['message'] ?? $data['message'] ?? ('API error ' . $response->status()),
-                        'code'            => $data['errors'][0]['error_code'] ?? 'SE_ERROR',
-                    ];
-                } else {
-                    $results[] = $this->parseResponse($req['number'], $req['carrier'], $data);
-                }
-            } catch (\Throwable $e) {
-                $results[] = [
+    /** Turn one pooled response (or thrown error) into a normalised result. */
+    private function normalizeResponse(array $req, $response): array
+    {
+        try {
+            if ($response instanceof \Throwable) {
+                throw $response;
+            }
+            $data = $response->json();
+            if (!$response->successful()) {
+                return [
                     'success'         => false,
                     'tracking_number' => $req['number'],
-                    'error'           => $e->getMessage(),
-                    'code'            => 'API_ERROR',
+                    'error'           => $data['errors'][0]['message'] ?? $data['message'] ?? ('API error ' . $response->status()),
+                    'code'            => $data['errors'][0]['error_code'] ?? 'SE_ERROR',
                 ];
             }
+            return $this->parseResponse($req['number'], $req['carrier'], $data);
+        } catch (\Throwable $e) {
+            return [
+                'success'         => false,
+                'tracking_number' => $req['number'],
+                'error'           => $e->getMessage(),
+                'code'            => 'API_ERROR',
+            ];
         }
-
-        return $results;
     }
 
     /** Normalise a raw ShipEngine response. Events are sorted oldest-first. */

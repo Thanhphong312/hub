@@ -158,6 +158,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/settings', [TrackingController::class, 'updateSettings']);
         Route::get('/stats', [TrackingController::class, 'stats']);
         Route::post('/run', [TrackingController::class, 'run']);
+        Route::post('/check', [TrackingController::class, 'checkSelected']);
+        Route::get('/shipengine-key', [TrackingController::class, 'shipengineKey']);
+        Route::put('/shipengine-key', [TrackingController::class, 'updateShipengineKey']);
     });
 
     // Reprints (user-scoped) + reasons. Reason writes are admin-only; reading

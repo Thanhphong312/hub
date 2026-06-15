@@ -18,8 +18,8 @@ use Illuminate\Support\Facades\Log;
  */
 class TrackingChecker
 {
-    /** ShipEngine rate-limit friendly concurrency per pool. */
-    private const POOL_SIZE = 20;
+    /** ShipEngine rate-limit friendly concurrency per pool (~200 req/min plan). */
+    private const POOL_SIZE = 8;
 
     public function __construct(private ShipEngineTrackingService $svc) {}
 
@@ -64,6 +64,60 @@ class TrackingChecker
         }
 
         return $out;
+    }
+
+    /**
+     * On-demand check for an explicit set of order ids (UI "Check tracking" on
+     * selected orders). Same polling + upsert rules as run(), but driven by the
+     * caller's selection. Returns per-order results so the UI can flag which
+     * orders changed status.
+     *
+     * @return array{summary:array,results:array<int,array>}
+     */
+    public function runForIds(array $ids): array
+    {
+        $ids = array_values(array_unique(array_map('intval', $ids)));
+        $orders = Order::with('tracking')
+            ->whereIn('id', $ids)
+            ->whereNotNull('tracking_id')->where('tracking_id', '!=', '')
+            ->where('status', '!=', Order::STATUS_CANCELLED)
+            ->get();
+
+        $summary = [
+            'checked' => 0, 'changed' => 0, 'delivered' => 0, 'intransit' => 0,
+            'errors'  => 0,
+            'skipped' => max(0, count($ids) - $orders->count()), // no tracking_id / cancelled / not found
+        ];
+        $results = [];
+
+        foreach ($orders->chunk(self::POOL_SIZE) as $chunk) {
+            $list = $chunk->values();
+            $res  = $this->svc->getMultipleTrackingInfo($list->pluck('tracking_id')->all());
+
+            foreach ($list as $i => $order) {
+                $r   = $res[$i] ?? null;
+                $old = $order->tracking?->status;
+                if (!$r || empty($r['success'])) {
+                    $summary['errors']++;
+                    $results[] = ['id' => $order->id, 'system_id' => $order->system_id, 'error' => $r['error'] ?? 'no result'];
+                    continue;
+                }
+                $o = $this->applyResult($order, $r);
+                $summary['checked']++;
+                if ($o['changed'])   { $summary['changed']++; }
+                if ($o['intransit']) { $summary['intransit']++; }
+                if ($o['delivered']) { $summary['delivered']++; }
+                $results[] = [
+                    'id'         => $order->id,
+                    'system_id'  => $order->system_id,
+                    'old_status' => $old,
+                    'status'     => $o['status'],
+                    'changed'    => $o['changed'],
+                ];
+            }
+        }
+
+        return ['summary' => $summary, 'results' => $results];
     }
 
     /**
@@ -149,6 +203,7 @@ class TrackingChecker
             'changed'   => $changed,
             'delivered' => $delivered,
             'intransit' => (bool) ($payload['date_intransit'] ?? false),
+            'status'    => $status,
         ];
     }
 

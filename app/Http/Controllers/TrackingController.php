@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppSetting;
 use App\Models\Order;
 use App\Models\OrderTracking;
 use App\Services\ShipEngine\TrackingChecker;
@@ -83,6 +84,75 @@ class TrackingController extends Controller
             'limit'  => $limit,
             'result' => $result,        // {checked,changed,delivered,intransit,errors}
             'drained' => $result['checked'] < $limit,
+        ]);
+    }
+
+    /**
+     * On-demand check for an explicit set of orders (the dashboard "Check
+     * tracking" button on selected "chưa run" orders). Calls ShipEngine and
+     * upserts order_trackings; returns which orders changed status.
+     */
+    public function checkSelected(Request $request, TrackingChecker $checker)
+    {
+        $data = $request->validate([
+            'order_ids'   => 'required|array|min:1|max:300',
+            'order_ids.*' => 'integer',
+        ]);
+
+        if (!$checker->hasKey()) {
+            return response()->json(['message' => 'Chưa cấu hình ShipEngine API key'], 422);
+        }
+
+        $res = $checker->runForIds($data['order_ids']);
+        $s   = $res['summary'];
+
+        return response()->json([
+            'message' => "Đã check {$s['checked']} đơn · đổi {$s['changed']} · lỗi {$s['errors']}",
+            'summary' => $s,
+            'results' => $res['results'],
+        ]);
+    }
+
+    /** Whether a ShipEngine key is configured + where from (app vs server env). */
+    public function shipengineKey()
+    {
+        $cfg = AppSetting::getJson('shipengine', []);
+        $cfg = is_array($cfg) ? $cfg : [];
+
+        return response()->json([
+            'has_key'      => !empty($cfg['api_key']) || !empty(config('shipengine.api_key')),
+            'from_app'     => !empty($cfg['api_key']),
+            'carrier_code' => $cfg['carrier_code'] ?? config('shipengine.carrier_code', 'usps'),
+        ]);
+    }
+
+    /**
+     * Save the ShipEngine API key (and optional carrier) from the desktop app.
+     * The raw key is never returned by GET; an empty api_key clears the override
+     * so it falls back to the server .env.
+     */
+    public function updateShipengineKey(Request $request)
+    {
+        $data = $request->validate([
+            'api_key'      => 'nullable|string|max:255',
+            'carrier_code' => 'nullable|string|max:32',
+        ]);
+
+        $cfg = AppSetting::getJson('shipengine', []);
+        $cfg = is_array($cfg) ? $cfg : [];
+
+        if ($request->has('api_key')) {
+            $cfg['api_key'] = trim((string) ($data['api_key'] ?? ''));
+        }
+        if ($request->filled('carrier_code')) {
+            $cfg['carrier_code'] = trim($data['carrier_code']);
+        }
+        AppSetting::setJson('shipengine', $cfg);
+
+        return response()->json([
+            'ok'       => true,
+            'has_key'  => !empty($cfg['api_key']) || !empty(config('shipengine.api_key')),
+            'from_app' => !empty($cfg['api_key']),
         ]);
     }
 }
