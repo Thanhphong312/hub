@@ -126,6 +126,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Products (admin write)
     Route::middleware(CheckRole::class . ':admin')->group(function () {
         Route::post('/products', [ProductController::class, 'store']);
+        Route::post('/products/{product}/duplicate', [ProductController::class, 'duplicate']);
         Route::put('/products/{product}', [ProductController::class, 'update']);
         Route::delete('/products/{product}', [ProductController::class, 'destroy']);
         Route::post('/products/{product}/variants', [ProductController::class, 'storeVariant']);
@@ -169,8 +170,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/reprints/mark-gangsheet', [ReprintController::class, 'markGangsheet']);
     Route::put('/reprints/{reprint}', [ReprintController::class, 'update']);
     Route::delete('/reprints/{reprint}', [ReprintController::class, 'destroy']);
+    // Partners (partner-bullstart) can add their own reasons; rename/delete stay
+    // admin-only since reasons are shared global config.
+    Route::middleware(CheckRole::class . ':admin,partner')
+        ->post('/reasons', [ReasonController::class, 'store']);
     Route::middleware(CheckRole::class . ':admin')->group(function () {
-        Route::post('/reasons', [ReasonController::class, 'store']);
         Route::put('/reasons/{reason}', [ReasonController::class, 'update']);
         Route::delete('/reasons/{reason}', [ReasonController::class, 'destroy']);
     });

@@ -9,6 +9,7 @@ use App\Models\ProductVariant;
 use App\Models\ProductVariantPrice;
 use App\Models\Tier;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * @group Products
@@ -255,6 +256,95 @@ class ProductController extends Controller
     {
         $product->delete();
         return response()->json(['message' => 'Product deleted']);
+    }
+
+    /**
+     * Duplicate a product into a brand-new one under a different name, deep-copying
+     * its variants (+ tier/key prices), accessories (+ prices) and materials.
+     *
+     * Two things are intentionally NOT copied verbatim:
+     *  - line_id  — it prefixes order system_ids; the clone starts blank so the
+     *               admin assigns a fresh prefix (avoids system_id collisions).
+     *  - stock    — physical inventory, reset to 0 on every cloned row.
+     *  - sku      — globally unique, so each cloned variant's sku is suffixed
+     *               with the new product id to stay unique while remaining traceable.
+     */
+    public function duplicate(Request $request, Product $product)
+    {
+        $data = $request->validate([
+            'name'    => 'required|string',
+            'style'   => 'nullable|string',
+            'line_id' => 'nullable|string|max:16',
+        ]);
+
+        $product->load(['variants.prices', 'accessories.prices', 'materials']);
+
+        $new = DB::transaction(function () use ($product, $data) {
+            $new = Product::create([
+                'name'    => $data['name'],
+                'style'   => $data['style'] ?? $product->style,
+                'line_id' => $data['line_id'] ?? null,
+                'status'  => $product->status,
+            ]);
+
+            foreach ($product->variants as $variant) {
+                $newVariant = $new->variants()->create([
+                    'sku'        => $variant->sku ? $variant->sku . '-' . $new->id : null,
+                    'color'      => $variant->color,
+                    'size'       => $variant->size,
+                    'paper_type' => $variant->paper_type,
+                    'weight'     => $variant->weight,
+                    'length'     => $variant->length,
+                    'width'      => $variant->width,
+                    'height'     => $variant->height,
+                    'status'     => $variant->status,
+                    'stock'      => 0,
+                ]);
+                foreach ($variant->prices as $price) {
+                    $newVariant->prices()->create([
+                        'tier_id' => $price->tier_id,
+                        'key'     => $price->key,
+                        'price'   => $price->price,
+                    ]);
+                }
+            }
+
+            foreach ($product->accessories as $acc) {
+                $newAcc = $new->accessories()->create([
+                    'name'            => $acc->name,
+                    'stock'           => 0,
+                    'gangsheet_split' => $acc->gangsheet_split,
+                ]);
+                foreach ($acc->prices as $p) {
+                    $newAcc->prices()->create([
+                        'tier_id'        => $p->tier_id,
+                        'style'          => $p->style,
+                        'accessory_code' => $p->accessory_code,
+                        'price'          => $p->price,
+                        'stock'          => 0,
+                        'purchase_url'   => $p->purchase_url,
+                    ]);
+                }
+            }
+
+            foreach ($product->materials as $m) {
+                $new->materials()->create([
+                    'name'         => $m->name,
+                    'description'  => $m->description,
+                    'is_default'   => $m->is_default,
+                    'status'       => $m->status,
+                    'stock'        => 0,
+                    'purchase_url' => $m->purchase_url,
+                ]);
+            }
+
+            return $new;
+        });
+
+        return response()->json([
+            'message' => 'Product duplicated',
+            'product' => $new->load(['variants.prices', 'accessories.prices', 'materials']),
+        ], 201);
     }
 
     /**
