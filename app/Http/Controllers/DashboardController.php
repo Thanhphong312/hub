@@ -69,9 +69,18 @@ class DashboardController extends Controller
         // Stale orders: created more than 24h ago and still NOT shipped (and not
         // cancelled) — an SLA warning. Fresh seller-scoped base so it ignores the
         // page date filter. Oldest first so the worst offenders surface.
+        // Sundays don't count toward the "1 day" SLA (no shipping happens), so an
+        // order sitting over the weekend isn't flagged a day early. When the
+        // trailing 24h window has crossed a Sunday (Chicago time), push the cutoff
+        // back one extra day of grace.
+        $nowChi      = now()->setTimezone('America/Chicago');
+        $staleCutoff = now()->subDay();
+        if ($nowChi->isSunday() || $nowChi->isMonday()) {
+            $staleCutoff = $staleCutoff->subDay();
+        }
         $staleBase = Order::query()
             ->whereNotIn('status', [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED])
-            ->where('created_at', '<=', now()->subDay());
+            ->where('created_at', '<=', $staleCutoff);
         if ($user->hasRole('seller')) {
             $staleBase->where('user_id', $user->id);
         }
@@ -116,6 +125,19 @@ class DashboardController extends Controller
         $nowCt   = now()->setTimezone($tz);
         $startCt = $nowCt->copy()->startOfDay()->subDays(7);    // midnight Chicago, 7 days ago
         $endCt   = $nowCt->copy()->startOfDay();                // midnight Chicago today (excl.)
+
+        // USPS doesn't scan packages on Sundays, so an order shipped on a Sunday
+        // that is still at 'pre_shipment' isn't actually late — the carrier just
+        // hasn't worked yet. Exclude those from BOTH numerator and denominator so
+        // they don't drag the rate down. The 7-day window spans exactly one
+        // Sunday; find it in Chicago local time and convert its day bounds to UTC
+        // for the completed_time comparison (DST-safe via Carbon).
+        $sunCt = $startCt->copy();
+        while (! $sunCt->isSunday()) {
+            $sunCt->addDay();
+        }
+        $sunStartUtc = $sunCt->copy()->startOfDay()->utc();
+        $sunEndUtc   = $sunCt->copy()->addDay()->startOfDay()->utc();
         // Only orders ELIGIBLE for a tracking judgement count toward the ratio:
         // shipped in-window AND they have a tracking_id AND an order_trackings
         // row with a status (carrier checked at least once). Orders with no
@@ -127,7 +149,15 @@ class DashboardController extends Controller
             ->where('completed_time', '>=', $startCt->copy()->utc())
             ->where('completed_time', '<', $endCt->copy()->utc())
             ->whereNotNull('tracking_id')->where('tracking_id', '!=', '')
-            ->whereHas('tracking', fn ($q) => $q->whereNotNull('status'));
+            ->whereHas('tracking', fn ($q) => $q->whereNotNull('status'))
+            // Drop Sunday-shipped orders that are still pre_shipment (USPS closed).
+            // Keep: anything not shipped on the Sunday, OR shipped Sunday but already running.
+            ->where(function ($q) use ($sunStartUtc, $sunEndUtc) {
+                $q->where(fn ($q2) => $q2
+                        ->where('completed_time', '<', $sunStartUtc)
+                        ->orWhere('completed_time', '>=', $sunEndUtc))
+                  ->orWhereHas('tracking', fn ($t) => $t->where('status', '!=', 'pre_shipment'));
+            });
         if ($user->hasRole('seller')) {
             $shippedRangeBase->where('user_id', $user->id);
         }
