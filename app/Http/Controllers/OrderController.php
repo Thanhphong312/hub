@@ -11,6 +11,7 @@ use App\Models\ProductVariant;
 use App\Models\ProductVariantPrice;
 use App\Models\User;
 use App\Models\WalletTransaction;
+use App\Services\ImageValidationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -439,6 +440,25 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             }
         }
 
+        // Image-URL validation (blocking): a manual create must not produce an
+        // order with unreachable / non-image URLs. This moved server-side from
+        // the client (was localStorage). Only this create form is gated —
+        // external API / bulk paths have their own methods.
+        $imgService = app(ImageValidationService::class);
+        $imgResult = $imgService->validatePayload($request->items);
+        if (!$imgResult['ok']) {
+            return response()->json([
+                'message' => 'Invalid image URLs',
+                'failures' => array_map(fn ($f) => [
+                    'item_no' => $f['itemNo'],
+                    'field'   => $f['field'],
+                    'label'   => $f['label'],
+                    'url'     => $f['url'],
+                    'reason'  => $f['reason'],
+                ], $imgResult['failures']),
+            ], 422);
+        }
+
         $userId = $request->user()->id;
         $rawRefId = $request->ref_id ? trim($request->ref_id) : null;
         $force = $request->boolean('force');
@@ -462,7 +482,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 : $rawRefId; // user explicitly chose to keep duplicate
         }
 
-        return DB::transaction(function () use ($request, $hasLabel, $byStamp, $finalRefId) {
+        return DB::transaction(function () use ($request, $hasLabel, $byStamp, $finalRefId, $imgService, $imgResult) {
             $firstVariantId = (int) ($request->items[0]['product_variant_id'] ?? 0) ?: null;
             $order = Order::create([
                 'user_id' => $request->user()->id,
@@ -525,6 +545,17 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 'shipping_cost' => $shippingCost,
                 'total_cost' => $printCost + $shippingCost,
             ]);
+
+            // Images were just validated above (all passed) — persist the
+            // pass without re-fetching so the Order page shows checked=true.
+            $imgService->recordPass($order, $imgResult['image_count']);
+
+            // Best-effort Telegram notification — never blocks order creation.
+            try {
+                app(\App\Services\TelegramService::class)->notifyNewOrder($order, $request->user());
+            } catch (\Throwable $e) {
+                \Log::warning('[telegram] notifyNewOrder: ' . $e->getMessage());
+            }
 
             return response()->json([
                 'message' => 'Order created',
@@ -2078,6 +2109,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $user = $request->user();
         $created = [];
+        $createdOrderIds = [];
         $errors = [];
         $force = $request->boolean('force');
         $rename = $request->boolean('rename');
@@ -2115,7 +2147,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $assignedInBatch = [];
 
-        $response = DB::transaction(function () use ($rows, $header, $user, $force, $rename, &$assignedInBatch, &$created, &$errors) {
+        $response = DB::transaction(function () use ($rows, $header, $user, $force, $rename, &$assignedInBatch, &$created, &$createdOrderIds, &$errors) {
             // ref_id (after rename) → Order model already created in this batch.
             // Rows sharing a ref_id append items to the same order instead of
             // creating a new one.
@@ -2244,6 +2276,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                         $batchOrders[$rawRef] = $order;
                     }
                     $created[] = $order->system_id;
+                    $createdOrderIds[] = $order->id;
                 }
 
                 // Build the metas list up front so the per-item price can
@@ -2313,11 +2346,27 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 'created_count' => count($created),
                 'error_count' => count($errors),
                 'created_refs' => $created,
+                'created_ids' => $createdOrderIds,
                 'errors' => $errors,
             ]);
         });
 
         $this->refreshDuplicateRefIds();
+
+        // Image-URL validation for imported orders runs in the desktop client:
+        // the import response returns created_ids, and the client validates +
+        // saves results (see services/importUrlCheck.jsx). Nothing to dispatch
+        // server-side — keeps the request fast and needs no queue worker.
+
+        // Best-effort single summary notification for the bulk import.
+        try {
+            $count = (int) ($response->getData()->created_count ?? 0);
+            if ($count > 0) {
+                app(\App\Services\TelegramService::class)->notifyOrdersImported($request->user(), $count);
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('[telegram] notifyOrdersImported: ' . $e->getMessage());
+        }
 
         return $response;
     }

@@ -24,6 +24,8 @@ class User extends Authenticatable
         'convert',
         'auto_pay',
         'auto_pay_delay_hours',
+        'telegram_chat_id',
+        'telegram_linked_at',
     ];
 
     protected $hidden = [
@@ -41,6 +43,8 @@ class User extends Authenticatable
             'convert' => 'boolean',
             'auto_pay' => 'boolean',
             'auto_pay_delay_hours' => 'integer',
+            'telegram_chat_id' => 'integer',
+            'telegram_linked_at' => 'datetime',
         ];
     }
 

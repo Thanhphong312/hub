@@ -24,6 +24,8 @@ class TelegramService
     {
         return AppSetting::getJson(self::SETTING_KEY, [
             'bot_token'          => '',
+            'bot_username'       => '',
+            'webhook_secret'     => '',
             'default_chat_id'    => '',
             'default_thread_id'  => null,
             'topup_chat_id'      => '',
@@ -68,6 +70,109 @@ class TelegramService
             throw new \RuntimeException("Telegram sendMessage failed: {$desc}");
         }
         return (int) ($body['result']['message_id'] ?? 0);
+    }
+
+    /**
+     * Best-effort delete of a message (used to scrub the plaintext password from
+     * a user's `/login` message after linking). Never throws.
+     *
+     * @param string|int $chatId
+     */
+    public function deleteMessage($chatId, int $messageId): void
+    {
+        $token = self::settings()['bot_token'] ?? '';
+        if (!$token || !$messageId) return;
+        try {
+            Http::asJson()->timeout(10)
+                ->post(self::API_BASE . "/bot{$token}/deleteMessage", [
+                    'chat_id'    => $chatId,
+                    'message_id' => $messageId,
+                ]);
+        } catch (\Throwable $e) {
+            \Log::warning('[TelegramService] deleteMessage failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Register the bot webhook with Telegram. Returns the Telegram response body.
+     * `secret_token` is echoed back by Telegram in the
+     * X-Telegram-Bot-Api-Secret-Token header on every webhook call.
+     */
+    public function setWebhook(string $url, ?string $secret = null): array
+    {
+        $token = self::settings()['bot_token'] ?? '';
+        if (!$token) throw new \RuntimeException('Telegram bot_token is not configured');
+
+        $payload = ['url' => $url, 'drop_pending_updates' => true];
+        if ($secret) $payload['secret_token'] = $secret;
+
+        $res  = Http::asJson()->timeout(15)
+            ->post(self::API_BASE . "/bot{$token}/setWebhook", $payload);
+        $body = $res->json() ?? [];
+        if (!$res->ok() || !($body['ok'] ?? false)) {
+            $desc = $body['description'] ?? "HTTP {$res->status()}";
+            throw new \RuntimeException("Telegram setWebhook failed: {$desc}");
+        }
+        return $body;
+    }
+
+    /**
+     * Notify about a newly created order. Sends to the order OWNER's linked
+     * Telegram chat (if linked) AND to the admin default channel. Best-effort:
+     * never throws so it can't break order creation.
+     */
+    public function notifyNewOrder(Order $order, \App\Models\User $owner): void
+    {
+        $cfg = self::settings();
+        if (empty($cfg['bot_token'])) return;
+
+        $text = implode("\n", array_filter([
+            '📦 <b>New Order Created</b>',
+            sprintf('Order: <b>%s</b>', e($order->system_id)),
+            $order->ref_id ? 'Ref: ' . e($order->ref_id) : null,
+            'Items: ' . (int) $order->items()->count(),
+            sprintf('Total: $%.2f', (float) $order->total_cost),
+            'Owner: ' . e($owner->name ?? ('#' . $owner->id)),
+        ]));
+
+        // Owner's private chat (only if they linked their account).
+        if (!empty($owner->telegram_chat_id)) {
+            try { $this->sendMessage($owner->telegram_chat_id, $text); }
+            catch (\Throwable $e) { \Log::warning('[TelegramService] notifyNewOrder owner: ' . $e->getMessage()); }
+        }
+
+        // Admin channel copy.
+        $adminChat = $cfg['default_chat_id'] ?? null;
+        if ($adminChat && (string) $adminChat !== (string) ($owner->telegram_chat_id ?? '')) {
+            try { $this->sendMessage($adminChat, $text, $cfg['default_thread_id'] ?? null); }
+            catch (\Throwable $e) { \Log::warning('[TelegramService] notifyNewOrder admin: ' . $e->getMessage()); }
+        }
+    }
+
+    /**
+     * Single summary message after a CSV bulk import. Sent to the uploader's
+     * linked chat AND the admin channel. Best-effort.
+     */
+    public function notifyOrdersImported(\App\Models\User $owner, int $count): void
+    {
+        $cfg = self::settings();
+        if (empty($cfg['bot_token']) || $count < 1) return;
+
+        $text = implode("\n", [
+            '📦 <b>Orders Imported</b>',
+            sprintf('<b>%d</b> new order(s) imported via CSV.', $count),
+            'By: ' . e($owner->name ?? ('#' . $owner->id)),
+        ]);
+
+        if (!empty($owner->telegram_chat_id)) {
+            try { $this->sendMessage($owner->telegram_chat_id, $text); }
+            catch (\Throwable $e) { \Log::warning('[TelegramService] notifyOrdersImported owner: ' . $e->getMessage()); }
+        }
+        $adminChat = $cfg['default_chat_id'] ?? null;
+        if ($adminChat && (string) $adminChat !== (string) ($owner->telegram_chat_id ?? '')) {
+            try { $this->sendMessage($adminChat, $text, $cfg['default_thread_id'] ?? null); }
+            catch (\Throwable $e) { \Log::warning('[TelegramService] notifyOrdersImported admin: ' . $e->getMessage()); }
+        }
     }
 
     /**

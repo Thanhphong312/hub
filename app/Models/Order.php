@@ -112,6 +112,18 @@ class Order extends Model
         return $this->hasMany(WalletTransaction::class);
     }
 
+    // Image-URL validation summary (1:1). Null until the order has been seen
+    // by the validation flow. See App\Services\ImageValidationService.
+    public function imageValidation()
+    {
+        return $this->hasOne(OrderImageValidation::class);
+    }
+
+    public function imageValidationFailures()
+    {
+        return $this->hasMany(OrderImageValidationItem::class);
+    }
+
     public function getStatusNameAttribute(): string
     {
         return self::STATUS_MAP[$this->status] ?? 'unknown';

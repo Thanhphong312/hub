@@ -89,6 +89,9 @@ class AuthController extends Controller
         return response()->json([
             'user' => $user,
             'wallet' => $user->wallet,
+            // Bot username so the desktop app can build the t.me/<bot> link
+            // without exposing the admin Telegram settings.
+            'telegram_bot_username' => \App\Services\TelegramService::settings()['bot_username'] ?? '',
         ]);
     }
 
