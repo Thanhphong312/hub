@@ -43,6 +43,19 @@ class WalletController extends Controller
             $query->where('type', $request->type);
         }
 
+        // Search by order ref_id (on the related order) or system_id (snapshot
+        // column survives order deletion, so match it directly too).
+        if ($request->filled('search')) {
+            $term = trim($request->search);
+            $query->where(function ($q) use ($term) {
+                $q->where('order_system_id', 'like', "%{$term}%")
+                  ->orWhereHas('order', function ($oq) use ($term) {
+                      $oq->where('ref_id', 'like', "%{$term}%")
+                         ->orWhere('system_id', 'like', "%{$term}%");
+                  });
+            });
+        }
+
         if ($request->has('date_from')) {
             $query->whereDate('created_at', '>=', $request->date_from);
         }
@@ -79,6 +92,16 @@ class WalletController extends Controller
         }
         if ($request->filled('status')) {
             $query->where('status', $request->status);
+        }
+        if ($request->filled('search')) {
+            $term = trim($request->search);
+            $query->where(function ($q) use ($term) {
+                $q->where('order_system_id', 'like', "%{$term}%")
+                  ->orWhereHas('order', function ($oq) use ($term) {
+                      $oq->where('ref_id', 'like', "%{$term}%")
+                         ->orWhere('system_id', 'like', "%{$term}%");
+                  });
+            });
         }
         if ($request->filled('date_from')) {
             $query->whereDate('created_at', '>=', $request->date_from);
