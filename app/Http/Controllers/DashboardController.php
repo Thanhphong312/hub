@@ -142,8 +142,17 @@ class DashboardController extends Controller
         // shipped in-window AND they have a tracking_id AND an order_trackings
         // row with a status (carrier checked at least once). Orders with no
         // tracking_id / never checked are excluded from both numerator and
-        // denominator. Among the eligible: "ran" = status != 'pre_shipment',
-        // "not run" = still 'pre_shipment'.
+        // denominator. Among the eligible:
+        //   "ran"     = status != 'pre_shipment' OR events_count >= 3
+        //   "not run" = status == 'pre_shipment' AND events_count < 3
+        // (>= 3 scan events counts as run even if ShipEngine still reports the
+        // status_code as NY/pre_shipment — the package is clearly moving.)
+        $ran    = fn ($t) => $t->where(fn ($q) => $q
+            ->where('status', '!=', 'pre_shipment')
+            ->orWhere('events_count', '>=', 3));
+        $notRun = fn ($t) => $t->where('status', 'pre_shipment')
+            ->where(fn ($q) => $q->where('events_count', '<', 3)->orWhereNull('events_count'));
+
         $shippedRangeBase = Order::where('status', Order::STATUS_SHIPPED)
             ->whereNotNull('completed_time')
             ->where('completed_time', '>=', $startCt->copy()->utc())
@@ -152,43 +161,60 @@ class DashboardController extends Controller
             ->whereHas('tracking', fn ($q) => $q->whereNotNull('status'))
             // Drop Sunday-shipped orders that are still pre_shipment (USPS closed).
             // Keep: anything not shipped on the Sunday, OR shipped Sunday but already running.
-            ->where(function ($q) use ($sunStartUtc, $sunEndUtc) {
+            ->where(function ($q) use ($sunStartUtc, $sunEndUtc, $ran) {
                 $q->where(fn ($q2) => $q2
                         ->where('completed_time', '<', $sunStartUtc)
                         ->orWhere('completed_time', '>=', $sunEndUtc))
-                  ->orWhereHas('tracking', fn ($t) => $t->where('status', '!=', 'pre_shipment'));
+                  ->orWhereHas('tracking', $ran);
             });
         if ($user->hasRole('seller')) {
             $shippedRangeBase->where('user_id', $user->id);
         }
         $shippedCount = (clone $shippedRangeBase)->count();
         $trackingRan = (clone $shippedRangeBase)
-            ->whereHas('tracking', fn ($q) => $q->where('status', '!=', 'pre_shipment'))
+            ->whereHas('tracking', $ran)
             ->count();
 
-        // Eligible orders still at 'pre_shipment' (label made, carrier hasn't
-        // scanned) — grouped by seller so admins can chase the right person.
-        // Detail list capped to keep the payload sane.
+        // Eligible orders still at 'pre_shipment' with < 3 events (label made,
+        // carrier hasn't scanned enough) — grouped by seller so admins can chase
+        // the right person. Detail list capped to keep the payload sane.
         $notRunOrders = (clone $shippedRangeBase)
-            ->whereHas('tracking', fn ($q) => $q->where('status', 'pre_shipment'))
+            ->whereHas('tracking', $notRun)
             ->with(['user:id,name', 'tracking:id,order_id,status'])
             ->orderBy('user_id')
             ->orderByDesc('completed_time')
             ->limit(500)
             ->get(['id', 'system_id', 'user_id', 'completed_time']);
+        // Map a single order to the compact shape the UI chips render.
+        $orderShape = fn ($o) => [
+            'id'        => $o->id,
+            'system_id' => $o->system_id,
+            'status'    => $o->tracking?->status ?: 'none',
+        ];
+        $sellerGroup = fn ($g) => [
+            'user_id' => $g->first()->user_id,
+            'user'    => $g->first()->user?->name,
+            'count'   => $g->count(),
+            'orders'  => $g->map($orderShape)->values(),
+        ];
+
         $notRunBySeller = $notRunOrders
             ->groupBy('user_id')
-            ->map(fn ($g) => [
-                'user_id' => $g->first()->user_id,
-                'user'    => $g->first()->user?->name,
-                'count'   => $g->count(),
-                'orders'  => $g->map(fn ($o) => [
-                    'id'        => $o->id,
-                    'system_id' => $o->system_id,
-                    'status'    => $o->tracking?->status ?: 'none',
-                ])->values(),
-            ])
+            ->map($sellerGroup)
             ->sortByDesc('count')
+            ->values();
+
+        // Same backlog, but bucketed by ship day (completed_time in Chicago tz —
+        // matches the window math above), each day split per seller. Newest day
+        // first. Lets the dashboard show "chưa run" divided by day.
+        $notRunByDay = $notRunOrders
+            ->groupBy(fn ($o) => \Illuminate\Support\Carbon::parse($o->completed_time)->setTimezone($tz)->toDateString())
+            ->map(fn ($dayOrders, $date) => [
+                'date'    => $date,
+                'count'   => $dayOrders->count(),
+                'sellers' => $dayOrders->groupBy('user_id')->map($sellerGroup)->sortByDesc('count')->values(),
+            ])
+            ->sortKeysDesc()
             ->values();
 
         $stats['shipped_tracking'] = [
@@ -198,6 +224,7 @@ class DashboardController extends Controller
             'shipped'           => $shippedCount,
             'tracking_ran'      => $trackingRan,
             'not_run'           => $shippedCount - $trackingRan,
+            'not_run_by_day'    => $notRunByDay,
             'rate'              => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 2) : null,
             'not_run_by_seller' => $notRunBySeller,
         ];
