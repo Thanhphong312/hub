@@ -3061,7 +3061,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $addressOverride = $request->input('address');
 
-        return DB::transaction(function () use ($order, $owner, $data, $pricing, $addressOverride) {
+        $response = DB::transaction(function () use ($order, $owner, $data, $pricing, $addressOverride) {
             $firstVariantId = (int) ($order->items->first()->product_variant_id ?? 0) ?: null;
             $resend = Order::create([
                 'user_id'            => $owner->id,
@@ -3121,6 +3121,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 'pricing' => $pricing,
             ], 201);
         });
+
+        // The resend copies the original's ref_id, so the seller now has ≥2
+        // orders with that ref_id — refresh the duplicate snapshot so the DUP
+        // flag shows on both (other write paths do the same).
+        $this->refreshDuplicateRefIds();
+
+        return $response;
     }
 
     /** How many quota-bearing (third-party-style) resends this seller made this VN month. */
