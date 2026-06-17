@@ -282,6 +282,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(CheckRole::class . ':admin')->group(function () {
         Route::post('/wallet/deposit/{transaction}/approve', [WalletController::class, 'approveDeposit']);
         Route::post('/wallet/refund', [WalletController::class, 'refund']);
+        Route::post('/wallet/transactions/bulk-refund', [WalletController::class, 'bulkRefund']);
         Route::post('/wallet/transactions/bulk-refund-delete', [WalletController::class, 'bulkRefundDelete']);
     });
 

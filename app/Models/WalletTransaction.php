@@ -6,7 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 
 class WalletTransaction extends Model
 {
-    protected $fillable = ['user_id', 'order_id', 'order_system_id', 'type', 'status', 'method', 'transaction_id', 'amount', 'vnd_amount', 'exchange_rate', 'balance_before', 'balance_after', 'note'];
+    protected $fillable = ['user_id', 'order_id', 'order_system_id', 'type', 'status', 'method', 'transaction_id', 'amount', 'vnd_amount', 'exchange_rate', 'balance_before', 'balance_after', 'refunded_at', 'note'];
+
+    protected $casts = [
+        'refunded_at' => 'datetime',
+    ];
 
     const METHOD_PAYPAL = 'paypal';
     const METHOD_PINGPONG = 'pingpong';
