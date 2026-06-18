@@ -26,6 +26,7 @@ class User extends Authenticatable
         'auto_pay_delay_hours',
         'telegram_chat_id',
         'telegram_linked_at',
+        'telegram_notifications_enabled',
     ];
 
     protected $hidden = [
@@ -45,6 +46,7 @@ class User extends Authenticatable
             'auto_pay_delay_hours' => 'integer',
             'telegram_chat_id' => 'integer',
             'telegram_linked_at' => 'datetime',
+            'telegram_notifications_enabled' => 'boolean',
         ];
     }
 

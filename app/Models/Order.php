@@ -86,6 +86,17 @@ class Order extends Model
         7 => 'cancelled',
     ];
 
+    /**
+     * Orders that have a shipping label but no tracking yet — the queue the
+     * "Fetch Tracking" feature (app button + /gettracking command) works on.
+     */
+    public function scopePendingTracking($query)
+    {
+        return $query->whereNull('tracking_id')
+            ->whereNotNull('shipping_label')
+            ->where('shipping_label', '!=', '');
+    }
+
     public function user()
     {
         return $this->belongsTo(User::class);

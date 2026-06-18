@@ -935,9 +935,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $limit = max(1, min(500, (int) $request->get('limit', 200)));
 
-        $orders = Order::whereNull('tracking_id')
-            ->whereNotNull('shipping_label')
-            ->where('shipping_label', '!=', '')
+        $orders = Order::pendingTracking()
             ->orderBy('id', 'desc')
             ->limit($limit)
             ->get(['id', 'system_id', 'shipping_label']);
@@ -979,44 +977,21 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             return response()->json(['message' => 'No shipping_label'], 400);
         }
 
-        // Drive /view URLs serve an HTML preview wrapper rather than the file
-        // itself, so carrier.pressify.us can't parse them as PDF. Convert any
-        // Drive share URL into the direct-download form before forwarding.
-        $labelUrl = $order->shipping_label;
-        if (preg_match('#(?:/file/d/|[?&]id=)([a-zA-Z0-9_-]+)#', $labelUrl, $m)) {
-            $labelUrl = "https://drive.google.com/uc?export=download&id={$m[1]}";
-        }
-
         try {
-            $response = \Illuminate\Support\Facades\Http::timeout(15)->post('https://carrier.pressify.us/track', [
-                'url' => $labelUrl,
-            ]);
+            // Shared carrier call (Drive-URL rewrite + multi-key parse live in the service).
+            $result = app(\App\Services\CarrierTrackingService::class)->fetch($order->shipping_label);
+            $tracking = $result['tracking_id'] ?? null;
 
-            if (!$response->ok()) {
+            if (!$tracking) {
                 // Use 422 (not 502) so web servers don't replace our JSON body
                 // with their own HTML error page — frontend needs the upstream
                 // message to know whether to retry or skip the order.
                 return response()->json([
-                    'message' => 'Carrier responded HTTP ' . $response->status(),
-                    'body' => substr($response->body(), 0, 500),
-                    'upstream_status' => $response->status(),
-                ], 422);
-            }
-
-            $data = $response->json();
-            $tracking = $data['tracking_id']
-                ?? $data['tracking']
-                ?? $data['trackingNumber']
-                ?? ($data['data']['tracking_id'] ?? null);
-
-            if (!$tracking) {
-                return response()->json([
                     'message' => 'No tracking in carrier response',
-                    'body' => $data,
+                    'body' => $result['raw'] ?? null,
                 ], 422);
             }
 
-            $tracking = trim((string) $tracking);
             $order->update(['tracking_id' => $tracking]);
 
             return response()->json([

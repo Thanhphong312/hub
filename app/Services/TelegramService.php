@@ -73,6 +73,35 @@ class TelegramService
     }
 
     /**
+     * Best-effort edit of an existing message (used to update a live progress
+     * message in place, e.g. the /gettracking queue). Never throws — Telegram
+     * returns an error when the text is unchanged ("message is not modified"),
+     * which is harmless and simply logged.
+     *
+     * @param string|int $chatId
+     */
+    public function editMessageText($chatId, int $messageId, string $text, ?int $threadId = null): void
+    {
+        $token = self::settings()['bot_token'] ?? '';
+        if (!$token || !$messageId) return;
+
+        $payload = [
+            'chat_id'    => $chatId,
+            'message_id' => $messageId,
+            'text'       => $text,
+            'parse_mode' => 'HTML',
+        ];
+        if ($threadId) $payload['message_thread_id'] = (int) $threadId;
+
+        try {
+            Http::asJson()->timeout(15)
+                ->post(self::API_BASE . "/bot{$token}/editMessageText", $payload);
+        } catch (\Throwable $e) {
+            \Log::warning('[TelegramService] editMessageText failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
      * Best-effort delete of a message (used to scrub the plaintext password from
      * a user's `/login` message after linking). Never throws.
      *
@@ -135,8 +164,9 @@ class TelegramService
             'Owner: ' . e($owner->name ?? ('#' . $owner->id)),
         ]));
 
-        // Owner's private chat (only if they linked their account).
-        if (!empty($owner->telegram_chat_id)) {
+        // Owner's private chat (only if they linked their account and haven't
+        // muted notifications via the /recievemessage command).
+        if (!empty($owner->telegram_chat_id) && $owner->telegram_notifications_enabled) {
             try { $this->sendMessage($owner->telegram_chat_id, $text); }
             catch (\Throwable $e) { \Log::warning('[TelegramService] notifyNewOrder owner: ' . $e->getMessage()); }
         }
@@ -164,7 +194,7 @@ class TelegramService
             'By: ' . e($owner->name ?? ('#' . $owner->id)),
         ]);
 
-        if (!empty($owner->telegram_chat_id)) {
+        if (!empty($owner->telegram_chat_id) && $owner->telegram_notifications_enabled) {
             try { $this->sendMessage($owner->telegram_chat_id, $text); }
             catch (\Throwable $e) { \Log::warning('[TelegramService] notifyOrdersImported owner: ' . $e->getMessage()); }
         }

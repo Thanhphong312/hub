@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\FetchTrackingForChat;
+use App\Models\Order;
 use App\Models\User;
 use App\Services\TelegramService;
 use Illuminate\Http\Request;
@@ -83,15 +85,31 @@ class TelegramController extends Controller
             }
         }
 
-        $message = $request->input('message') ?? $request->input('edited_message');
-        $chatId  = $message['chat']['id'] ?? null;
-        $text    = trim((string) ($message['text'] ?? ''));
-        $msgId   = $message['message_id'] ?? 0;
+        $message  = $request->input('message') ?? $request->input('edited_message');
+        $chatId   = $message['chat']['id'] ?? null;
+        $text     = trim((string) ($message['text'] ?? ''));
+        $msgId    = $message['message_id'] ?? 0;
+        $threadId = $message['message_thread_id'] ?? null;
         if (!$chatId) return response()->json(['ok' => true]);
 
-        // Only the /login command is actionable; anything else gets guidance.
+        // Batch fetch-tracking (admin/support) — dispatches a background job.
+        if (preg_match('/^\/gettracking(@\w+)?\s*$/i', $text)) {
+            return $this->handleGetTracking($chatId, $threadId !== null ? (int) $threadId : null);
+        }
+
+        // Unlink the account currently linked to this chat.
+        if (preg_match('/^\/logout(@\w+)?\s*$/i', $text)) {
+            return $this->handleLogout($chatId);
+        }
+
+        // Toggle order notifications on/off for this chat (without unlinking).
+        if (preg_match('/^\/recievemessage(@\w+)?\s*$/i', $text)) {
+            return $this->handleToggleNotifications($chatId);
+        }
+
+        // Only the /login command is otherwise actionable; anything else gets guidance.
         if (!preg_match('/^\/login(@\w+)?\s+/i', $text)) {
-            $this->reply($chatId, "👋 To link your account, send:\n<code>/login your@email.com yourPassword</code>");
+            $this->reply($chatId, "👋 To link your account, send:\n<code>/login your@email.com yourPassword</code>\n\nCommands once linked:\n<code>/recievemessage</code> — turn notifications on/off\n<code>/logout</code> — unlink this chat\n<code>/gettracking</code> — fetch tracking (admin/support)");
             return response()->json(['ok' => true]);
         }
 
@@ -128,13 +146,109 @@ class TelegramController extends Controller
 
         // 5. Link + reset rate limiter + scrub password message.
         $user->forceFill([
-            'telegram_chat_id'   => $chatId,
-            'telegram_linked_at' => now(),
+            'telegram_chat_id'               => $chatId,
+            'telegram_linked_at'             => now(),
+            'telegram_notifications_enabled' => true, // fresh link defaults to receiving
         ])->save();
         Cache::forget("tg:login:fails:{$chatId}");
         Cache::forget($lockKey);
         $this->telegram->deleteMessage($chatId, (int) $msgId);
         $this->reply($chatId, "✅ Linked! You'll receive order notifications here.");
+
+        return response()->json(['ok' => true]);
+    }
+
+    /**
+     * Handle `/logout`: unlink the account currently bound to this chat so it
+     * stops receiving notifications. Same effect as the app's unlink endpoint.
+     */
+    private function handleLogout($chatId)
+    {
+        $user = User::where('telegram_chat_id', (int) $chatId)->first();
+        if (!$user) {
+            $this->reply($chatId, "ℹ️ This chat isn't linked to any account.");
+            return response()->json(['ok' => true]);
+        }
+
+        $user->forceFill([
+            'telegram_chat_id'   => null,
+            'telegram_linked_at' => null,
+        ])->save();
+
+        $this->reply($chatId, "✅ Logged out. You won't receive notifications here anymore.\nSend <code>/login your@email.com yourPassword</code> to link again.");
+        return response()->json(['ok' => true]);
+    }
+
+    /**
+     * Handle `/recievemessage`: toggle order notifications on/off for this chat
+     * without unlinking, so the user can mute/unmute without re-logging in.
+     */
+    private function handleToggleNotifications($chatId)
+    {
+        $user = User::where('telegram_chat_id', (int) $chatId)->first();
+        if (!$user) {
+            $this->reply($chatId, "❌ Account not linked. Send <code>/login your@email.com yourPassword</code> first.");
+            return response()->json(['ok' => true]);
+        }
+
+        $enabled = !$user->telegram_notifications_enabled;
+        $user->forceFill(['telegram_notifications_enabled' => $enabled])->save();
+
+        $this->reply(
+            $chatId,
+            $enabled
+                ? "🔔 Notifications <b>ON</b> — you'll receive order updates here."
+                : "🔕 Notifications <b>OFF</b> — you won't receive order updates until you send /recievemessage again.",
+        );
+        return response()->json(['ok' => true]);
+    }
+
+    /**
+     * Handle `/gettracking`: validate the sender (linked admin/support), then
+     * dispatch a background job that mirrors the app's Fetch Tracking queue and
+     * reports progress by editing a single message in place. Returns fast so the
+     * webhook never blocks on the (potentially long) batch.
+     */
+    private function handleGetTracking($chatId, ?int $threadId)
+    {
+        $user = User::where('telegram_chat_id', (int) $chatId)->first();
+        if (!$user) {
+            $this->reply($chatId, "❌ Account not linked. Send <code>/login your@email.com yourPassword</code> first.");
+            return response()->json(['ok' => true]);
+        }
+        if (!in_array($user->role?->slug, ['admin', 'support'])) {
+            $this->reply($chatId, "❌ Access denied. Only admin/support can use /gettracking.");
+            return response()->json(['ok' => true]);
+        }
+
+        // One run per chat at a time. Lock is released in the job's finally/failed.
+        $lockKey = "tg:gettracking:running:{$chatId}";
+        if (!Cache::add($lockKey, true, now()->addMinutes(40))) {
+            $this->reply($chatId, "⏳ A fetch is already running. Please wait for it to finish.");
+            return response()->json(['ok' => true]);
+        }
+
+        $pending = Order::pendingTracking()->count();
+        if ($pending === 0) {
+            Cache::forget($lockKey);
+            $this->reply($chatId, "✅ No orders pending tracking.");
+            return response()->json(['ok' => true]);
+        }
+
+        // Initial progress message — the job edits this in place.
+        try {
+            $messageId = $this->telegram->sendMessage(
+                $chatId,
+                "📦 <b>Fetch Tracking — Queue</b>\nTotal: {$pending} · ✅ 0 · ❌ 0\nStatus: Starting…",
+                $threadId,
+            );
+        } catch (\Throwable $e) {
+            Cache::forget($lockKey);
+            \Log::warning('[TelegramController] gettracking start message failed: ' . $e->getMessage());
+            return response()->json(['ok' => true]);
+        }
+
+        FetchTrackingForChat::dispatch($chatId, $messageId, $threadId, 500);
 
         return response()->json(['ok' => true]);
     }
