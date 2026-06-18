@@ -395,13 +395,16 @@ class ConversionController extends Controller
         if (!$isStaff && $order->user_id !== $user->id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-        // Staff can pass `force=1` to bypass the NEW_ORDER status check —
-        // used by the manual "Convert by ID" input on the Convert Label
-        // page when operators need to re-overlay an order that already
-        // moved past new_order.
+        // Staff can pass `force=1` to bypass the status check — used by the
+        // manual "Convert by ID" input on the Convert Label page when operators
+        // need to re-overlay an order that already moved past these statuses.
+        // Allowed statuses must match the pending() queue (new_order/producing),
+        // otherwise the auto job composes a label for a producing order then
+        // gets rejected here with a 422.
         $force = $isStaff && $request->boolean('force');
-        if (!$force && $order->status !== Order::STATUS_NEW_ORDER) {
-            return response()->json(['message' => 'Order is not in new_order status'], 422);
+        $allowed = [Order::STATUS_NEW_ORDER, Order::STATUS_PROCESSING];
+        if (!$force && !in_array($order->status, $allowed, true)) {
+            return response()->json(['message' => 'Order is not in new_order/producing status'], 422);
         }
 
         $request->validate([
