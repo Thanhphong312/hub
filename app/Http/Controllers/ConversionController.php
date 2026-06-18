@@ -135,14 +135,15 @@ class ConversionController extends Controller
             }
         }
 
-        // Convert-label queue. Orders still in NEW_ORDER status with a
+        // Convert-label queue. Orders in NEW_ORDER or producing status with a
         // shipping_label set but no convert_label yet. The converter produces
         // a separate image (system_id text + Code 128 barcode + accessory
         // summary stamped on the carrier label) and saves the URL to
         // `orders.convert_label` — the original `shipping_label` is kept
         // intact so the carrier source is never lost.
+        $labelStatuses = [Order::STATUS_NEW_ORDER, Order::STATUS_PROCESSING];
         $labelQuery = Order::query()
-            ->where('status', Order::STATUS_NEW_ORDER)
+            ->whereIn('status', $labelStatuses)
             ->whereNotNull('shipping_label')
             ->where('shipping_label', '!=', '')
             ->where(function ($q) {
@@ -183,10 +184,10 @@ class ConversionController extends Controller
 
         // Stamp orders: no carrier label — we render a convert_label from the
         // customer ADDRESS plus a big "STAMP" marker. Same pending criteria
-        // (new_order, no convert_label yet) but keyed off ship_type=stamp.
+        // (new_order/producing, no convert_label yet) but keyed off ship_type=stamp.
         $stampQuery = Order::query()
             ->with('address')
-            ->where('status', Order::STATUS_NEW_ORDER)
+            ->whereIn('status', $labelStatuses)
             ->where('ship_type', Order::SHIP_STAMP)
             ->where(function ($q) {
                 $q->whereNull('convert_label')->orWhere('convert_label', '');
