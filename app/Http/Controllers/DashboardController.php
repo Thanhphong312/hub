@@ -175,15 +175,28 @@ class DashboardController extends Controller
             ->whereHas('tracking', $ran)
             ->count();
 
-        // Eligible orders still at 'pre_shipment' with < 3 events (label made,
-        // carrier hasn't scanned enough) — grouped by seller so admins can chase
-        // the right person. Detail list capped to keep the payload sane.
-        $notRunOrders = (clone $shippedRangeBase)
-            ->whereHas('tracking', $notRun)
+        // The "chưa run" CHASE LIST is intentionally NOT capped to the 7-day
+        // window: an order shipped >7 days ago and still at pre_shipment is the
+        // MOST overdue one to chase, yet the windowed query would hide it. So we
+        // pull EVERY shipped order that has a tracking_id, was carrier-checked,
+        // and is still not-run — only excluding today's just-shipped orders
+        // (they haven't had time to move). The rate% above stays on 7 days.
+        $notRunBase = Order::where('status', Order::STATUS_SHIPPED)
+            ->whereNotNull('completed_time')
+            ->where('completed_time', '<', $endCt->copy()->utc())   // exclude today (just shipped)
+            ->whereNotNull('tracking_id')->where('tracking_id', '!=', '')
+            ->whereHas('tracking', fn ($q) => $q->whereNotNull('status'))
+            ->whereHas('tracking', $notRun);
+        if ($user->hasRole('seller')) {
+            $notRunBase->where('user_id', $user->id);
+        }
+
+        $notRunTotal  = (clone $notRunBase)->count();
+        $notRunOrders = (clone $notRunBase)
             ->with(['user:id,name', 'tracking:id,order_id,status'])
             ->orderBy('user_id')
             ->orderByDesc('completed_time')
-            ->limit(500)
+            ->limit(2000)
             ->get(['id', 'system_id', 'user_id', 'completed_time']);
         // Map a single order to the compact shape the UI chips render.
         $orderShape = fn ($o) => [
@@ -223,7 +236,7 @@ class DashboardController extends Controller
             'timezone'          => $tz,
             'shipped'           => $shippedCount,
             'tracking_ran'      => $trackingRan,
-            'not_run'           => $shippedCount - $trackingRan,
+            'not_run'           => $notRunTotal,
             'not_run_by_day'    => $notRunByDay,
             'rate'              => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 2) : null,
             'not_run_by_seller' => $notRunBySeller,
