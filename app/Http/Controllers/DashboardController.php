@@ -230,16 +230,50 @@ class DashboardController extends Controller
             ->sortKeysDesc()
             ->values();
 
+        // "Chưa delivered" — orders that HAVE run (off pre_shipment / ≥3 events)
+        // but the carrier hasn't marked them delivered yet (in_transit,
+        // out_for_delivery, exception, attempted…). Same window-less rule as the
+        // not-run chase list (all overdue, excluding only today).
+        $notDeliveredBase = Order::where('status', Order::STATUS_SHIPPED)
+            ->whereNotNull('completed_time')
+            ->where('completed_time', '<', $endCt->copy()->utc())   // exclude today
+            ->whereNotNull('tracking_id')->where('tracking_id', '!=', '')
+            ->whereHas('tracking', fn ($q) => $q->whereNotNull('status'))
+            ->whereHas('tracking', $ran)
+            ->whereHas('tracking', fn ($q) => $q->where('status', '!=', 'delivered'));
+        if ($user->hasRole('seller')) {
+            $notDeliveredBase->where('user_id', $user->id);
+        }
+
+        $notDeliveredTotal  = (clone $notDeliveredBase)->count();
+        $notDeliveredOrders = (clone $notDeliveredBase)
+            ->with(['user:id,name', 'tracking:id,order_id,status'])
+            ->orderBy('user_id')
+            ->orderByDesc('completed_time')
+            ->limit(2000)
+            ->get(['id', 'system_id', 'user_id', 'completed_time']);
+        $notDeliveredByDay = $notDeliveredOrders
+            ->groupBy(fn ($o) => \Illuminate\Support\Carbon::parse($o->completed_time)->setTimezone($tz)->toDateString())
+            ->map(fn ($dayOrders, $date) => [
+                'date'    => $date,
+                'count'   => $dayOrders->count(),
+                'sellers' => $dayOrders->groupBy('user_id')->map($sellerGroup)->sortByDesc('count')->values(),
+            ])
+            ->sortKeysDesc()
+            ->values();
+
         $stats['shipped_tracking'] = [
-            'from'              => $startCt->toDateString(),
-            'to'                => $nowCt->copy()->subDay()->toDateString(),
-            'timezone'          => $tz,
-            'shipped'           => $shippedCount,
-            'tracking_ran'      => $trackingRan,
-            'not_run'           => $notRunTotal,
-            'not_run_by_day'    => $notRunByDay,
-            'rate'              => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 2) : null,
-            'not_run_by_seller' => $notRunBySeller,
+            'from'                  => $startCt->toDateString(),
+            'to'                    => $nowCt->copy()->subDay()->toDateString(),
+            'timezone'              => $tz,
+            'shipped'               => $shippedCount,
+            'tracking_ran'          => $trackingRan,
+            'not_run'               => $notRunTotal,
+            'not_run_by_day'        => $notRunByDay,
+            'not_delivered'         => $notDeliveredTotal,
+            'not_delivered_by_day'  => $notDeliveredByDay,
+            'rate'                  => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 2) : null,
+            'not_run_by_seller'     => $notRunBySeller,
         ];
 
         // Admin extra stats
