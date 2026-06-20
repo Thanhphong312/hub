@@ -230,38 +230,6 @@ class DashboardController extends Controller
             ->sortKeysDesc()
             ->values();
 
-        // "Chưa delivered" — orders that HAVE run (off pre_shipment / ≥3 events)
-        // but the carrier hasn't marked them delivered yet (in_transit,
-        // out_for_delivery, exception, attempted…). Same window-less rule as the
-        // not-run chase list (all overdue, excluding only today).
-        $notDeliveredBase = Order::where('status', Order::STATUS_SHIPPED)
-            ->whereNotNull('completed_time')
-            ->where('completed_time', '<', $endCt->copy()->utc())   // exclude today
-            ->whereNotNull('tracking_id')->where('tracking_id', '!=', '')
-            ->whereHas('tracking', fn ($q) => $q->whereNotNull('status'))
-            ->whereHas('tracking', $ran)
-            ->whereHas('tracking', fn ($q) => $q->where('status', '!=', 'delivered'));
-        if ($user->hasRole('seller')) {
-            $notDeliveredBase->where('user_id', $user->id);
-        }
-
-        $notDeliveredTotal  = (clone $notDeliveredBase)->count();
-        $notDeliveredOrders = (clone $notDeliveredBase)
-            ->with(['user:id,name', 'tracking:id,order_id,status'])
-            ->orderBy('user_id')
-            ->orderByDesc('completed_time')
-            ->limit(2000)
-            ->get(['id', 'system_id', 'user_id', 'completed_time']);
-        $notDeliveredByDay = $notDeliveredOrders
-            ->groupBy(fn ($o) => \Illuminate\Support\Carbon::parse($o->completed_time)->setTimezone($tz)->toDateString())
-            ->map(fn ($dayOrders, $date) => [
-                'date'    => $date,
-                'count'   => $dayOrders->count(),
-                'sellers' => $dayOrders->groupBy('user_id')->map($sellerGroup)->sortByDesc('count')->values(),
-            ])
-            ->sortKeysDesc()
-            ->values();
-
         $stats['shipped_tracking'] = [
             'from'                  => $startCt->toDateString(),
             'to'                    => $nowCt->copy()->subDay()->toDateString(),
@@ -270,8 +238,6 @@ class DashboardController extends Controller
             'tracking_ran'          => $trackingRan,
             'not_run'               => $notRunTotal,
             'not_run_by_day'        => $notRunByDay,
-            'not_delivered'         => $notDeliveredTotal,
-            'not_delivered_by_day'  => $notDeliveredByDay,
             'rate'                  => $shippedCount > 0 ? round($trackingRan / $shippedCount * 100, 2) : null,
             'not_run_by_seller'     => $notRunBySeller,
         ];
@@ -293,6 +259,69 @@ class DashboardController extends Controller
         }
 
         return response()->json($stats);
+    }
+
+    /**
+     * "Chưa delivered" list (own page, not the dashboard — it can be hundreds of
+     * orders). Shipped orders with a tracking_id that have run (off pre_shipment
+     * / ≥3 events) but the carrier status isn't delivered yet. Window-less (all
+     * overdue), excludes today; grouped by ship day (Chicago tz) → seller.
+     * Sellers are scoped to their own orders.
+     */
+    public function notDelivered(Request $request)
+    {
+        $user  = $request->user();
+        $tz    = 'America/Chicago';
+        $endCt = now()->setTimezone($tz)->startOfDay();   // midnight Chicago today (excl.)
+
+        $ran = fn ($t) => $t->where(fn ($q) => $q
+            ->where('status', '!=', 'pre_shipment')
+            ->orWhere('events_count', '>=', 3));
+        $orderShape = fn ($o) => [
+            'id'        => $o->id,
+            'system_id' => $o->system_id,
+            'status'    => $o->tracking?->status ?: 'none',
+        ];
+        $sellerGroup = fn ($g) => [
+            'user_id' => $g->first()->user_id,
+            'user'    => $g->first()->user?->name,
+            'count'   => $g->count(),
+            'orders'  => $g->map($orderShape)->values(),
+        ];
+
+        $base = Order::where('status', Order::STATUS_SHIPPED)
+            ->whereNotNull('completed_time')
+            ->where('completed_time', '<', $endCt->copy()->utc())
+            ->whereNotNull('tracking_id')->where('tracking_id', '!=', '')
+            ->whereHas('tracking', fn ($q) => $q->whereNotNull('status'))
+            ->whereHas('tracking', $ran)
+            ->whereHas('tracking', fn ($q) => $q->where('status', '!=', 'delivered'));
+        if ($user->hasRole('seller')) {
+            $base->where('user_id', $user->id);
+        }
+
+        $total  = (clone $base)->count();
+        $orders = (clone $base)
+            ->with(['user:id,name', 'tracking:id,order_id,status'])
+            ->orderBy('user_id')
+            ->orderByDesc('completed_time')
+            ->limit(3000)
+            ->get(['id', 'system_id', 'user_id', 'completed_time']);
+        $byDay = $orders
+            ->groupBy(fn ($o) => \Illuminate\Support\Carbon::parse($o->completed_time)->setTimezone($tz)->toDateString())
+            ->map(fn ($dayOrders, $date) => [
+                'date'    => $date,
+                'count'   => $dayOrders->count(),
+                'sellers' => $dayOrders->groupBy('user_id')->map($sellerGroup)->sortByDesc('count')->values(),
+            ])
+            ->sortKeysDesc()
+            ->values();
+
+        return response()->json([
+            'not_delivered'        => $total,
+            'not_delivered_by_day' => $byDay,
+            'timezone'             => $tz,
+        ]);
     }
 
     /**
