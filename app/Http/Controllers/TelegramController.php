@@ -109,7 +109,16 @@ class TelegramController extends Controller
 
         // Only the /login command is otherwise actionable; anything else gets guidance.
         if (!preg_match('/^\/login(@\w+)?\s+/i', $text)) {
-            $this->reply($chatId, "👋 To link your account, send:\n<code>/login your@email.com yourPassword</code>\n\nCommands once linked:\n<code>/recievemessage</code> — turn notifications on/off\n<code>/logout</code> — unlink this chat\n<code>/gettracking</code> — fetch tracking (admin/support)");
+            if (preg_match('/^\/login(@\w+)?\b/i', $text)) {
+                // Known command, missing args → usage hint (not "unknown").
+                $this->reply($chatId, "⚠️ Usage: <code>/login your@email.com yourPassword</code>");
+            } elseif (str_starts_with($text, '/')) {
+                // Looks like a command but isn't recognized.
+                $this->reply($chatId, "❌ Unknown command.\n\n<b>Available commands</b>\n" . $this->commandList());
+            } else {
+                // Plain text / greeting.
+                $this->reply($chatId, "👋 To link your account, send:\n" . $this->commandList());
+            }
             return response()->json(['ok' => true]);
         }
 
@@ -258,6 +267,17 @@ class TelegramController extends Controller
     {
         try { $this->telegram->sendMessage($chatId, $text); }
         catch (\Throwable $e) { \Log::warning('[TelegramController] reply failed: ' . $e->getMessage()); }
+    }
+
+    /** The list of bot commands, shared by the welcome and unknown-command replies. */
+    private function commandList(): string
+    {
+        return implode("\n", [
+            "<code>/login your@email.com yourPassword</code> — link this chat",
+            "<code>/recievemessage</code> — turn notifications on/off",
+            "<code>/logout</code> — unlink this chat",
+            "<code>/gettracking</code> — fetch tracking (admin/support)",
+        ]);
     }
 
     /** Count a failed /login attempt and lock the chat after the threshold. */

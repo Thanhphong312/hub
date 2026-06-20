@@ -75,7 +75,18 @@ All commands are sent as a normal chat message to the bot.
 | `/logout` | Any linked user | Unlinks this chat — stops all notifications. Re-link with `/login`. |
 | `/gettracking` | **Admin / support** only | Batch-fetches tracking numbers for all pending orders (see §5). |
 
-Anything else (or an unlinked chat) gets a help message listing these commands.
+### Unrecognized input
+
+The bot distinguishes between mistyped commands and ordinary text:
+
+| Input | Reply |
+|---|---|
+| An unknown slash-command, e.g. `/foobar` | `❌ Unknown command.` + the list of available commands |
+| `/login` with no arguments | `⚠️ Usage: /login your@email.com yourPassword` |
+| Plain text (no leading `/`), e.g. `hi` | `👋` welcome message + the command list |
+
+> A known command typed with extra/garbled arguments (e.g. `/gettracking now`) also falls into the
+> "❌ Unknown command" reply, since the bot only matches the bare command form.
 
 ### `/recievemessage` — mute / unmute
 - Toggles the `telegram_notifications_enabled` flag on the user.
