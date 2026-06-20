@@ -13,6 +13,7 @@ class Order extends Model
         'paid_cost', 'completed_time', 'production', 'stock_decremented',
         'gangsheet_group_id', 'qr_bg_status', 'qr_bg_checked_at',
         'resend_of_order_id', 'resend_method', 'resend_reason', 'base_support',
+        'partner_id', 'partner_revenue', 'partner_locked_at',
     ];
 
     // ship_type values.
@@ -65,7 +66,14 @@ class Order extends Model
             'production' => 'boolean',
             'shipping_label_converted' => 'boolean',
             'stock_decremented' => 'boolean',
+            'partner_locked_at' => 'datetime',
         ];
+    }
+
+    /** Partner-role user this order's revenue is split to (nullable). */
+    public function partner()
+    {
+        return $this->belongsTo(User::class, 'partner_id');
     }
 
     const STATUS_NEW_ORDER = 0;

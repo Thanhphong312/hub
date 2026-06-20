@@ -38,10 +38,21 @@ class PartnerController extends Controller
             foreach (($g->order_ids ?? []) as $oid) $orderIds[$oid] = true;
         }
 
+        // Doanh thu được phân chia cho partner này (tổng partner_revenue trên
+        // các đơn admin đã gán cho họ). locked = đã chốt (đánh dấu đã in).
+        $revenue = Order::where('partner_id', $user->id)
+            ->selectRaw('COALESCE(SUM(partner_revenue),0) as total, '
+                . 'COALESCE(SUM(CASE WHEN partner_locked_at IS NOT NULL THEN partner_revenue ELSE 0 END),0) as locked, '
+                . 'COUNT(*) as cnt')
+            ->first();
+
         return response()->json([
             'total_gangsheets' => $gangs->count(),
             'total_orders'     => count($orderIds),
             'total_metas'      => (int) $gangs->sum('metas_count'),
+            'revenue_total'    => round((float) ($revenue->total ?? 0), 2),
+            'revenue_locked'   => round((float) ($revenue->locked ?? 0), 2),
+            'revenue_orders'   => (int) ($revenue->cnt ?? 0),
         ]);
     }
 
@@ -79,7 +90,8 @@ class PartnerController extends Controller
         $orders = empty($orderIds)
             ? collect()
             : Order::whereIn('id', $orderIds)
-                ->select('id', 'system_id', 'ref_id', 'status', 'total_cost')
+                ->select('id', 'system_id', 'ref_id', 'status', 'total_cost',
+                    'partner_id', 'partner_revenue', 'partner_locked_at')
                 ->orderBy('id', 'asc')
                 ->get();
 
@@ -96,6 +108,17 @@ class PartnerController extends Controller
         }
         $printedAt = $request->boolean('printed') ? now() : null;
         $user->assignedGangsheets()->updateExistingPivot($gangsheet->id, ['printed_at' => $printedAt]);
+
+        // Lock / unlock the revenue split of this partner's orders in the gang.
+        // Once printed, admin can no longer change the partner or the amount;
+        // un-printing reverses it so a mistaken mark can be corrected.
+        $orderIds = $gangsheet->order_ids ?? [];
+        if (!empty($orderIds)) {
+            Order::whereIn('id', $orderIds)
+                ->where('partner_id', $user->id)
+                ->update(['partner_locked_at' => $printedAt]);
+        }
+
         return response()->json(['gangsheet_id' => $gangsheet->id, 'printed_at' => $printedAt]);
     }
 

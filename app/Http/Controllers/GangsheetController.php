@@ -134,6 +134,66 @@ class GangsheetController extends Controller
         ]);
     }
 
+    /**
+     * Admin assigns ONE partner to this gangsheet's orders and types the
+     * revenue each order earns that partner. The partner is attached to the
+     * gangsheet (so it shows in their app) and every listed order gets
+     * partner_id + partner_revenue. Orders already locked (the partner marked
+     * the gangsheet printed) are skipped and reported back.
+     */
+    public function setPartnerRevenue(Request $request, Gangsheet $gangsheet)
+    {
+        $data = $request->validate([
+            'user_id'           => 'required|integer|exists:users,id',
+            'items'             => 'present|array',
+            'items.*.order_id'  => 'required|integer',
+            'items.*.revenue'   => 'nullable|numeric|min:0',
+        ]);
+
+        $partner = \App\Models\User::whereKey($data['user_id'])
+            ->whereHas('role', fn ($q) => $q->where('slug', 'partner'))
+            ->first();
+        if (!$partner) {
+            return response()->json(['message' => 'User is not a partner'], 422);
+        }
+
+        $gangOrderIds = array_flip(array_map('intval', $gangsheet->order_ids ?? []));
+        $updated = 0;
+        $skippedLocked = [];
+
+        DB::transaction(function () use ($data, $partner, $gangsheet, $gangOrderIds, &$updated, &$skippedLocked) {
+            // Attach the partner to the gangsheet (keep any others already on it).
+            $gangsheet->partners()->syncWithoutDetaching([$partner->id]);
+
+            foreach ($data['items'] as $item) {
+                $oid = (int) $item['order_id'];
+                if (!isset($gangOrderIds[$oid])) {
+                    continue; // not part of this gangsheet — ignore
+                }
+                $order = Order::find($oid);
+                if (!$order) {
+                    continue;
+                }
+                if ($order->partner_locked_at !== null) {
+                    $skippedLocked[] = $order->system_id;
+                    continue;
+                }
+                $order->update([
+                    'partner_id'      => $partner->id,
+                    'partner_revenue' => $item['revenue'] !== null ? round((float) $item['revenue'], 2) : null,
+                ]);
+                $updated++;
+            }
+        });
+
+        return response()->json([
+            'message'        => "Đã gán doanh thu cho {$updated} đơn"
+                . (count($skippedLocked) ? ' · bỏ qua ' . count($skippedLocked) . ' đơn đã khoá' : ''),
+            'updated'        => $updated,
+            'skipped_locked' => $skippedLocked,
+        ]);
+    }
+
     public function show(Gangsheet $gangsheet)
     {
         $gangsheet->load('creator:id,name', 'partners:id,name');
@@ -141,8 +201,9 @@ class GangsheetController extends Controller
         $orders = empty($orderIds)
             ? collect()
             : Order::whereIn('id', $orderIds)
-                ->select('id', 'system_id', 'ref_id', 'user_id', 'status', 'total_cost')
-                ->with('user:id,name')
+                ->select('id', 'system_id', 'ref_id', 'user_id', 'status', 'total_cost',
+                    'partner_id', 'partner_revenue', 'partner_locked_at')
+                ->with('user:id,name', 'partner:id,name')
                 ->orderBy('id', 'asc')
                 ->get();
 

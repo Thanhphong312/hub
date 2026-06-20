@@ -208,6 +208,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Partner assignment (admin assigns gangs to partner users).
         Route::get('/gangsheets/partner-users', [GangsheetController::class, 'partnerUsers']);
         Route::put('/gangsheets/{gangsheet}/partners', [GangsheetController::class, 'setPartners']);
+        Route::put('/gangsheets/{gangsheet}/partner-revenue', [GangsheetController::class, 'setPartnerRevenue']);
         Route::get('/gangsheets', [GangsheetController::class, 'index']);
         Route::post('/gangsheets', [GangsheetController::class, 'store']);
         Route::post('/gangsheets/bulk-delete', [GangsheetController::class, 'bulkDestroy']);
