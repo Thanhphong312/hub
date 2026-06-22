@@ -2631,6 +2631,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             fwrite($file, "\xEF\xBB\xBF");
             fputcsv($file, ['system_id', 'ref_id', 'status', 'ship_type', 'tracking_id', 'total_quantity', 'print_cost', 'shipping_cost', 'total_cost', 'paid_cost', 'first_name', 'last_name', 'address_1', 'city', 'state', 'zipcode', 'country', 'created_at']);
 
+            $totalOrders = 0;
+            $totalItems  = 0;
+            $totalAmount = 0.0;
             foreach ($orders as $order) {
                 $addr = $order->address;
                 $totalQty = $order->items->sum(fn($i) => max(1, (int) ($i->quantity ?? 1)));
@@ -2654,7 +2657,16 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     $addr->country ?? '',
                     $order->created_at->toDateTimeString(),
                 ]);
+                $totalOrders++;
+                $totalItems  += $totalQty;
+                $totalAmount += (float) $order->total_cost;
             }
+
+            // Summary totals at the bottom (blank row first as a separator).
+            fputcsv($file, []);
+            fputcsv($file, ['Total Order', $totalOrders]);
+            fputcsv($file, ['Total Item', $totalItems]);
+            fputcsv($file, ['Total Amount', number_format($totalAmount, 2, '.', '')]);
             fclose($file);
         };
 
