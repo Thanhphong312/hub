@@ -177,6 +177,76 @@ class SettingController extends Controller
     // (OrderCreate needs it for the fee preview + limit); PUT admin only.
     // ----------------------------------------------------------------------
 
+    // ----------------------------------------------------------------------
+    // Shippo config — API tokens (test/live), test-mode toggle, the from/return
+    // address, a default parcel, and the rate-pick strategy. Used to buy labels
+    // for seller_ship orders. Tokens are NEVER returned to the client (only
+    // has_*_token booleans); a blank token on update keeps the stored one.
+    // ----------------------------------------------------------------------
+    public function getShippoConfig()
+    {
+        $c    = AppSetting::getJson('shippo_config', []);
+        $from = $c['from_address'] ?? [];
+        $p    = $c['parcel'] ?? [];
+        $r    = $c['rate'] ?? [];
+        return response()->json([
+            'test_mode'      => $c['test_mode'] ?? true,
+            'has_test_token' => !empty($c['test_token']),
+            'has_live_token' => !empty($c['live_token']),
+            'from_address'   => [
+                'name'    => $from['name']    ?? 'BullStart',
+                'company' => $from['company'] ?? 'BullStart',
+                'street1' => $from['street1'] ?? '4353 Saddle Horn Way',
+                'street2' => $from['street2'] ?? '',
+                'city'    => $from['city']    ?? 'Oceanside',
+                'state'   => $from['state']   ?? 'CA',
+                'zip'     => $from['zip']     ?? '92057',
+                'country' => $from['country'] ?? 'US',
+                'phone'   => $from['phone']   ?? '',
+                'email'   => $from['email']   ?? '',
+            ],
+            'parcel' => [
+                'length'        => $p['length']        ?? 10,
+                'width'         => $p['width']         ?? 7,
+                'height'        => $p['height']        ?? 1,
+                'distance_unit' => $p['distance_unit'] ?? 'in',
+                'weight'        => $p['weight']        ?? 5,
+                'mass_unit'     => $p['mass_unit']     ?? 'oz',
+            ],
+            'rate' => [
+                'strategy'     => $r['strategy']     ?? 'cheapest',   // cheapest | carrier | service
+                'carrier'      => $r['carrier']      ?? '',           // e.g. usps
+                'servicelevel' => $r['servicelevel'] ?? '',           // e.g. usps_ground_advantage
+            ],
+        ]);
+    }
+
+    public function updateShippoConfig(Request $request)
+    {
+        $data = $request->validate([
+            'test_mode'    => 'sometimes|boolean',
+            'test_token'   => 'sometimes|nullable|string|max:255',
+            'live_token'   => 'sometimes|nullable|string|max:255',
+            'from_address' => 'sometimes|array',
+            'parcel'       => 'sometimes|array',
+            'rate'         => 'sometimes|array',
+        ]);
+
+        $current = AppSetting::getJson('shippo_config', []);
+        if (array_key_exists('test_mode', $data)) {
+            $current['test_mode'] = (bool) $data['test_mode'];
+        }
+        // Only overwrite a token when a non-empty value is provided (blank = keep).
+        if (!empty($data['test_token'])) $current['test_token'] = trim($data['test_token']);
+        if (!empty($data['live_token'])) $current['live_token'] = trim($data['live_token']);
+        if (isset($data['from_address'])) $current['from_address'] = array_merge($current['from_address'] ?? [], $data['from_address']);
+        if (isset($data['parcel']))       $current['parcel']       = array_merge($current['parcel'] ?? [], $data['parcel']);
+        if (isset($data['rate']))         $current['rate']         = array_merge($current['rate'] ?? [], $data['rate']);
+        AppSetting::setJson('shippo_config', $current);
+
+        return $this->getShippoConfig();
+    }
+
     public function getStampConfig()
     {
         return response()->json(\App\Models\Order::stampConfig());

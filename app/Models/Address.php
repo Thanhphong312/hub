@@ -8,7 +8,11 @@ class Address extends Model
 {
     protected $fillable = [
         'order_id', 'first_name', 'last_name', 'address_1', 'address_2',
-        'city', 'state', 'zipcode', 'country', 'phone', 'email',
+        'city', 'state', 'zipcode', 'country', 'phone', 'email', 'shipping_json',
+    ];
+
+    protected $casts = [
+        'shipping_json' => 'array',
     ];
 
     public function order()

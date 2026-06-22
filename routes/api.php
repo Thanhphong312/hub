@@ -351,6 +351,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/qr-config', [SettingController::class, 'getQrConfig']);
         Route::put('/qr-config', [SettingController::class, 'updateQrConfig']);
 
+        Route::get('/shippo-config', [SettingController::class, 'getShippoConfig']);
+        Route::put('/shippo-config', [SettingController::class, 'updateShippoConfig']);
+
         Route::get('/telegram',         [TelegramController::class, 'getSettings']);
         Route::put('/telegram',         [TelegramController::class, 'updateSettings']);
         Route::get('/bank-transfer',    [\App\Http\Controllers\BankTransferController::class, 'getSettings']);
