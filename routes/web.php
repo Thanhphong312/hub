@@ -19,11 +19,6 @@ Route::get('/', function () {
         : view('landing');
 })->name('landing');
 
-// Public legal pages — linked from the landing footer and required by Etsy's
-// API Terms of Use (privacy policy + terms of service must be reachable).
-Route::view('/privacy-policy', 'privacy')->name('privacy');
-Route::view('/terms-of-service', 'terms')->name('terms');
-
 // Web auth (session-based) for the QR detail page
 Route::middleware('guest')->group(function () {
     Route::get('/login', [WebAuthController::class, 'showLogin'])->name('login');
