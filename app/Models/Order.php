@@ -96,6 +96,17 @@ class Order extends Model
         7 => 'cancelled',
     ];
 
+    /**
+     * Orders that have a shipping label but no tracking yet — the queue the
+     * "Fetch Tracking" feature (app button + /gettracking command) works on.
+     */
+    public function scopePendingTracking($query)
+    {
+        return $query->whereNull('tracking_id')
+            ->whereNotNull('shipping_label')
+            ->where('shipping_label', '!=', '');
+    }
+
     public function user()
     {
         return $this->belongsTo(User::class);
@@ -182,6 +193,18 @@ class Order extends Model
     public function walletTransactions()
     {
         return $this->hasMany(WalletTransaction::class);
+    }
+
+    // Image-URL validation summary (1:1). Null until the order has been seen
+    // by the validation flow. See App\Services\ImageValidationService.
+    public function imageValidation()
+    {
+        return $this->hasOne(OrderImageValidation::class);
+    }
+
+    public function imageValidationFailures()
+    {
+        return $this->hasMany(OrderImageValidationItem::class);
     }
 
     public function getStatusNameAttribute(): string

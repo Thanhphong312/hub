@@ -9,6 +9,7 @@ use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\InventoryForecastController;
 use App\Http\Controllers\GangsheetLabelController;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\OrderImageValidationController;
 use App\Http\Controllers\PartnerController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\SettingController;
@@ -25,6 +26,11 @@ use Illuminate\Support\Facades\Route;
 
 // Public
 Route::post('/login', [AuthController::class, 'login']);
+
+// Public Telegram webhook — authenticated by the X-Telegram-Bot-Api-Secret-Token
+// header (verified in the controller against the configured webhook_secret).
+Route::post('/telegram/webhook', [TelegramController::class, 'handleWebhook'])
+    ->middleware('throttle:60,1');
 
 // Public API for external sellers (header X-API-KEY: bsk_...).
 Route::middleware(CheckApiKey::class)->group(function () {
@@ -44,6 +50,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::post('/logout-all', [AuthController::class, 'logoutAll']);
     Route::get('/me', [AuthController::class, 'me']);
+
+    // Per-user Telegram: unlink notifications for the current account.
+    Route::post('/telegram/unlink', [TelegramController::class, 'unlink']);
     Route::get('/help',         [\App\Http\Controllers\HelpController::class, 'index']);
     Route::get('/help/{slug}',  [\App\Http\Controllers\HelpController::class, 'show']);
     Route::post('/change-password', [AuthController::class, 'changePassword']);
@@ -92,6 +101,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders/pending-tracking', [OrderController::class, 'pendingTracking']);
     Route::get('/orders/pending-labels', [OrderController::class, 'pendingLabels']);
     Route::get('/orders/resend-quota', [OrderController::class, 'resendQuota']);
+    // Image-URL validation status (server-side; replaces client localStorage).
+    // Static path declared before the {order} wildcard so it isn't swallowed.
+    Route::get('/orders/image-validation', [OrderImageValidationController::class, 'index']);
     Route::post('/orders/{order}/fetch-tracking', [OrderController::class, 'fetchTrackingOne']);
     Route::post('/orders/{order}/save-tracking', [OrderController::class, 'saveTracking']);
     Route::post('/orders/{order}/buy-label', [OrderController::class, 'buyLabel']);
@@ -102,9 +114,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{order}/pay', [OrderController::class, 'pay']);
     Route::post('/orders/{order}/resend-preview', [OrderController::class, 'resendPreview']);
     Route::post('/orders/{order}/resend', [OrderController::class, 'storeResend']);
+    Route::post('/orders/{order}/image-validation', [OrderImageValidationController::class, 'store']);
     Route::post('/orders/{order}/reconvert', [OrderController::class, 'reconvert']);
     Route::post('/orders/{order}/reconvert-label', [OrderController::class, 'reconvertLabel']);
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
+    Route::put('/order-items/{item}/mockups', [OrderController::class, 'updateItemMockups']);
     Route::put('/order-items/{item}/accessories', [OrderController::class, 'updateItemAccessories']);
 
     // Server-side proxy for fetching convert_label image bytes — bypasses
@@ -363,5 +377,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/telegram/groups',  [TelegramController::class, 'discoverGroups']);
         Route::post('/telegram/test',   [TelegramController::class, 'test']);
         Route::post('/telegram/report', [TelegramController::class, 'report']);
+        Route::post('/telegram/set-webhook', [TelegramController::class, 'setWebhook']);
     });
 });

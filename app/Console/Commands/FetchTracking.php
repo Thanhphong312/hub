@@ -3,8 +3,8 @@
 namespace App\Console\Commands;
 
 use App\Models\Order;
+use App\Services\CarrierTrackingService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class FetchTracking extends Command
@@ -12,13 +12,11 @@ class FetchTracking extends Command
     protected $signature = 'orders:fetch-tracking {--limit=50 : max orders processed per run}';
     protected $description = 'Fetch tracking_id for orders that have a shipping_label but no tracking yet (POSTs each label URL to carrier.pressify.us/track).';
 
-    public function handle(): int
+    public function handle(CarrierTrackingService $carrier): int
     {
         $limit = max(1, (int) $this->option('limit'));
 
-        $orders = Order::whereNull('tracking_id')
-            ->whereNotNull('shipping_label')
-            ->where('shipping_label', '!=', '')
+        $orders = Order::pendingTracking()
             ->orderBy('id', 'desc')
             ->limit($limit)
             ->get();
@@ -34,22 +32,8 @@ class FetchTracking extends Command
 
         foreach ($orders as $order) {
             try {
-                $response = Http::timeout(15)->post('https://carrier.pressify.us/track', [
-                    'url' => $order->shipping_label,
-                ]);
-
-                if (!$response->ok()) {
-                    $this->warn("[{$order->system_id}] HTTP {$response->status()}");
-                    $errors++;
-                    continue;
-                }
-
-                $data = $response->json();
-                // Accept tracking under several common keys.
-                $tracking = $data['tracking_id']
-                    ?? $data['tracking']
-                    ?? $data['trackingNumber']
-                    ?? ($data['data']['tracking_id'] ?? null);
+                // Shared carrier call (Drive-URL rewrite + multi-key parse live in the service).
+                $tracking = $carrier->fetch($order->shipping_label)['tracking_id'] ?? null;
 
                 if (!$tracking) {
                     $this->warn("[{$order->system_id}] No tracking in response");
@@ -57,7 +41,7 @@ class FetchTracking extends Command
                     continue;
                 }
 
-                $order->update(['tracking_id' => trim((string) $tracking)]);
+                $order->update(['tracking_id' => $tracking]);
                 $this->line("[{$order->system_id}] tracking = {$tracking}");
                 $updated++;
             } catch (\Throwable $e) {

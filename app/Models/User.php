@@ -27,6 +27,9 @@ class User extends Authenticatable
         'auto_buy_label',
         'resend_free_quota',
         'resend_support_override',
+        'telegram_chat_id',
+        'telegram_linked_at',
+        'telegram_notifications_enabled',
     ];
 
     protected $hidden = [
@@ -46,6 +49,9 @@ class User extends Authenticatable
             'auto_pay_delay_hours' => 'integer',
             'auto_buy_label' => 'boolean',
             'resend_support_override' => 'array',
+            'telegram_chat_id' => 'integer',
+            'telegram_linked_at' => 'datetime',
+            'telegram_notifications_enabled' => 'boolean',
         ];
     }
 
