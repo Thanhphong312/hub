@@ -122,9 +122,10 @@ class AuthController extends Controller
             // 0 = immediate; cap at 72h (3 days) so sellers can't accidentally
             // disable auto-pay by setting an absurd delay.
             'auto_pay_delay_hours' => 'sometimes|integer|min:0|max:72',
+            'auto_buy_label'       => 'sometimes|boolean',
         ]);
 
-        $user->update($request->only('name', 'email', 'auto_pay', 'auto_pay_delay_hours'));
+        $user->update($request->only('name', 'email', 'auto_pay', 'auto_pay_delay_hours', 'auto_buy_label'));
         return response()->json(['message' => 'Profile updated', 'user' => $user->fresh()]);
     }
 

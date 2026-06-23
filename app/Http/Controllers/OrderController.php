@@ -2677,6 +2677,54 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     }
 
     /**
+     * Buy a Shippo shipping label for a seller_ship order. Admin/support or the
+     * order's own seller. The full Shippo response is stored on the order's
+     * address (shipping_json) and label_url/tracking copied onto the order.
+     */
+    public function buyLabel(Request $request, Order $order)
+    {
+        $user = $request->user();
+        $isStaff = $user->hasRole('admin') || $user->hasRole('support');
+        if (!$isStaff && $order->user_id !== $user->id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $result = app(\App\Services\ShippoService::class)->buyLabelForOrder($order->load('address'));
+        if (!($result['ok'] ?? false)) {
+            return response()->json($result, 422);
+        }
+        return response()->json(array_merge($result, [
+            'order' => $order->fresh()->only(['id', 'system_id', 'shipping_label', 'tracking_id']),
+        ]));
+    }
+
+    /**
+     * seller_ship orders that still need a label (no shipping_label yet) and
+     * have a recipient address. The app-side auto-buy cron polls this with
+     * ?auto=1 to only include sellers who opted in (users.auto_buy_label).
+     * Sellers are scoped to their own orders.
+     */
+    public function pendingLabels(Request $request)
+    {
+        $q = Order::where('ship_type', Order::SHIP_SELLER)
+            ->where(function ($w) { $w->whereNull('shipping_label')->orWhere('shipping_label', ''); })
+            ->whereHas('address')
+            ->with('user:id,name,auto_buy_label');
+
+        if ($request->user()->hasRole('seller')) {
+            $q->where('user_id', $request->user()->id);
+        }
+        if ($request->boolean('auto')) {
+            $q->whereHas('user', fn ($u) => $u->where('auto_buy_label', true));
+        }
+
+        $limit  = min(500, max(1, (int) $request->get('limit', 200)));
+        $orders = $q->orderBy('id', 'asc')->limit($limit)->get(['id', 'system_id', 'user_id', 'ship_type']);
+
+        return response()->json(['data' => $orders]);
+    }
+
+    /**
      * Public API (X-API-KEY): list products + variants with the API user's
      * tier prices. External systems use this to know which SKUs they can
      * pass to POST /api/fulfill and what each variant costs.

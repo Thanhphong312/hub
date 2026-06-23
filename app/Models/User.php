@@ -24,6 +24,7 @@ class User extends Authenticatable
         'convert',
         'auto_pay',
         'auto_pay_delay_hours',
+        'auto_buy_label',
         'resend_free_quota',
         'resend_support_override',
     ];
@@ -43,6 +44,7 @@ class User extends Authenticatable
             'convert' => 'boolean',
             'auto_pay' => 'boolean',
             'auto_pay_delay_hours' => 'integer',
+            'auto_buy_label' => 'boolean',
             'resend_support_override' => 'array',
         ];
     }
