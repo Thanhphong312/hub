@@ -104,6 +104,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Image-URL validation status (server-side; replaces client localStorage).
     // Static path declared before the {order} wildcard so it isn't swallowed.
     Route::get('/orders/image-validation', [OrderImageValidationController::class, 'index']);
+    Route::get('/orders/image-validation/manage', [OrderImageValidationController::class, 'manage']);
     Route::post('/orders/{order}/fetch-tracking', [OrderController::class, 'fetchTrackingOne']);
     Route::post('/orders/{order}/save-tracking', [OrderController::class, 'saveTracking']);
     Route::post('/orders/{order}/buy-label', [OrderController::class, 'buyLabel']);

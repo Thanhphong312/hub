@@ -54,6 +54,98 @@ class OrderImageValidationController extends Controller
     }
 
     /**
+     * GET /api/orders/image-validation/manage
+     *
+     * Management list: NON-shipped orders only, joined with their stored
+     * validation status. Powers the dedicated "Image URL Check" page.
+     *
+     * Query: page, per_page (max 200), filter = all|issues|unchecked|ok,
+     *        user_id (admin only). Sellers are scoped to their own orders.
+     *
+     * Response: { data: [ { id, system_id, ref_id, user, status, validation } ],
+     *             meta: { total, page, per_page, last_page },
+     *             counts: { total, checked, unchecked, issues } }
+     */
+    public function manage(Request $request)
+    {
+        $request->validate([
+            'page'     => 'sometimes|integer|min:1',
+            'per_page' => 'sometimes|integer|min:1|max:200',
+            'filter'   => 'sometimes|in:all,issues,unchecked,ok',
+            'user_id'  => 'sometimes|integer',
+        ]);
+
+        $user   = $request->user();
+        $filter = $request->get('filter', 'all');
+
+        $base = Order::query()
+            ->where('status', '!=', Order::STATUS_SHIPPED)
+            ->with(['user:id,name', 'imageValidation']);
+
+        if ($user?->hasRole('seller')) {
+            $base->where('user_id', $user->id);
+        } elseif ($request->filled('user_id')) {
+            $base->where('user_id', $request->user_id);
+        }
+
+        // Validation-state filters (left join via the imageValidation relation).
+        $applyFilter = function ($q) use ($filter) {
+            if ($filter === 'unchecked') {
+                $q->where(fn ($w) => $w->whereDoesntHave('imageValidation')
+                    ->orWhereHas('imageValidation', fn ($v) => $v->where('checked', false)));
+            } elseif ($filter === 'issues') {
+                $q->whereHas('imageValidation', fn ($v) => $v->where('checked', true)->where('failed_count', '>', 0));
+            } elseif ($filter === 'ok') {
+                $q->whereHas('imageValidation', fn ($v) => $v->where('checked', true)->where('failed_count', 0));
+            }
+        };
+
+        // Counts across the whole non-shipped set (independent of the page filter).
+        $countsBase = (clone $base);
+        $counts = [
+            'total'     => (clone $countsBase)->count(),
+            'checked'   => (clone $countsBase)->whereHas('imageValidation', fn ($v) => $v->where('checked', true))->count(),
+            'issues'    => (clone $countsBase)->whereHas('imageValidation', fn ($v) => $v->where('checked', true)->where('failed_count', '>', 0))->count(),
+        ];
+        $counts['unchecked'] = $counts['total'] - $counts['checked'];
+
+        $q = (clone $base);
+        $applyFilter($q);
+
+        $perPage = (int) $request->get('per_page', 50);
+        $page    = $q->orderByDesc('id')->paginate($perPage);
+
+        $data = collect($page->items())->map(function ($order) {
+            $v = $order->imageValidation;
+            return [
+                'id'        => $order->id,
+                'system_id' => $order->system_id,
+                'ref_id'    => $order->ref_id,
+                'status'    => Order::STATUS_MAP[$order->status] ?? 'unknown',
+                'user'      => $order->user?->name,
+                'validation' => [
+                    'checked'      => (bool) ($v->checked ?? false),
+                    'status'       => $v->status ?? OrderImageValidation::STATUS_PENDING,
+                    'image_count'  => (int) ($v->image_count ?? 0),
+                    'failed_count' => (int) ($v->failed_count ?? 0),
+                    'checked_at'   => optional($v?->checked_at)->toIso8601String(),
+                ],
+            ];
+        });
+
+        return response()->json([
+            'data'   => $data,
+            'meta'   => [
+                'total'     => $page->total(),
+                'page'      => $page->currentPage(),
+                'per_page'  => $page->perPage(),
+                'last_page' => $page->lastPage(),
+            ],
+            'counts' => $counts,
+        ]);
+    }
+
+    /**
      * POST /api/orders/{order}/image-validation
      *
      * Save a validation result the client computed for one order. Body:
