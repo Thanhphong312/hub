@@ -2540,7 +2540,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             // app doesn't need a second round-trip when switching variants.
             'payment_settings' => [
                 'pingpong' => \App\Models\AppSetting::getJson('invoice_pingpong', []),
-                'vnpay'    => \App\Models\AppSetting::getJson('invoice_vnpay', []),
+                // Inject the USD→VND exchange rate so the VNPay invoice can print
+                // the converted VND amount next to the USD total.
+                'vnpay'    => array_merge(
+                    \App\Models\AppSetting::getJson('invoice_vnpay', []),
+                    ['vnd_per_usd' => (float) (\App\Models\AppSetting::getJson('wallet_exchange_rate', [])['vnd_per_usd'] ?? config('services.vnpay.rate'))]
+                ),
             ],
         ]);
     }
