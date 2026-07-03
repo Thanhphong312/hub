@@ -12,6 +12,7 @@ use App\Models\ProductVariantPrice;
 use App\Models\User;
 use App\Models\WalletTransaction;
 use App\Services\ImageValidationService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -23,19 +24,33 @@ class OrderController extends Controller
      *     path="/orders",
      *     tags={"Orders"},
      *     summary="List orders",
-     *     description="Paginated + filter status / ship_type / ref_id / date range / paid. Seller chỉ thấy đơn của mình.",
+     *     description="Paginated list. Seller chỉ thấy đơn của mình. Product filters match nếu đơn có **ít nhất một** order_item thỏa điều kiện. Load filter options qua GET /products và GET /variants.",
      *     security={{"bearerAuth":{}}},
-     *     @OA\Parameter(name="status",      in="query", description="Status 0–7 (6=shipped)", @OA\Schema(type="integer")),
-     *     @OA\Parameter(name="ship_type",   in="query", @OA\Schema(type="string", enum={"tiktok_ship","seller_ship"})),
-     *     @OA\Parameter(name="ref_id",      in="query", description="Contains match", @OA\Schema(type="string")),
-     *     @OA\Parameter(name="system_id",   in="query", description="Contains match", @OA\Schema(type="string")),
-     *     @OA\Parameter(name="tracking_id", in="query", @OA\Schema(type="string")),
-     *     @OA\Parameter(name="date_from",   in="query", @OA\Schema(type="string", format="date")),
-     *     @OA\Parameter(name="date_to",     in="query", @OA\Schema(type="string", format="date")),
-     *     @OA\Parameter(name="paid",        in="query", @OA\Schema(type="string", enum={"paid","unpaid"})),
-     *     @OA\Parameter(name="user_id",     in="query", description="Admin only — filter by owner", @OA\Schema(type="integer")),
-     *     @OA\Parameter(name="page",        in="query", @OA\Schema(type="integer", default=1)),
-     *     @OA\Parameter(name="per_page",    in="query", @OA\Schema(type="integer", default=20)),
+     *     @OA\Parameter(name="status",              in="query", description="Status 0–7 (6=shipped)", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="ship_type",           in="query", @OA\Schema(type="string", enum={"tiktok_ship","seller_ship"})),
+     *     @OA\Parameter(name="ref_id",              in="query", description="Contains match", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="ref_ids",             in="query", description="Comma/newline separated exact ref_id list", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="system_id",           in="query", description="Contains match", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="tracking_id",         in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="tracking_status",     in="query", description="ShipEngine status, or `none` = chưa check", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="date_from",           in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="date_to",             in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="paid",                in="query", @OA\Schema(type="string", enum={"paid","unpaid"})),
+     *     @OA\Parameter(name="user_id",             in="query", description="Admin/support only — filter by owner", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="product_id",          in="query", description="orders có item thuộc product này", @OA\Schema(type="integer"), example=5),
+     *     @OA\Parameter(name="product_ids",         in="query", description="Multi product — repeat param or comma list", @OA\Schema(type="string"), example="5,8"),
+     *     @OA\Parameter(name="product_variant_id",  in="query", description="Exact variant/SKU row id", @OA\Schema(type="integer"), example=2),
+     *     @OA\Parameter(name="line_id",             in="query", description="products.line_id exact (GC, PS_C…)", @OA\Schema(type="string"), example="GC"),
+     *     @OA\Parameter(name="sku",                 in="query", description="product_variants.sku exact", @OA\Schema(type="string"), example="GE"),
+     *     @OA\Parameter(name="color",               in="query", description="product_variants.color exact", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="size",                in="query", description="product_variants.size exact", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="paper_type",          in="query", description="product_variants.paper_type exact", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="material_id",         in="query", description="order_items.material_id", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="accessory_id",        in="query", description="orders có item dùng accessory này", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="sort_by",             in="query", @OA\Schema(type="string", default="id")),
+     *     @OA\Parameter(name="sort_dir",            in="query", @OA\Schema(type="string", enum={"asc","desc"}, default="desc")),
+     *     @OA\Parameter(name="page",                in="query", @OA\Schema(type="integer", default=1)),
+     *     @OA\Parameter(name="per_page",            in="query", @OA\Schema(type="integer", default=20)),
      *     @OA\Response(response=200, description="Paginated list")
      * )
      */
@@ -64,69 +79,7 @@ class OrderController extends Controller
             $query->where('user_id', $request->user_id);
         }
 
-        // Filter by status
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
-        }
-
-        // Filter by ship_type
-        if ($request->has('ship_type')) {
-            $query->where('ship_type', $request->ship_type);
-        }
-
-        // Search by ref_id — single substring match.
-        if ($request->filled('ref_id')) {
-            $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
-        }
-
-        // Search by ref_ids — list mode (newline / comma separated, exact match).
-        // Used by the admin "list paste" search to look up many TikTok refs at once.
-        if ($request->filled('ref_ids')) {
-            $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
-            $list = array_values(array_unique(array_map('trim', $list)));
-            if (!empty($list)) {
-                $query->whereIn('ref_id', $list);
-            }
-        }
-
-        // Search by system_id
-        if ($request->has('system_id')) {
-            $query->where('system_id', 'like', '%' . $request->system_id . '%');
-        }
-
-        // Search by tracking_id
-        if ($request->has('tracking_id')) {
-            $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
-        }
-
-        // Filter by delivery tracking status (from order_trackings). Special
-        // value "none" = orders not checked yet (no tracking row).
-        if ($request->filled('tracking_status')) {
-            $ts = $request->tracking_status;
-            if ($ts === 'none') {
-                $query->whereDoesntHave('tracking');
-            } else {
-                $query->whereHas('tracking', fn ($q) => $q->where('status', $ts));
-            }
-        }
-
-        // Filter by date range
-        if ($request->has('date_from')) {
-            $query->whereDate('created_at', '>=', $request->date_from);
-        }
-        if ($request->has('date_to')) {
-            $query->whereDate('created_at', '<=', $request->date_to);
-        }
-
-        // Filter by pay status. "paid" = paid_cost >= total_cost,
-        // "unpaid" = paid_cost < total_cost (covers $0 paid and partial pays).
-        if ($request->filled('paid')) {
-            if ($request->paid === 'paid') {
-                $query->whereColumn('paid_cost', '>=', 'total_cost');
-            } elseif ($request->paid === 'unpaid') {
-                $query->whereColumn('paid_cost', '<', 'total_cost');
-            }
-        }
+        $this->applyOrderListFilters($query, $request);
 
         // Sort
         $sortBy = $request->get('sort_by', 'id');
@@ -2415,6 +2368,33 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      * Aggregation key: (product_id, paper_type). One invoice line per
      * product+material combo, summing quantity across all matched orders.
      */
+    /**
+     * @OA\Get(
+     *     path="/orders/invoice-data",
+     *     tags={"Orders"},
+     *     summary="Invoice aggregation data",
+     *     description="JSON payload cho invoice PDF. **Cùng bộ filter** như GET /orders (kể cả product filters).",
+     *     security={{"bearerAuth":{}}},
+     *     @OA\Parameter(name="status",             in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="date_from",          in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="date_to",            in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="paid",               in="query", @OA\Schema(type="string", enum={"paid","unpaid"})),
+     *     @OA\Parameter(name="user_id",            in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="product_id",         in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="product_ids",        in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="product_variant_id", in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="line_id",            in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="sku",                in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="color",              in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="size",               in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="paper_type",         in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="material_id",        in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="accessory_id",       in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="order_ids",          in="query", @OA\Schema(type="string")),
+     *     @OA\Response(response=200, description="Invoice JSON"),
+     *     @OA\Response(response=404, description="No orders matched")
+     * )
+     */
     public function invoiceData(Request $request)
     {
         $query = Order::with([
@@ -2428,26 +2408,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $query->where('user_id', $request->user_id);
         }
 
-        if ($request->filled('status'))      $query->where('status', $request->status);
-        if ($request->filled('date_from'))   $query->whereDate('created_at', '>=', $request->date_from);
-        if ($request->filled('date_to'))     $query->whereDate('created_at', '<=', $request->date_to);
-        if ($request->filled('ref_id'))      $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
-        if ($request->filled('system_id'))   $query->where('system_id', 'like', '%' . $request->system_id . '%');
-        if ($request->filled('tracking_id')) $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
-        if ($request->filled('ref_ids')) {
-            $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
-            $query->whereIn('ref_id', array_values(array_unique(array_map('trim', $list))));
-        }
-        if ($request->filled('order_ids')) {
-            $ids = is_array($request->order_ids)
-                ? $request->order_ids
-                : preg_split('/[\s,]+/', (string) $request->order_ids, -1, PREG_SPLIT_NO_EMPTY);
-            $query->whereIn('id', array_map('intval', $ids));
-        }
-        if ($request->filled('paid')) {
-            if ($request->paid === 'paid')   $query->whereColumn('paid_cost', '>=', 'total_cost');
-            if ($request->paid === 'unpaid') $query->whereColumn('paid_cost', '<', 'total_cost');
-        }
+        $this->applyOrderListFilters($query, $request);
 
         $orders = $query->orderBy('id', 'asc')->get();
 
@@ -2626,12 +2587,30 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     path="/orders/export",
      *     tags={"Orders"},
      *     summary="Export orders to CSV",
-     *     description="Streamed CSV với cùng filter như GET /orders. Hoặc truyền order_ids để export riêng các đơn đã chọn.",
+     *     description="Streamed CSV với **cùng filter** như GET /orders (kể cả product filters). Hoặc truyền order_ids để export riêng các đơn đã chọn.",
      *     security={{"bearerAuth":{}}},
-     *     @OA\Parameter(name="status",     in="query", @OA\Schema(type="integer")),
-     *     @OA\Parameter(name="date_from",  in="query", @OA\Schema(type="string", format="date")),
-     *     @OA\Parameter(name="date_to",    in="query", @OA\Schema(type="string", format="date")),
-     *     @OA\Parameter(name="order_ids",  in="query", description="Comma-separated", @OA\Schema(type="string"), example="123,124,125"),
+     *     @OA\Parameter(name="status",             in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="ship_type",          in="query", @OA\Schema(type="string", enum={"tiktok_ship","seller_ship"})),
+     *     @OA\Parameter(name="ref_id",             in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="ref_ids",            in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="system_id",          in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="tracking_id",        in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="tracking_status",    in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="date_from",          in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="date_to",            in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="paid",               in="query", @OA\Schema(type="string", enum={"paid","unpaid"})),
+     *     @OA\Parameter(name="user_id",            in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="product_id",         in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="product_ids",        in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="product_variant_id", in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="line_id",            in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="sku",                in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="color",              in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="size",               in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="paper_type",         in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="material_id",        in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="accessory_id",       in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="order_ids",          in="query", description="Comma-separated", @OA\Schema(type="string"), example="123,124,125"),
      *     @OA\Response(response=200, description="CSV file", @OA\MediaType(mediaType="text/csv"))
      * )
      */
@@ -2647,44 +2626,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         if ($request->has('user_id') && !$request->user()->hasRole('seller')) {
             $query->where('user_id', $request->user_id);
         }
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
-        }
-        if ($request->has('date_from')) {
-            $query->whereDate('created_at', '>=', $request->date_from);
-        }
-        if ($request->has('date_to')) {
-            $query->whereDate('created_at', '<=', $request->date_to);
-        }
-        if ($request->filled('ref_id')) {
-            $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
-        }
-        if ($request->filled('system_id')) {
-            $query->where('system_id', 'like', '%' . $request->system_id . '%');
-        }
-        if ($request->filled('tracking_id')) {
-            $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
-        }
-        if ($request->filled('ref_ids')) {
-            $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
-            $list = array_values(array_unique(array_map('trim', $list)));
-            if (!empty($list)) {
-                $query->whereIn('ref_id', $list);
-            }
-        }
-        if ($request->filled('order_ids')) {
-            $ids = is_array($request->order_ids)
-                ? $request->order_ids
-                : preg_split('/[\s,]+/', (string) $request->order_ids, -1, PREG_SPLIT_NO_EMPTY);
-            $query->whereIn('id', array_map('intval', $ids));
-        }
-        if ($request->filled('paid')) {
-            if ($request->paid === 'paid') {
-                $query->whereColumn('paid_cost', '>=', 'total_cost');
-            } elseif ($request->paid === 'unpaid') {
-                $query->whereColumn('paid_cost', '<', 'total_cost');
-            }
-        }
+        $this->applyOrderListFilters($query, $request);
 
         $orders = $query->orderBy('id', 'desc')->get();
 
@@ -2869,13 +2811,28 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     path="/fulfill",
      *     tags={"Public API"},
      *     summary="List orders (X-API-KEY)",
-     *     description="Liệt kê đơn của caller. Filter giống GET /orders.",
+     *     description="Liệt kê đơn của caller. Filter giống GET /orders (kể cả product filters).",
      *     security={{"apiKeyAuth":{}}},
-     *     @OA\Parameter(name="status",    in="query", @OA\Schema(type="integer")),
-     *     @OA\Parameter(name="ref_id",    in="query", @OA\Schema(type="string")),
-     *     @OA\Parameter(name="date_from", in="query", @OA\Schema(type="string", format="date")),
-     *     @OA\Parameter(name="date_to",   in="query", @OA\Schema(type="string", format="date")),
-     *     @OA\Parameter(name="per_page",  in="query", @OA\Schema(type="integer", default=20)),
+     *     @OA\Parameter(name="status",             in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="ship_type",          in="query", @OA\Schema(type="string", enum={"tiktok_ship","seller_ship"})),
+     *     @OA\Parameter(name="ref_id",             in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="ref_ids",            in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="system_id",          in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="tracking_id",        in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="date_from",          in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="date_to",            in="query", @OA\Schema(type="string", format="date")),
+     *     @OA\Parameter(name="paid",               in="query", @OA\Schema(type="string", enum={"paid","unpaid"})),
+     *     @OA\Parameter(name="product_id",         in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="product_ids",        in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="product_variant_id", in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="line_id",            in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="sku",                in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="color",              in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="size",               in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="paper_type",         in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="material_id",        in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="accessory_id",       in="query", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="per_page",           in="query", @OA\Schema(type="integer", default=50)),
      *     @OA\Response(response=200, description="Paginated list")
      * )
      */
@@ -2887,17 +2844,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $query = Order::with(['items.metas', 'items.productVariant.product', 'items.material', 'items.accessoryPrice', 'address'])
             ->where('user_id', $user->id);
 
-        if ($request->filled('status'))    $query->where('status', $request->status);
-        if ($request->filled('ref_id'))    $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
-        if ($request->filled('system_id')) $query->where('system_id', 'like', '%' . $request->system_id . '%');
-        if ($request->filled('tracking_id')) $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
-        if ($request->filled('date_from')) $query->whereDate('created_at', '>=', $request->date_from);
-        if ($request->filled('date_to'))   $query->whereDate('created_at', '<=', $request->date_to);
-        if ($request->filled('ref_ids')) {
-            $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
-            $list = array_values(array_unique(array_map('trim', $list)));
-            if (!empty($list)) $query->whereIn('ref_id', $list);
-        }
+        $this->applyOrderListFilters($query, $request);
 
         $perPage = min(200, max(1, (int) $request->get('per_page', 50)));
         return response()->json($query->orderBy('id', 'desc')->paginate($perPage));
@@ -3491,5 +3438,139 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         }
 
         return $costs;
+    }
+
+    /**
+     * Shared list filters for GET /orders, /orders/export, /orders/invoice-data,
+     * and GET /fulfill. Callers must apply seller/admin user scoping first.
+     */
+    private function applyOrderListFilters(Builder $query, Request $request): void
+    {
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->has('ship_type')) {
+            $query->where('ship_type', $request->ship_type);
+        }
+
+        if ($request->filled('ref_id')) {
+            $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
+        }
+
+        if ($request->filled('ref_ids')) {
+            $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
+            $list = array_values(array_unique(array_map('trim', $list)));
+            if (!empty($list)) {
+                $query->whereIn('ref_id', $list);
+            }
+        }
+
+        if ($request->has('system_id')) {
+            $query->where('system_id', 'like', '%' . $request->system_id . '%');
+        }
+
+        if ($request->has('tracking_id')) {
+            $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
+        }
+
+        if ($request->filled('tracking_status')) {
+            $ts = $request->tracking_status;
+            if ($ts === 'none') {
+                $query->whereDoesntHave('tracking');
+            } else {
+                $query->whereHas('tracking', fn ($q) => $q->where('status', $ts));
+            }
+        }
+
+        if ($request->has('date_from')) {
+            $query->whereDate('created_at', '>=', $request->date_from);
+        }
+        if ($request->has('date_to')) {
+            $query->whereDate('created_at', '<=', $request->date_to);
+        }
+
+        if ($request->filled('paid')) {
+            if ($request->paid === 'paid') {
+                $query->whereColumn('paid_cost', '>=', 'total_cost');
+            } elseif ($request->paid === 'unpaid') {
+                $query->whereColumn('paid_cost', '<', 'total_cost');
+            }
+        }
+
+        if ($request->filled('order_ids')) {
+            $ids = is_array($request->order_ids)
+                ? $request->order_ids
+                : preg_split('/[\s,]+/', (string) $request->order_ids, -1, PREG_SPLIT_NO_EMPTY);
+            $query->whereIn('id', array_map('intval', $ids));
+        }
+
+        $this->applyProductFilters($query, $request);
+    }
+
+    /**
+     * Product-related filters — order matches if at least one order_item satisfies
+     * the condition (OR across items, AND when multiple product params are set).
+     */
+    private function applyProductFilters(Builder $query, Request $request): void
+    {
+        $productIds = $this->parseIdList($request, 'product_ids');
+        if ($request->filled('product_id')) {
+            $productIds[] = (int) $request->product_id;
+        }
+        $productIds = array_values(array_unique(array_filter($productIds)));
+        if (!empty($productIds)) {
+            $query->whereHas('items.productVariant', fn ($q) => $q->whereIn('product_id', $productIds));
+        }
+
+        if ($request->filled('product_variant_id')) {
+            $query->whereHas('items', fn ($q) =>
+                $q->where('product_variant_id', (int) $request->product_variant_id));
+        }
+
+        if ($request->filled('line_id')) {
+            $query->whereHas('items.productVariant.product', fn ($q) =>
+                $q->where('line_id', $request->line_id));
+        }
+
+        if ($request->filled('sku')) {
+            $query->whereHas('items.productVariant', fn ($q) =>
+                $q->where('sku', $request->sku));
+        }
+
+        foreach (['color', 'size', 'paper_type'] as $field) {
+            if ($request->filled($field)) {
+                $value = $request->input($field);
+                $query->whereHas('items.productVariant', fn ($q) => $q->where($field, $value));
+            }
+        }
+
+        if ($request->filled('material_id')) {
+            $query->whereHas('items', fn ($q) =>
+                $q->where('material_id', (int) $request->material_id));
+        }
+
+        if ($request->filled('accessory_id')) {
+            $accessoryId = (int) $request->accessory_id;
+            $query->whereHas('items', function ($q) use ($accessoryId) {
+                $q->where(function ($w) use ($accessoryId) {
+                    $w->whereHas('accessoryPrice', fn ($ap) => $ap->where('accessory_id', $accessoryId))
+                      ->orWhereHas('accessoryPrices', fn ($ap) => $ap->where('accessory_id', $accessoryId));
+                });
+            });
+        }
+    }
+
+    /** @return int[] */
+    private function parseIdList(Request $request, string $key): array
+    {
+        if (!$request->filled($key)) {
+            return [];
+        }
+        $raw = $request->input($key);
+        $parts = is_array($raw)
+            ? $raw
+            : preg_split('/[\s,]+/', (string) $raw, -1, PREG_SPLIT_NO_EMPTY);
+        return array_values(array_unique(array_filter(array_map('intval', $parts))));
     }
 }
