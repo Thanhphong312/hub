@@ -122,6 +122,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
     Route::put('/order-items/{item}/mockups', [OrderController::class, 'updateItemMockups']);
     Route::put('/order-items/{item}/accessories', [OrderController::class, 'updateItemAccessories']);
+    Route::get('/order-items/{item}/variant-preview', [OrderController::class, 'variantPreview']);
+    Route::put('/order-items/{item}/variant', [OrderController::class, 'updateItemVariant']);
 
     // Server-side proxy for fetching convert_label image bytes — bypasses
     // browser CORS when Electron renderer needs to embed labels into a

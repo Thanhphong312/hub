@@ -1334,6 +1334,142 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     }
 
     /**
+     * GET /api/order-items/{item}/variant-preview?product_variant_id=X
+     *
+     * Staff/owner. Returns the item price + order totals the order WOULD get if
+     * this item's variant were swapped — without saving. Mirrors
+     * updateItemVariant's recompute so the UI can review the new price first.
+     */
+    public function variantPreview(Request $request, OrderItem $item)
+    {
+        $caller = $request->user();
+        $item->loadMissing('order.user', 'metas');
+        $order = $item->order;
+        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+
+        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
+        if (!$isStaff && $order->user_id !== $caller?->id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        $request->validate(['product_variant_id' => 'required|integer|exists:product_variants,id']);
+
+        $tierId = $order->user?->tier_id;
+        if ($tierId === null) {
+            return response()->json(['message' => "Order owner has no tier — can't price the variant"], 422);
+        }
+
+        $newVariantId = (int) $request->product_variant_id;
+        $newItemPrice = $this->computeItemPrice($item->metas, $newVariantId, $tierId);
+
+        // Recompute totals with this item priced at the new variant.
+        $order->load('items.accessoryPrices');
+        $totalQty = 0;
+        $totalPrint = 0;
+        foreach ($order->items as $it) {
+            $itQty   = max(1, (int) ($it->quantity ?? 1));
+            $itAcc   = (float) $it->accessoryPrices->sum('price');
+            $itPrice = $it->id === $item->id ? $newItemPrice : (float) $it->price;
+            $totalPrint += ($itPrice + $itAcc) * $itQty;
+            $totalQty   += $itQty;
+        }
+        $hasLabel = !empty($order->shipping_label);
+        // First variant drives shipping; if THIS item is first, use the new one.
+        $firstItem = $order->items->first();
+        $firstVariantId = ($firstItem && $firstItem->id === $item->id)
+            ? $newVariantId
+            : (int) ($firstItem?->product_variant_id ?? 0);
+        $shipping = $firstVariantId
+            ? $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty)
+            : (float) $order->shipping_cost;
+
+        return response()->json([
+            'item_price'    => round((float) $newItemPrice, 2),
+            'old_item_price'=> round((float) $item->price, 2),
+            'print_cost'    => round((float) $totalPrint, 2),
+            'shipping_cost' => round((float) $shipping, 2),
+            'total_cost'    => round((float) $totalPrint + $shipping, 2),
+            'old_total_cost'=> round((float) $order->total_cost, 2),
+        ]);
+    }
+
+    /**
+     * PUT /api/order-items/{item}/variant — swap the item's product variant for
+     * a different one and re-price. Staff or the order owner; blocked once the
+     * order is shipped/cancelled. Re-prices the item from the new variant
+     * (base_cost + 2nd_fee per its design faces) and recomputes order totals —
+     * same recompute path as updateItemAccessories.
+     *
+     * Body: { product_variant_id: int }
+     */
+    public function updateItemVariant(Request $request, OrderItem $item)
+    {
+        $caller = $request->user();
+        $item->loadMissing('order.user', 'metas');
+        $order = $item->order;
+        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+
+        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
+        $isOwner = $order->user_id === $caller?->id;
+        if (!$isStaff && !$isOwner) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if (in_array((int) $order->status, [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED], true)) {
+            return response()->json(['message' => 'Order is shipped or cancelled — variant is locked'], 422);
+        }
+
+        $request->validate([
+            'product_variant_id' => 'required|integer|exists:product_variants,id',
+        ]);
+
+        $ownerTierId = $order->user?->tier_id;
+        if ($ownerTierId === null) {
+            return response()->json(['message' => "Order owner has no tier — can't price the variant"], 422);
+        }
+
+        return DB::transaction(function () use ($request, $item, $order, $ownerTierId) {
+            $newVariantId = (int) $request->product_variant_id;
+            // Re-price the item from the new variant using its existing design
+            // faces (base_cost + 2nd_fee × (faces − 1)).
+            $newPrice = $this->computeItemPrice($item->metas, $newVariantId, $ownerTierId);
+            $item->update([
+                'product_variant_id' => $newVariantId,
+                'price'              => $newPrice,
+            ]);
+
+            // Recompute order totals from every item (mirrors updateItemAccessories).
+            $order->load('items.accessoryPrices', 'user');
+            $totalQty = 0;
+            $totalPrint = 0;
+            foreach ($order->items as $it) {
+                $itQty = max(1, (int) ($it->quantity ?? 1));
+                $itAcc = (float) $it->accessoryPrices->sum('price');
+                $totalPrint += ((float) $it->price + $itAcc) * $itQty;
+                $totalQty += $itQty;
+            }
+            $hasLabel = !empty($order->shipping_label);
+            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+            $shippingCost = $firstVariantId
+                ? $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty)
+                : (float) $order->shipping_cost;
+            $order->update([
+                'print_cost'    => $totalPrint,
+                'shipping_cost' => $shippingCost,
+                'total_cost'    => $totalPrint + $shippingCost,
+            ]);
+
+            return response()->json([
+                'message' => 'Variant updated; order totals recomputed',
+                'item_id' => $item->id,
+                'order'   => $order->fresh()->load([
+                    'items.metas', 'items.productVariant.product', 'items.material',
+                    'items.accessoryPrice.accessory', 'items.accessoryPrice.tier',
+                    'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address',
+                ]),
+            ]);
+        });
+    }
+
+    /**
      * Bulk-update the envelope/accessory of existing orders from a CSV-style
      * payload. Each row carries a ref_id and an accessory_code (e.g. "W"/"R"/"B").
      * Rows are applied to the matching order's items in id ASC order, so a
