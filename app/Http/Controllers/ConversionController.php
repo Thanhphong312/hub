@@ -40,7 +40,7 @@ class ConversionController extends Controller
         $query = Order::with([
                 'items.metas',
                 'items.accessoryPrice',
-                'items.productVariant.product:id,line_id',
+                'items.productVariant.product:id,name,line_id',
             ])
             ->whereHas('items.metas', fn ($q) => $q->whereIn('key', self::SOURCE_KEYS))
             // Cancelled orders should never appear in the convert queue —
@@ -129,6 +129,9 @@ class ConversionController extends Controller
                         // the system_id overlay and rotate 180° for the
                         // back face of a greeting card (line_id "GC").
                         'line_id' => $item->productVariant?->product?->line_id,
+                        // Product name so the composer can apply product-specific
+                        // layout (e.g. Credit Card Skin → barcode outside design).
+                        'product_name' => $item->productVariant?->product?->name,
                         'pending' => $pending,
                     ];
                 }
@@ -293,6 +296,7 @@ class ConversionController extends Controller
                         'system_id'         => $order->system_id,
                         'accessory_summary' => $accessorySummary,
                         'line_id'           => $product->line_id ?? null,
+                        'product_name'      => $product->name ?? null,
                         'targets'           => $targets,
                     ];
                 }
