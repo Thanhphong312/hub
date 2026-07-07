@@ -581,6 +581,52 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         });
     }
 
+    /**
+     * GET /api/orders/{order}/ship-cost-preview?ship_type=stamp|seller_ship|tiktok_ship
+     *
+     * Staff-only. Returns the shipping_cost + total_cost the order WOULD get if
+     * its ship_type were changed — without saving. Mirrors update()'s recompute
+     * so the edit form can show the new price live before the user hits Save.
+     */
+    public function shipCostPreview(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if (!($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
+            return response()->json(['message' => 'Only staff can preview ship cost'], 403);
+        }
+        $request->validate([
+            'ship_type' => 'required|in:tiktok_ship,seller_ship,stamp',
+        ]);
+
+        $order->loadMissing('items');
+        $totalQty       = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
+        $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+        $tierId         = $order->user?->tier_id;
+        $shipType       = $request->ship_type;
+
+        if ($shipType === Order::SHIP_STAMP) {
+            $shipping = Order::stampShippingCost($totalQty);
+        } elseif ($shipType === Order::SHIP_SELLER) {
+            $shipping = $firstVariantId
+                ? $this->computeOrderShipping($firstVariantId, $tierId, false, $totalQty)
+                : 0;
+        } else { // tiktok_ship: label_fee when a label is present, else 0.
+            $hasLabel = !empty($order->shipping_label);
+            $shipping = ($firstVariantId && $hasLabel)
+                ? $this->computeOrderShipping($firstVariantId, $tierId, true, $totalQty)
+                : 0;
+        }
+        $shipping = round((float) $shipping, 2);
+
+        return response()->json([
+            'ship_type'     => $shipType,
+            'shipping_cost' => $shipping,
+            'print_cost'    => round((float) $order->print_cost, 2),
+            'total_cost'    => round((float) $order->print_cost + $shipping, 2),
+            'clears_label'  => in_array($shipType, [Order::SHIP_STAMP, Order::SHIP_SELLER], true),
+        ]);
+    }
+
     public function update(Request $request, Order $order)
     {
         $request->validate([

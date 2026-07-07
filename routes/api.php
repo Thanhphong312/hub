@@ -108,6 +108,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{order}/fetch-tracking', [OrderController::class, 'fetchTrackingOne']);
     Route::post('/orders/{order}/save-tracking', [OrderController::class, 'saveTracking']);
     Route::post('/orders/{order}/buy-label', [OrderController::class, 'buyLabel']);
+    Route::get('/orders/{order}/ship-cost-preview', [OrderController::class, 'shipCostPreview']);
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     Route::put('/orders/{order}', [OrderController::class, 'update']);
     Route::delete('/orders/{order}', [OrderController::class, 'destroy']);
