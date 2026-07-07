@@ -1413,8 +1413,8 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         if (!$isStaff && !$isOwner) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-        if (in_array((int) $order->status, [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED], true)) {
-            return response()->json(['message' => 'Order is shipped or cancelled — variant is locked'], 422);
+        if ((int) $order->status === Order::STATUS_CANCELLED) {
+            return response()->json(['message' => 'Order is cancelled — variant is locked'], 422);
         }
 
         $request->validate([
