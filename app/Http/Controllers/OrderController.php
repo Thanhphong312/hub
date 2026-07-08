@@ -1335,6 +1335,40 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     }
 
     /**
+     * PUT /api/order-items/{item}/order-type — set the item's order_type label
+     * (order_items.order_type_label). Staff/owner, blocked only when cancelled.
+     * Body: { order_type: string|null }. Empty clears it (falls back to the
+     * product's order_type on display).
+     */
+    public function updateItemOrderType(Request $request, OrderItem $item)
+    {
+        $caller = $request->user();
+        $item->loadMissing('order');
+        $order = $item->order;
+        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+
+        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
+        if (!$isStaff && $order->user_id !== $caller?->id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if ((int) $order->status === Order::STATUS_CANCELLED) {
+            return response()->json(['message' => 'Order is cancelled — type is locked'], 422);
+        }
+
+        $data = $request->validate([
+            'order_type' => 'present|nullable|string|max:64',
+        ]);
+        $label = $data['order_type'] !== null ? trim($data['order_type']) : null;
+        $item->update(['order_type_label' => ($label === '' ? null : $label)]);
+
+        return response()->json([
+            'message'          => 'Item type updated',
+            'item_id'          => $item->id,
+            'order_type_label' => $item->order_type_label,
+        ]);
+    }
+
+    /**
      * GET /api/order-items/{item}/variant-preview?product_variant_id=X
      *
      * Staff/owner. Returns the item price + order totals the order WOULD get if
