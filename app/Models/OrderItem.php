@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class OrderItem extends Model
 {
-    protected $fillable = ['order_id', 'mockup_front', 'mockup_back', 'product_variant_id', 'material_id', 'accessory_item_id', 'price', 'quantity', 'order_type'];
+    protected $fillable = ['order_id', 'mockup_front', 'mockup_back', 'product_variant_id', 'material_id', 'accessory_item_id', 'price', 'quantity', 'order_type', 'order_type_label'];
 
     const TYPE_GREETING_CARD = 0;
     const TYPE_PASS_SLEEVE = 1;

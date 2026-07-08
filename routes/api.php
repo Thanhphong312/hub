@@ -69,6 +69,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/settings/stamp-config', [SettingController::class, 'getStampConfig']);
     // Resend config — readable by any auth user (resend modal methods/reasons).
     Route::get('/settings/resend-config', [SettingController::class, 'getResendConfig']);
+    // Order types — readable by any auth user (Products dropdown + item Type).
+    Route::get('/settings/order-types', [SettingController::class, 'getOrderTypes']);
+    // Convert layouts — order_type → convert flow (composeImage reads it).
+    Route::get('/settings/convert-layouts', [SettingController::class, 'getConvertLayouts']);
 
     // Generic B2 upload proxy for browser SPAs (web-bullstart). Desktop apps
     // upload directly via the Electron main process and skip this.
@@ -373,6 +377,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/shippo-config', [SettingController::class, 'getShippoConfig']);
         Route::put('/shippo-config', [SettingController::class, 'updateShippoConfig']);
+
+        Route::put('/order-types', [SettingController::class, 'updateOrderTypes']);
+        Route::put('/convert-layouts', [SettingController::class, 'updateConvertLayouts']);
 
         Route::get('/telegram',         [TelegramController::class, 'getSettings']);
         Route::put('/telegram',         [TelegramController::class, 'updateSettings']);

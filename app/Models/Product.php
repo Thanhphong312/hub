@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Product extends Model
 {
-    protected $fillable = ['name', 'style', 'line_id', 'status'];
+    protected $fillable = ['name', 'style', 'line_id', 'order_type', 'status'];
 
     public function variants()
     {

@@ -233,9 +233,10 @@ class ProductController extends Controller
             'name' => 'required|string',
             'style' => 'nullable|string',
             'line_id' => 'nullable|string|max:16',
+            'order_type' => 'nullable|string|max:64',
         ]);
 
-        $product = Product::create($request->only('name', 'style', 'line_id'));
+        $product = Product::create($request->only('name', 'style', 'line_id', 'order_type'));
         return response()->json(['message' => 'Product created', 'product' => $product], 201);
     }
 
@@ -245,10 +246,11 @@ class ProductController extends Controller
             'name' => 'nullable|string',
             'style' => 'nullable|string',
             'line_id' => 'nullable|string|max:16',
+            'order_type' => 'nullable|string|max:64',
             'status' => 'nullable|integer|in:0,1',
         ]);
 
-        $product->update($request->only('name', 'style', 'line_id', 'status'));
+        $product->update($request->only('name', 'style', 'line_id', 'order_type', 'status'));
         return response()->json(['message' => 'Product updated', 'product' => $product]);
     }
 

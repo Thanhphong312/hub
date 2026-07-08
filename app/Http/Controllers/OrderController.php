@@ -529,6 +529,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
                     'order_type' => $itemData['order_type'] ?? 0,
+                    'order_type_label' => $this->productOrderType((int) $itemData['product_variant_id']),
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
@@ -1433,6 +1434,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $newPrice = $this->computeItemPrice($item->metas, $newVariantId, $ownerTierId);
             $item->update([
                 'product_variant_id' => $newVariantId,
+                'order_type_label'   => $this->productOrderType($newVariantId),
                 'price'              => $newPrice,
             ]);
 
@@ -2513,6 +2515,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'mockup_front' => $data['mockup_front'] ?? null,
                     'mockup_back' => $data['mockup_back'] ?? null,
                     'order_type' => (int)($data['order_type'] ?? 0),
+                    'order_type_label' => $this->productOrderType((int) $variantId),
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
@@ -3243,6 +3246,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
                     'order_type' => $itemData['order_type'] ?? 0,
+                    'order_type_label' => $this->productOrderType((int) $itemData['product_variant_id']),
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
@@ -3394,6 +3398,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'mockup_front'       => $src->mockup_front,
                     'mockup_back'        => $src->mockup_back,
                     'order_type'         => $src->order_type,
+                    'order_type_label'   => $src->order_type_label ?? $this->productOrderType((int) $src->product_variant_id),
                     'price'              => $src->price,
                     'quantity'           => $src->quantity,
                 ]);
@@ -3550,6 +3555,25 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     private function getVariantPrice(int $variantId, ?int $tierId): float
     {
         return $this->getVariantPriceByKey($variantId, $tierId, 'base_cost');
+    }
+
+    /**
+     * The order_type label of the product behind a variant (products.order_type).
+     * Snapshotted onto order_items.order_type_label at create/update time so the
+     * item's "Type" reflects the product chosen, even if the product changes
+     * later. Cached per request to avoid repeat lookups in bulk creates.
+     */
+    private array $orderTypeCache = [];
+    private function productOrderType(?int $variantId): ?string
+    {
+        if (!$variantId) return null;
+        if (array_key_exists($variantId, $this->orderTypeCache)) {
+            return $this->orderTypeCache[$variantId];
+        }
+        $label = \App\Models\ProductVariant::where('id', $variantId)
+            ->with('product:id,order_type')
+            ->first()?->product?->order_type;
+        return $this->orderTypeCache[$variantId] = $label;
     }
 
     /**

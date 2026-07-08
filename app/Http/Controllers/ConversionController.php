@@ -40,7 +40,7 @@ class ConversionController extends Controller
         $query = Order::with([
                 'items.metas',
                 'items.accessoryPrice',
-                'items.productVariant.product:id,name,line_id',
+                'items.productVariant.product:id,name,line_id,order_type',
             ])
             ->whereHas('items.metas', fn ($q) => $q->whereIn('key', self::SOURCE_KEYS))
             // Cancelled orders should never appear in the convert queue —
@@ -129,9 +129,12 @@ class ConversionController extends Controller
                         // the system_id overlay and rotate 180° for the
                         // back face of a greeting card (line_id "GC").
                         'line_id' => $item->productVariant?->product?->line_id,
-                        // Product name so the composer can apply product-specific
-                        // layout (e.g. Credit Card Skin → barcode outside design).
-                        'product_name' => $item->productVariant?->product?->name,
+                        // Convert layout resolved from the product's order_type
+                        // (Settings → Convert layouts). The composer switches on
+                        // this instead of matching product names.
+                        'convert_layout' => \App\Http\Controllers\SettingController::convertLayoutFor(
+                            $item->productVariant?->product?->order_type
+                        ),
                         'pending' => $pending,
                     ];
                 }
@@ -251,7 +254,7 @@ class ConversionController extends Controller
         $query = Order::with([
                 'items.metas',
                 'items.accessoryPrice',
-                'items.productVariant.product:id,name,line_id',
+                'items.productVariant.product:id,name,line_id,order_type',
             ])
             ->whereIn('system_id', $ids);
         if (!$isStaff) {
@@ -296,7 +299,7 @@ class ConversionController extends Controller
                         'system_id'         => $order->system_id,
                         'accessory_summary' => $accessorySummary,
                         'line_id'           => $product->line_id ?? null,
-                        'product_name'      => $product->name ?? null,
+                        'convert_layout'    => \App\Http\Controllers\SettingController::convertLayoutFor($product->order_type ?? null),
                         'targets'           => $targets,
                     ];
                 }

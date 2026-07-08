@@ -247,6 +247,85 @@ class SettingController extends Controller
         return $this->getShippoConfig();
     }
 
+    // ----------------------------------------------------------------------
+    // Order types — a configurable list of product order-type labels. Each
+    // product is assigned one (products.order_type); the app's item "Type"
+    // column shows the product's value. Readable by any auth user (Products
+    // page dropdown); admin edits the list.
+    // ----------------------------------------------------------------------
+    public function getOrderTypes()
+    {
+        $list = AppSetting::getJson('order_types', ['Greeting Card', 'Pass Sleeve']);
+        return response()->json(['order_types' => array_values(array_filter(array_map('strval', (array) $list)))]);
+    }
+
+    public function updateOrderTypes(Request $request)
+    {
+        $data = $request->validate([
+            'order_types'   => 'present|array',
+            'order_types.*' => 'string|max:64',
+        ]);
+        // De-dupe + trim + drop blanks, keep order.
+        $seen = [];
+        $clean = [];
+        foreach ($data['order_types'] as $t) {
+            $t = trim($t);
+            if ($t === '' || isset($seen[$t])) continue;
+            $seen[$t] = true;
+            $clean[] = $t;
+        }
+        AppSetting::setJson('order_types', $clean);
+        return response()->json(['order_types' => $clean]);
+    }
+
+    // ----------------------------------------------------------------------
+    // Convert layouts — maps each order_type to the _qr convert flow used for
+    // its items. Drives composeImage on the desktop (no more name matching).
+    //   default → barcode stamped bottom-left ON the design
+    //   outside → design fit above; barcode in a white band OUTSIDE the design
+    // ----------------------------------------------------------------------
+    public const CONVERT_LAYOUTS = [
+        ['key' => 'default', 'label' => 'Mặc định (barcode trên design, góc dưới-trái)'],
+        ['key' => 'outside', 'label' => 'Barcode ngoài design (band trắng dưới)'],
+    ];
+
+    /** Resolve the convert layout for an order_type label (default when unset). */
+    public static function convertLayoutFor(?string $orderType): string
+    {
+        if (!$orderType) return 'default';
+        $map = AppSetting::getJson('convert_layouts', []);
+        $val = $map[$orderType] ?? 'default';
+        $allowed = array_column(self::CONVERT_LAYOUTS, 'key');
+        return in_array($val, $allowed, true) ? $val : 'default';
+    }
+
+    public function getConvertLayouts()
+    {
+        return response()->json([
+            'available'   => self::CONVERT_LAYOUTS,
+            'order_types' => array_values(array_filter(array_map('strval', (array) AppSetting::getJson('order_types', ['Greeting Card', 'Pass Sleeve'])))),
+            'map'         => (object) AppSetting::getJson('convert_layouts', []),
+        ]);
+    }
+
+    public function updateConvertLayouts(Request $request)
+    {
+        $allowed = array_column(self::CONVERT_LAYOUTS, 'key');
+        $data = $request->validate([
+            'map'   => 'present|array',
+            'map.*' => ['string', \Illuminate\Validation\Rule::in($allowed)],
+        ]);
+        // Drop entries pointing to 'default' to keep the map lean.
+        $clean = [];
+        foreach ($data['map'] as $orderType => $layout) {
+            $orderType = trim((string) $orderType);
+            if ($orderType === '' || $layout === 'default') continue;
+            $clean[$orderType] = $layout;
+        }
+        AppSetting::setJson('convert_layouts', $clean);
+        return $this->getConvertLayouts();
+    }
+
     public function getStampConfig()
     {
         return response()->json(\App\Models\Order::stampConfig());
