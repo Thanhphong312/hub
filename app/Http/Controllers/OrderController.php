@@ -293,32 +293,52 @@ class OrderController extends Controller
      */
     private function syncItemAccessories(OrderItem $item, array $accessoryIds, ?int $tierId): float
     {
+        // Snapshot the current add-on set so we can tell if it actually changes
+        // below — a real change must invalidate this item's *_qr overlays.
+        $before = $item->accessoryPrices()->pluck('accessory_prices.id')
+            ->map(fn ($id) => (int) $id)->sort()->values()->all();
+
+        $total = 0.0;
         if (empty($accessoryIds) || $tierId === null) {
             $item->accessoryPrices()->sync([]);
             if ($item->accessory_item_id !== null) {
                 $item->update(['accessory_item_id' => null]);
             }
-            return 0.0;
+        } else {
+            $valid = AccessoryPrice::whereIn('id', $accessoryIds)
+                ->where('tier_id', $tierId)
+                ->get()
+                ->keyBy('id');
+            // Preserve the caller's order so accessory_item_id maps to the first
+            // accessory the user actually picked, not the lowest id.
+            $orderedValid = collect($accessoryIds)
+                ->map(fn ($id) => $valid->get((int) $id))
+                ->filter()
+                ->values();
+            if ($orderedValid->isEmpty()) {
+                $item->accessoryPrices()->sync([]);
+                $item->update(['accessory_item_id' => null]);
+            } else {
+                $ids = $orderedValid->pluck('id')->all();
+                $item->accessoryPrices()->sync($ids);
+                $item->update(['accessory_item_id' => $ids[0]]);
+                $total = (float) $orderedValid->sum('price');
+            }
         }
-        $valid = AccessoryPrice::whereIn('id', $accessoryIds)
-            ->where('tier_id', $tierId)
-            ->get()
-            ->keyBy('id');
-        // Preserve the caller's order so accessory_item_id maps to the first
-        // accessory the user actually picked, not the lowest id.
-        $orderedValid = collect($accessoryIds)
-            ->map(fn ($id) => $valid->get((int) $id))
-            ->filter()
-            ->values();
-        if ($orderedValid->isEmpty()) {
-            $item->accessoryPrices()->sync([]);
-            $item->update(['accessory_item_id' => null]);
-            return 0.0;
+
+        // A changed add-on set alters the barcode band text (system_id-{addon})
+        // on EVERY overlay, so drop all this item's *_qr metas and let the
+        // converter rebuild them with the new add-on. Mirrors the design-meta
+        // edit path; a no-op on initial create (no _qr metas exist yet).
+        $after = $item->accessoryPrices()->pluck('accessory_prices.id')
+            ->map(fn ($id) => (int) $id)->sort()->values()->all();
+        if ($before !== $after) {
+            OrderItemMeta::where('order_item_id', $item->id)
+                ->where('key', 'regexp', '_qr(_[0-9]+)?$')
+                ->delete();
         }
-        $ids = $orderedValid->pluck('id')->all();
-        $item->accessoryPrices()->sync($ids);
-        $item->update(['accessory_item_id' => $ids[0]]);
-        return (float) $orderedValid->sum('price');
+
+        return $total;
     }
 
     /**

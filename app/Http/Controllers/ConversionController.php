@@ -39,7 +39,8 @@ class ConversionController extends Controller
         // (combining all items of the same order) once per order.
         $query = Order::with([
                 'items.metas',
-                'items.accessoryPrice',
+                'items.accessoryPrice.accessory:id,name',
+                'items.accessoryPrices.accessory:id,name',
                 'items.productVariant.product:id,name,line_id,order_type',
             ])
             ->whereHas('items.metas', fn ($q) => $q->whereIn('key', self::SOURCE_KEYS))
@@ -135,6 +136,8 @@ class ConversionController extends Controller
                         'convert_layout' => \App\Http\Controllers\SettingController::convertLayoutFor(
                             $item->productVariant?->product?->order_type
                         ),
+                        // Full add-on code of this item (for the card-skin info block).
+                        'addon_code' => $this->itemAddonCode($item),
                         'pending' => $pending,
                     ];
                 }
@@ -253,7 +256,8 @@ class ConversionController extends Controller
 
         $query = Order::with([
                 'items.metas',
-                'items.accessoryPrice',
+                'items.accessoryPrice.accessory:id,name',
+                'items.accessoryPrices.accessory:id,name',
                 'items.productVariant.product:id,name,line_id,order_type',
             ])
             ->whereIn('system_id', $ids);
@@ -300,6 +304,7 @@ class ConversionController extends Controller
                         'accessory_summary' => $accessorySummary,
                         'line_id'           => $product->line_id ?? null,
                         'convert_layout'    => \App\Http\Controllers\SettingController::convertLayoutFor($product->order_type ?? null),
+                        'addon_code'        => $this->itemAddonCode($item),
                         'targets'           => $targets,
                     ];
                 }
@@ -318,6 +323,41 @@ class ConversionController extends Controller
      *   "N" when no accessory). Items sharing the same letter are merged so a
      *   long order doesn't produce a runaway "1P-1P-1P-1P-…" string.
      */
+    /** Full accessory code(s) of ONE item's selected add-ons (joined by '/'). */
+    private function itemAddonCode($item): string
+    {
+        $codes = [];
+        foreach ($item->accessoryPrices ?? [] as $ap) {
+            $c = $this->accessoryLabel($ap);
+            if ($c !== '') $codes[] = $c;
+        }
+        if (empty($codes) && $item->accessoryPrice) {
+            $c = $this->accessoryLabel($item->accessoryPrice);
+            if ($c !== '') $codes[] = $c;
+        }
+        return implode('/', array_values(array_unique($codes)));
+    }
+
+    /**
+     * Human-facing label for one accessory choice on a convert overlay.
+     * Prefer the print-relevant `accessory_code`, then `style`, and finally the
+     * parent accessory `name` — many accessories (e.g. card add-ons) carry only
+     * a name with no code/style, and the UI itself identifies add-ons by name
+     * (see OrderDetail add-on list), so without this fallback the overlay band
+     * came out empty even though the item had an add-on selected.
+     */
+    private function accessoryLabel($ap): string
+    {
+        // Card-skin band shows the human STYLE (e.g. "Small Chip"), not the
+        // short code (SMC). Fall back to code, then the parent accessory name,
+        // only when style is empty.
+        $c = trim((string) ($ap->style ?? ''));
+        if ($c !== '') return $c;
+        $c = trim((string) ($ap->accessory_code ?? ''));
+        if ($c !== '') return $c;
+        return trim((string) ($ap->accessory->name ?? ''));
+    }
+
     private function computeAccessorySummary($order): string
     {
         $totals = []; // letter => total qty
