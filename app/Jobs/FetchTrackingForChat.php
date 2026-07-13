@@ -89,6 +89,7 @@ class FetchTrackingForChat implements ShouldQueue
                     $this->progressMessageId,
                     $this->progressText($total, $done, $errors, $remaining, $last, true),
                     $this->threadId,
+                    'seller',
                 );
 
                 // Circuit breaker: stop hammering an unreachable carrier.
@@ -108,6 +109,7 @@ class FetchTrackingForChat implements ShouldQueue
                 $this->progressMessageId,
                 $this->summaryText($total, $done, $errors, $stopped),
                 $this->threadId,
+                'seller',
             );
         } finally {
             Cache::forget($lockKey);

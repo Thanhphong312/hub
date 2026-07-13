@@ -46,7 +46,7 @@ class OrderController extends Controller
             ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
-        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
+        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user', 'latestCancelRequest.user:id,name']));
 
         // Delivery tracking state (skip the heavy `raw` JSON column).
         $query->with(['tracking' => fn ($q) => $q->select(
@@ -218,7 +218,7 @@ class OrderController extends Controller
             ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
-        $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
+        $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user', 'latestCancelRequest.user:id,name']));
         if ($hideQr) {
             $order->makeHidden('production');
         } else {

@@ -84,6 +84,7 @@ class Order extends Model
     const STATUS_ONHOLD = 5;
     const STATUS_SHIPPED = 6;
     const STATUS_CANCELLED = 7;
+    const STATUS_PENDING_CANCEL = 8;   // seller requested cancel, awaiting admin decision
 
     const STATUS_MAP = [
         0 => 'new_order',
@@ -94,6 +95,7 @@ class Order extends Model
         5 => 'onhold',
         6 => 'shipped',
         7 => 'cancelled',
+        8 => 'pending_cancel',
     ];
 
     /**
@@ -193,6 +195,20 @@ class Order extends Model
     public function walletTransactions()
     {
         return $this->hasMany(WalletTransaction::class);
+    }
+
+    // All cancel requests raised against this order (history; re-request allowed
+    // after a rejection).
+    public function cancelRequests()
+    {
+        return $this->hasMany(CancelRequest::class);
+    }
+
+    // The most recent cancel request — drives the pending_cancel badge and the
+    // admin accept/reject column. Eager-loaded on the orders list/detail.
+    public function latestCancelRequest()
+    {
+        return $this->hasOne(CancelRequest::class)->latestOfMany();
     }
 
     // Image-URL validation summary (1:1). Null until the order has been seen

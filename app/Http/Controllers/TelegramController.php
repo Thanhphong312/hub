@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Jobs\FetchTrackingForChat;
 use App\Models\Order;
+use App\Models\TelegramBot;
 use App\Models\User;
 use App\Services\TelegramService;
 use Illuminate\Http\Request;
@@ -33,6 +34,8 @@ class TelegramController extends Controller
             'default_thread_id'  => 'nullable|integer',
             'topup_chat_id'      => 'nullable|string|max:120',
             'topup_thread_id'    => 'nullable|integer',
+            'cancel_chat_id'     => 'nullable|string|max:120',
+            'cancel_thread_id'   => 'nullable|integer',
             'report_days'        => 'nullable|integer|min:0|max:365',
             'daily_cron_enabled' => 'nullable|boolean',
         ]);
@@ -41,19 +44,61 @@ class TelegramController extends Controller
     }
 
     /**
-     * Admin: register the webhook with Telegram. URL is derived from APP_URL so
-     * Telegram posts updates to POST /api/telegram/webhook with the secret token.
+     * Admin: register the SELLER bot's webhook with Telegram. URL is derived
+     * from APP_URL so Telegram posts updates to POST /api/telegram/webhook with
+     * the seller bot's secret token. The admin bot never registers a webhook.
      */
     public function setWebhook()
     {
-        $cfg = TelegramService::settings();
+        $seller = TelegramBot::forKey('seller');
         $url = rtrim(config('app.url'), '/') . '/api/telegram/webhook';
         try {
-            $body = $this->telegram->setWebhook($url, $cfg['webhook_secret'] ?: null);
+            $body = $this->telegram->setWebhook($url, $seller?->webhook_secret ?: null, 'seller');
             return response()->json(['ok' => true, 'url' => $url, 'result' => $body]);
         } catch (\Throwable $e) {
             return response()->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
+    }
+
+    /**
+     * Read-only list of the two named bots (admin/seller). Never returns raw
+     * tokens/secrets — only booleans so the admin UI can show "set / not set".
+     */
+    public function getBots()
+    {
+        $bots = TelegramBot::orderBy('key')->get()->map(fn ($b) => [
+            'key'                => $b->key,
+            'label'              => $b->label,
+            'username'           => $b->username,
+            'has_token'          => !empty($b->token),
+            'has_webhook_secret' => !empty($b->webhook_secret),
+        ]);
+        return response()->json($bots);
+    }
+
+    /**
+     * Update one bot's credentials. Blank token/secret = keep the stored value
+     * (so the admin never re-enters a secret just to change the username).
+     */
+    public function updateBot(Request $request, string $key)
+    {
+        if (!in_array($key, ['admin', 'seller'], true)) {
+            return response()->json(['message' => 'Unknown bot'], 404);
+        }
+        $data = $request->validate([
+            'username'       => 'nullable|string|max:64',
+            'token'          => 'nullable|string|max:200',
+            'webhook_secret' => 'nullable|string|max:200',
+        ]);
+
+        $bot = TelegramBot::firstOrNew(['key' => $key]);
+        if (array_key_exists('username', $data)) $bot->username = $data['username'];
+        if (!empty($data['token']))          $bot->token = trim($data['token']);
+        if (!empty($data['webhook_secret'])) $bot->webhook_secret = trim($data['webhook_secret']);
+        $bot->label = $bot->label ?: ($key === 'admin' ? 'Admin (broadcast)' : 'Seller (commands + DMs)');
+        $bot->save();
+
+        return $this->getBots();
     }
 
     /**
@@ -76,8 +121,9 @@ class TelegramController extends Controller
      */
     public function handleWebhook(Request $request)
     {
-        // 1. Verify the shared secret Telegram echoes on every call.
-        $secret = TelegramService::settings()['webhook_secret'] ?? '';
+        // 1. Verify the shared secret Telegram echoes on every call. The webhook
+        // belongs to the SELLER bot, so verify against its secret.
+        $secret = TelegramBot::forKey('seller')?->webhook_secret ?? '';
         if ($secret) {
             $got = (string) $request->header('X-Telegram-Bot-Api-Secret-Token', '');
             if (!hash_equals($secret, $got)) {
@@ -144,12 +190,12 @@ class TelegramController extends Controller
             $this->registerFail($chatId);
             $this->reply($chatId, "❌ Incorrect email or password.");
             // Scrub the message that contained the password.
-            $this->telegram->deleteMessage($chatId, (int) $msgId);
+            $this->telegram->deleteMessage($chatId, (int) $msgId, 'seller');
             return response()->json(['ok' => true]);
         }
         if ((int) $user->status !== 1) {
             $this->reply($chatId, "❌ This account is inactive.");
-            $this->telegram->deleteMessage($chatId, (int) $msgId);
+            $this->telegram->deleteMessage($chatId, (int) $msgId, 'seller');
             return response()->json(['ok' => true]);
         }
 
@@ -161,7 +207,7 @@ class TelegramController extends Controller
         ])->save();
         Cache::forget("tg:login:fails:{$chatId}");
         Cache::forget($lockKey);
-        $this->telegram->deleteMessage($chatId, (int) $msgId);
+        $this->telegram->deleteMessage($chatId, (int) $msgId, 'seller');
         $this->reply($chatId, "✅ Linked! You'll receive order notifications here.");
 
         return response()->json(['ok' => true]);
@@ -250,6 +296,7 @@ class TelegramController extends Controller
                 $chatId,
                 "📦 <b>Fetch Tracking — Queue</b>\nTotal: {$pending} · ✅ 0 · ❌ 0\nStatus: Starting…",
                 $threadId,
+                'seller',
             );
         } catch (\Throwable $e) {
             Cache::forget($lockKey);
@@ -262,10 +309,10 @@ class TelegramController extends Controller
         return response()->json(['ok' => true]);
     }
 
-    /** Best-effort reply that never throws inside the webhook. */
+    /** Best-effort reply that never throws inside the webhook (seller bot). */
     private function reply($chatId, string $text): void
     {
-        try { $this->telegram->sendMessage($chatId, $text); }
+        try { $this->telegram->sendMessage($chatId, $text, null, 'seller'); }
         catch (\Throwable $e) { \Log::warning('[TelegramController] reply failed: ' . $e->getMessage()); }
     }
 

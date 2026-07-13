@@ -30,6 +30,8 @@ class TelegramService
             'default_thread_id'  => null,
             'topup_chat_id'      => '',
             'topup_thread_id'    => null,
+            'cancel_chat_id'     => '',    // group for seller cancel-request notices
+            'cancel_thread_id'   => null,
             'report_days'        => 0,
             'daily_cron_enabled' => false,
         ]);
@@ -43,16 +45,27 @@ class TelegramService
     }
 
     /**
+     * Resolve a bot's token from the `telegram_bots` table.
+     *   'admin'  → group broadcasts (no webhook)
+     *   'seller' → user commands + DMs (owns the webhook)
+     */
+    public static function tokenFor(string $bot = 'admin'): string
+    {
+        return \App\Models\TelegramBot::forKey($bot)?->token ?? '';
+    }
+
+    /**
      * Send a plain message. Returns the Telegram message id on success.
      *
      * @param  string|int  $chatId
      * @param  string      $text
      * @param  int|null    $threadId   (forum supergroup thread / topic)
+     * @param  string      $bot        which bot to send as ('admin' | 'seller')
      */
-    public function sendMessage($chatId, string $text, ?int $threadId = null): int
+    public function sendMessage($chatId, string $text, ?int $threadId = null, string $bot = 'admin'): int
     {
-        $token = self::settings()['bot_token'] ?? '';
-        if (!$token) throw new \RuntimeException('Telegram bot_token is not configured');
+        $token = self::tokenFor($bot);
+        if (!$token) throw new \RuntimeException("Telegram token for '{$bot}' bot is not configured");
 
         $payload = [
             'chat_id'    => $chatId,
@@ -80,9 +93,9 @@ class TelegramService
      *
      * @param string|int $chatId
      */
-    public function editMessageText($chatId, int $messageId, string $text, ?int $threadId = null): void
+    public function editMessageText($chatId, int $messageId, string $text, ?int $threadId = null, string $bot = 'admin'): void
     {
-        $token = self::settings()['bot_token'] ?? '';
+        $token = self::tokenFor($bot);
         if (!$token || !$messageId) return;
 
         $payload = [
@@ -107,9 +120,9 @@ class TelegramService
      *
      * @param string|int $chatId
      */
-    public function deleteMessage($chatId, int $messageId): void
+    public function deleteMessage($chatId, int $messageId, string $bot = 'admin'): void
     {
-        $token = self::settings()['bot_token'] ?? '';
+        $token = self::tokenFor($bot);
         if (!$token || !$messageId) return;
         try {
             Http::asJson()->timeout(10)
@@ -127,10 +140,10 @@ class TelegramService
      * `secret_token` is echoed back by Telegram in the
      * X-Telegram-Bot-Api-Secret-Token header on every webhook call.
      */
-    public function setWebhook(string $url, ?string $secret = null): array
+    public function setWebhook(string $url, ?string $secret = null, string $bot = 'seller'): array
     {
-        $token = self::settings()['bot_token'] ?? '';
-        if (!$token) throw new \RuntimeException('Telegram bot_token is not configured');
+        $token = self::tokenFor($bot);
+        if (!$token) throw new \RuntimeException("Telegram token for '{$bot}' bot is not configured");
 
         $payload = ['url' => $url, 'drop_pending_updates' => true];
         if ($secret) $payload['secret_token'] = $secret;
@@ -153,7 +166,6 @@ class TelegramService
     public function notifyNewOrder(Order $order, \App\Models\User $owner): void
     {
         $cfg = self::settings();
-        if (empty($cfg['bot_token'])) return;
 
         $text = implode("\n", array_filter([
             '📦 <b>New Order Created</b>',
@@ -164,17 +176,16 @@ class TelegramService
             'Owner: ' . e($owner->name ?? ('#' . $owner->id)),
         ]));
 
-        // Owner's private chat (only if they linked their account and haven't
-        // muted notifications via the /recievemessage command).
-        if (!empty($owner->telegram_chat_id) && $owner->telegram_notifications_enabled) {
-            try { $this->sendMessage($owner->telegram_chat_id, $text); }
+        // Owner's private DM via the SELLER bot (only if linked + not muted).
+        if (!empty($owner->telegram_chat_id) && $owner->telegram_notifications_enabled && self::tokenFor('seller')) {
+            try { $this->sendMessage($owner->telegram_chat_id, $text, null, 'seller'); }
             catch (\Throwable $e) { \Log::warning('[TelegramService] notifyNewOrder owner: ' . $e->getMessage()); }
         }
 
-        // Admin channel copy.
+        // Admin group copy via the ADMIN bot.
         $adminChat = $cfg['default_chat_id'] ?? null;
-        if ($adminChat && (string) $adminChat !== (string) ($owner->telegram_chat_id ?? '')) {
-            try { $this->sendMessage($adminChat, $text, $cfg['default_thread_id'] ?? null); }
+        if ($adminChat && self::tokenFor('admin')) {
+            try { $this->sendMessage($adminChat, $text, $cfg['default_thread_id'] ?? null, 'admin'); }
             catch (\Throwable $e) { \Log::warning('[TelegramService] notifyNewOrder admin: ' . $e->getMessage()); }
         }
     }
@@ -186,7 +197,7 @@ class TelegramService
     public function notifyOrdersImported(\App\Models\User $owner, int $count): void
     {
         $cfg = self::settings();
-        if (empty($cfg['bot_token']) || $count < 1) return;
+        if ($count < 1) return;
 
         $text = implode("\n", [
             '📦 <b>Orders Imported</b>',
@@ -194,13 +205,15 @@ class TelegramService
             'By: ' . e($owner->name ?? ('#' . $owner->id)),
         ]);
 
-        if (!empty($owner->telegram_chat_id) && $owner->telegram_notifications_enabled) {
-            try { $this->sendMessage($owner->telegram_chat_id, $text); }
+        // Uploader's DM via the SELLER bot.
+        if (!empty($owner->telegram_chat_id) && $owner->telegram_notifications_enabled && self::tokenFor('seller')) {
+            try { $this->sendMessage($owner->telegram_chat_id, $text, null, 'seller'); }
             catch (\Throwable $e) { \Log::warning('[TelegramService] notifyOrdersImported owner: ' . $e->getMessage()); }
         }
+        // Admin group copy via the ADMIN bot.
         $adminChat = $cfg['default_chat_id'] ?? null;
-        if ($adminChat && (string) $adminChat !== (string) ($owner->telegram_chat_id ?? '')) {
-            try { $this->sendMessage($adminChat, $text, $cfg['default_thread_id'] ?? null); }
+        if ($adminChat && self::tokenFor('admin')) {
+            try { $this->sendMessage($adminChat, $text, $cfg['default_thread_id'] ?? null, 'admin'); }
             catch (\Throwable $e) { \Log::warning('[TelegramService] notifyOrdersImported admin: ' . $e->getMessage()); }
         }
     }
@@ -215,12 +228,47 @@ class TelegramService
         $cfg      = self::settings();
         $chatId   = $cfg['topup_chat_id']   ?: ($cfg['default_chat_id']   ?? null);
         $threadId = $cfg['topup_thread_id'] ?? ($cfg['default_thread_id'] ?? null);
-        if (!$chatId || empty($cfg['bot_token'])) return;
+        if (!$chatId || !self::tokenFor('admin')) return;
+
+        try {
+            $this->sendMessage($chatId, $text, $threadId ? (int) $threadId : null, 'admin');
+        } catch (\Throwable $e) {
+            \Log::warning('[TelegramService] notifyTopup failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Best-effort ping to the admin cancel-request group when a seller submits
+     * an order cancellation. Sends to `cancel_chat_id` (falls back to
+     * `default_chat_id`). Never throws — a Telegram failure must not break the
+     * cancel request, which has already been committed.
+     */
+    public function notifyCancelRequest(Order $order, \App\Models\User $seller, float $percent, float $refund): void
+    {
+        $cfg = self::settings();
+        if (!self::tokenFor('admin')) return;
+
+        $chatId   = $cfg['cancel_chat_id']   ?: ($cfg['default_chat_id']   ?? null);
+        $threadId = $cfg['cancel_thread_id'] ?? ($cfg['default_thread_id'] ?? null);
+        if (!$chatId) return;
+
+        $cr = $order->latestCancelRequest; // reason_cancel + previous_status
+        $prevStatus = $cr->previous_status ?? $order->status;
+
+        $text = implode("\n", array_filter([
+            '🚫 <b>Yêu cầu huỷ đơn</b>',
+            sprintf('Order: <b>%s</b>', e($order->system_id)),
+            $order->ref_id ? 'Ref: ' . e($order->ref_id) : null,
+            'Seller: ' . e($seller->name ?? ('#' . $seller->id)),
+            'Trạng thái: ' . e(Order::STATUS_MAP[$prevStatus] ?? (string) $prevStatus),
+            sprintf('Hoàn dự kiến: $%.2f (%s%%)', $refund, rtrim(rtrim(number_format($percent, 2), '0'), '.')),
+            ($cr && $cr->reason_cancel) ? 'Lý do: ' . e($cr->reason_cancel) : null,
+        ]));
 
         try {
             $this->sendMessage($chatId, $text, $threadId ? (int) $threadId : null);
         } catch (\Throwable $e) {
-            \Log::warning('[TelegramService] notifyTopup failed: ' . $e->getMessage());
+            \Log::warning('[TelegramService] notifyCancelRequest failed: ' . $e->getMessage());
         }
     }
 
@@ -230,10 +278,10 @@ class TelegramService
      * only when no webhook is set. The admin needs to send any message in
      * each group after adding the bot so the chat shows up here.
      */
-    public function discoverGroups(): array
+    public function discoverGroups(string $bot = 'admin'): array
     {
-        $token = self::settings()['bot_token'] ?? '';
-        if (!$token) throw new \RuntimeException('Telegram bot_token is not configured');
+        $token = self::tokenFor($bot);
+        if (!$token) throw new \RuntimeException("Telegram token for '{$bot}' bot is not configured");
 
         $res = Http::asJson()->timeout(15)
             ->get(self::API_BASE . "/bot{$token}/getUpdates", ['limit' => 100, 'timeout' => 0]);

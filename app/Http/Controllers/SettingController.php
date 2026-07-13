@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\AppSetting;
+use App\Models\CancelPolicy;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\Tier;
@@ -320,6 +321,36 @@ class SettingController extends Controller
         $current = AppSetting::getJson('qr_config', []);
         AppSetting::setJson('qr_config', array_merge($current, $data));
         return $this->getQrConfig();
+    }
+
+    // ----------------------------------------------------------------------
+    // Cancel policy — per order-status refund % of paid_cost + whether cancel
+    // is allowed from that status. One row per Order::STATUS_*. Admin edits in
+    // Bullstart-app → Settings → Cancel Policy. Read by CancelController for the
+    // seller's refund preview and at approval time.
+    // ----------------------------------------------------------------------
+    public function getCancelPolicy()
+    {
+        return response()->json(CancelPolicy::orderBy('order_status')->get());
+    }
+
+    public function updateCancelPolicy(Request $request)
+    {
+        $data = $request->validate([
+            'policies'                => 'required|array',
+            'policies.*.order_status' => 'required|integer|min:0|max:8',
+            'policies.*.percent'      => 'required|numeric|min:0|max:100',
+            'policies.*.enabled'      => 'required|boolean',
+        ]);
+
+        foreach ($data['policies'] as $p) {
+            CancelPolicy::updateOrCreate(
+                ['order_status' => $p['order_status']],
+                ['percent' => $p['percent'], 'enabled' => $p['enabled']],
+            );
+        }
+
+        return response()->json(CancelPolicy::orderBy('order_status')->get());
     }
 
     public function getVnpayMerchant()

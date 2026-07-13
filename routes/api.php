@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CancelController;
 use App\Http\Controllers\ConversionController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\GangsheetController;
@@ -115,6 +116,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{order}/pay', [OrderController::class, 'pay']);
     Route::post('/orders/{order}/resend-preview', [OrderController::class, 'resendPreview']);
     Route::post('/orders/{order}/resend', [OrderController::class, 'storeResend']);
+    // Order cancellation (seller raises; controller scopes to owner).
+    Route::post('/orders/{order}/cancel-preview', [CancelController::class, 'preview']);
+    Route::post('/orders/{order}/request-cancel', [CancelController::class, 'requestCancel']);
+    Route::get('/cancel-requests', [CancelController::class, 'index']);
     Route::post('/orders/{order}/image-validation', [OrderImageValidationController::class, 'store']);
     Route::post('/orders/{order}/reconvert', [OrderController::class, 'reconvert']);
     Route::post('/orders/{order}/reconvert-label', [OrderController::class, 'reconvertLabel']);
@@ -303,6 +308,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/wallet/refund', [WalletController::class, 'refund']);
         Route::post('/wallet/transactions/bulk-refund', [WalletController::class, 'bulkRefund']);
         Route::post('/wallet/transactions/bulk-refund-delete', [WalletController::class, 'bulkRefundDelete']);
+
+        // Order cancellation decisions (admin).
+        Route::post('/orders/{order}/cancel/approve', [CancelController::class, 'approve']);
+        Route::post('/orders/{order}/cancel/reject',  [CancelController::class, 'reject']);
     });
 
     // Inventory (admin only) — manual stock imports. Shipping orders also
@@ -365,6 +374,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/stamp-config', [SettingController::class, 'updateStampConfig']);
         Route::put('/resend-config', [SettingController::class, 'updateResendConfig']);
 
+        Route::get('/cancel-policy', [SettingController::class, 'getCancelPolicy']);
+        Route::put('/cancel-policy', [SettingController::class, 'updateCancelPolicy']);
+
         Route::get('/qr-config', [SettingController::class, 'getQrConfig']);
         Route::put('/qr-config', [SettingController::class, 'updateQrConfig']);
 
@@ -373,6 +385,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/telegram',         [TelegramController::class, 'getSettings']);
         Route::put('/telegram',         [TelegramController::class, 'updateSettings']);
+        // Two-bot credentials (admin broadcast bot + seller command bot).
+        Route::get('/telegram/bots',        [TelegramController::class, 'getBots']);
+        Route::put('/telegram/bots/{key}',  [TelegramController::class, 'updateBot']);
         Route::get('/bank-transfer',    [\App\Http\Controllers\BankTransferController::class, 'getSettings']);
         Route::put('/bank-transfer',    [\App\Http\Controllers\BankTransferController::class, 'updateSettings']);
         Route::get('/telegram/groups',  [TelegramController::class, 'discoverGroups']);
