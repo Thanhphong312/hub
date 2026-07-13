@@ -70,6 +70,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/settings/stamp-config', [SettingController::class, 'getStampConfig']);
     // Resend config — readable by any auth user (resend modal methods/reasons).
     Route::get('/settings/resend-config', [SettingController::class, 'getResendConfig']);
+    // Order types — readable by any auth user (Products dropdown + item Type).
+    Route::get('/settings/order-types', [SettingController::class, 'getOrderTypes']);
+    // Convert layouts — order_type → convert flow (composeImage reads it).
+    Route::get('/settings/convert-layouts', [SettingController::class, 'getConvertLayouts']);
 
     // Generic B2 upload proxy for browser SPAs (web-bullstart). Desktop apps
     // upload directly via the Electron main process and skip this.
@@ -109,6 +113,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{order}/fetch-tracking', [OrderController::class, 'fetchTrackingOne']);
     Route::post('/orders/{order}/save-tracking', [OrderController::class, 'saveTracking']);
     Route::post('/orders/{order}/buy-label', [OrderController::class, 'buyLabel']);
+    Route::get('/orders/{order}/ship-cost-preview', [OrderController::class, 'shipCostPreview']);
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     Route::put('/orders/{order}', [OrderController::class, 'update']);
     Route::delete('/orders/{order}', [OrderController::class, 'destroy']);
@@ -126,6 +131,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
     Route::put('/order-items/{item}/mockups', [OrderController::class, 'updateItemMockups']);
     Route::put('/order-items/{item}/accessories', [OrderController::class, 'updateItemAccessories']);
+    Route::get('/order-items/{item}/variant-preview', [OrderController::class, 'variantPreview']);
+    Route::put('/order-items/{item}/variant', [OrderController::class, 'updateItemVariant']);
+    Route::put('/order-items/{item}/order-type', [OrderController::class, 'updateItemOrderType']);
 
     // Server-side proxy for fetching convert_label image bytes — bypasses
     // browser CORS when Electron renderer needs to embed labels into a
@@ -382,6 +390,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/shippo-config', [SettingController::class, 'getShippoConfig']);
         Route::put('/shippo-config', [SettingController::class, 'updateShippoConfig']);
+
+        Route::put('/order-types', [SettingController::class, 'updateOrderTypes']);
+        Route::put('/convert-layouts', [SettingController::class, 'updateConvertLayouts']);
 
         Route::get('/telegram',         [TelegramController::class, 'getSettings']);
         Route::put('/telegram',         [TelegramController::class, 'updateSettings']);

@@ -222,7 +222,7 @@ class GangsheetController extends Controller
     {
         $query = Order::with([
             'items.metas' => fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX),
-            'items.productVariant.product:id,name,line_id',
+            'items.productVariant.product:id,name,line_id,order_type',
             'items.material:id,name',
             // Eager-load both legacy single-accessory and multi-pivot so the
             // Compose tab can filter "Scratch Card" by accessory.id, not name.
@@ -271,7 +271,7 @@ class GangsheetController extends Controller
 
         $orders = Order::with([
             'items.metas' => fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX),
-            'items.productVariant.product:id,name,line_id',
+            'items.productVariant.product:id,name,line_id,order_type',
             'items.material:id,name',
             // Eager-load both legacy single-accessory and multi-pivot so the
             // Compose tab can filter "Scratch Card" by accessory.id, not name.

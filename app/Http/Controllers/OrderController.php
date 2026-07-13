@@ -293,32 +293,52 @@ class OrderController extends Controller
      */
     private function syncItemAccessories(OrderItem $item, array $accessoryIds, ?int $tierId): float
     {
+        // Snapshot the current add-on set so we can tell if it actually changes
+        // below — a real change must invalidate this item's *_qr overlays.
+        $before = $item->accessoryPrices()->pluck('accessory_prices.id')
+            ->map(fn ($id) => (int) $id)->sort()->values()->all();
+
+        $total = 0.0;
         if (empty($accessoryIds) || $tierId === null) {
             $item->accessoryPrices()->sync([]);
             if ($item->accessory_item_id !== null) {
                 $item->update(['accessory_item_id' => null]);
             }
-            return 0.0;
+        } else {
+            $valid = AccessoryPrice::whereIn('id', $accessoryIds)
+                ->where('tier_id', $tierId)
+                ->get()
+                ->keyBy('id');
+            // Preserve the caller's order so accessory_item_id maps to the first
+            // accessory the user actually picked, not the lowest id.
+            $orderedValid = collect($accessoryIds)
+                ->map(fn ($id) => $valid->get((int) $id))
+                ->filter()
+                ->values();
+            if ($orderedValid->isEmpty()) {
+                $item->accessoryPrices()->sync([]);
+                $item->update(['accessory_item_id' => null]);
+            } else {
+                $ids = $orderedValid->pluck('id')->all();
+                $item->accessoryPrices()->sync($ids);
+                $item->update(['accessory_item_id' => $ids[0]]);
+                $total = (float) $orderedValid->sum('price');
+            }
         }
-        $valid = AccessoryPrice::whereIn('id', $accessoryIds)
-            ->where('tier_id', $tierId)
-            ->get()
-            ->keyBy('id');
-        // Preserve the caller's order so accessory_item_id maps to the first
-        // accessory the user actually picked, not the lowest id.
-        $orderedValid = collect($accessoryIds)
-            ->map(fn ($id) => $valid->get((int) $id))
-            ->filter()
-            ->values();
-        if ($orderedValid->isEmpty()) {
-            $item->accessoryPrices()->sync([]);
-            $item->update(['accessory_item_id' => null]);
-            return 0.0;
+
+        // A changed add-on set alters the barcode band text (system_id-{addon})
+        // on EVERY overlay, so drop all this item's *_qr metas and let the
+        // converter rebuild them with the new add-on. Mirrors the design-meta
+        // edit path; a no-op on initial create (no _qr metas exist yet).
+        $after = $item->accessoryPrices()->pluck('accessory_prices.id')
+            ->map(fn ($id) => (int) $id)->sort()->values()->all();
+        if ($before !== $after) {
+            OrderItemMeta::where('order_item_id', $item->id)
+                ->where('key', 'regexp', '_qr(_[0-9]+)?$')
+                ->delete();
         }
-        $ids = $orderedValid->pluck('id')->all();
-        $item->accessoryPrices()->sync($ids);
-        $item->update(['accessory_item_id' => $ids[0]]);
-        return (float) $orderedValid->sum('price');
+
+        return $total;
     }
 
     /**
@@ -529,6 +549,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
                     'order_type' => $itemData['order_type'] ?? 0,
+                    'order_type_label' => $this->productOrderType((int) $itemData['product_variant_id']),
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
@@ -579,6 +600,52 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
             ], 201);
         });
+    }
+
+    /**
+     * GET /api/orders/{order}/ship-cost-preview?ship_type=stamp|seller_ship|tiktok_ship
+     *
+     * Staff-only. Returns the shipping_cost + total_cost the order WOULD get if
+     * its ship_type were changed — without saving. Mirrors update()'s recompute
+     * so the edit form can show the new price live before the user hits Save.
+     */
+    public function shipCostPreview(Request $request, Order $order)
+    {
+        $user = $request->user();
+        if (!($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
+            return response()->json(['message' => 'Only staff can preview ship cost'], 403);
+        }
+        $request->validate([
+            'ship_type' => 'required|in:tiktok_ship,seller_ship,stamp',
+        ]);
+
+        $order->loadMissing('items');
+        $totalQty       = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
+        $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+        $tierId         = $order->user?->tier_id;
+        $shipType       = $request->ship_type;
+
+        if ($shipType === Order::SHIP_STAMP) {
+            $shipping = Order::stampShippingCost($totalQty);
+        } elseif ($shipType === Order::SHIP_SELLER) {
+            $shipping = $firstVariantId
+                ? $this->computeOrderShipping($firstVariantId, $tierId, false, $totalQty)
+                : 0;
+        } else { // tiktok_ship: label_fee when a label is present, else 0.
+            $hasLabel = !empty($order->shipping_label);
+            $shipping = ($firstVariantId && $hasLabel)
+                ? $this->computeOrderShipping($firstVariantId, $tierId, true, $totalQty)
+                : 0;
+        }
+        $shipping = round((float) $shipping, 2);
+
+        return response()->json([
+            'ship_type'     => $shipType,
+            'shipping_cost' => $shipping,
+            'print_cost'    => round((float) $order->print_cost, 2),
+            'total_cost'    => round((float) $order->print_cost + $shipping, 2),
+            'clears_label'  => in_array($shipType, [Order::SHIP_STAMP, Order::SHIP_SELLER], true),
+        ]);
     }
 
     public function update(Request $request, Order $order)
@@ -1281,6 +1348,177 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 'accessory_ids' => $item->accessoryPrices()->pluck('accessory_prices.id'),
                 'order' => $order->fresh()->load([
                     'items.metas', 'items.productVariant', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier',
+                    'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address',
+                ]),
+            ]);
+        });
+    }
+
+    /**
+     * PUT /api/order-items/{item}/order-type — set the item's order_type label
+     * (order_items.order_type_label). Staff/owner, blocked only when cancelled.
+     * Body: { order_type: string|null }. Empty clears it (falls back to the
+     * product's order_type on display).
+     */
+    public function updateItemOrderType(Request $request, OrderItem $item)
+    {
+        $caller = $request->user();
+        $item->loadMissing('order');
+        $order = $item->order;
+        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+
+        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
+        if (!$isStaff && $order->user_id !== $caller?->id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if ((int) $order->status === Order::STATUS_CANCELLED) {
+            return response()->json(['message' => 'Order is cancelled — type is locked'], 422);
+        }
+
+        $data = $request->validate([
+            'order_type' => 'present|nullable|string|max:64',
+        ]);
+        $label = $data['order_type'] !== null ? trim($data['order_type']) : null;
+        $item->update(['order_type_label' => ($label === '' ? null : $label)]);
+
+        return response()->json([
+            'message'          => 'Item type updated',
+            'item_id'          => $item->id,
+            'order_type_label' => $item->order_type_label,
+        ]);
+    }
+
+    /**
+     * GET /api/order-items/{item}/variant-preview?product_variant_id=X
+     *
+     * Staff/owner. Returns the item price + order totals the order WOULD get if
+     * this item's variant were swapped — without saving. Mirrors
+     * updateItemVariant's recompute so the UI can review the new price first.
+     */
+    public function variantPreview(Request $request, OrderItem $item)
+    {
+        $caller = $request->user();
+        $item->loadMissing('order.user', 'metas');
+        $order = $item->order;
+        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+
+        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
+        if (!$isStaff && $order->user_id !== $caller?->id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        $request->validate(['product_variant_id' => 'required|integer|exists:product_variants,id']);
+
+        $tierId = $order->user?->tier_id;
+        if ($tierId === null) {
+            return response()->json(['message' => "Order owner has no tier — can't price the variant"], 422);
+        }
+
+        $newVariantId = (int) $request->product_variant_id;
+        $newItemPrice = $this->computeItemPrice($item->metas, $newVariantId, $tierId);
+
+        // Recompute totals with this item priced at the new variant.
+        $order->load('items.accessoryPrices');
+        $totalQty = 0;
+        $totalPrint = 0;
+        foreach ($order->items as $it) {
+            $itQty   = max(1, (int) ($it->quantity ?? 1));
+            $itAcc   = (float) $it->accessoryPrices->sum('price');
+            $itPrice = $it->id === $item->id ? $newItemPrice : (float) $it->price;
+            $totalPrint += ($itPrice + $itAcc) * $itQty;
+            $totalQty   += $itQty;
+        }
+        $hasLabel = !empty($order->shipping_label);
+        // First variant drives shipping; if THIS item is first, use the new one.
+        $firstItem = $order->items->first();
+        $firstVariantId = ($firstItem && $firstItem->id === $item->id)
+            ? $newVariantId
+            : (int) ($firstItem?->product_variant_id ?? 0);
+        $shipping = $firstVariantId
+            ? $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty)
+            : (float) $order->shipping_cost;
+
+        return response()->json([
+            'item_price'    => round((float) $newItemPrice, 2),
+            'old_item_price'=> round((float) $item->price, 2),
+            'print_cost'    => round((float) $totalPrint, 2),
+            'shipping_cost' => round((float) $shipping, 2),
+            'total_cost'    => round((float) $totalPrint + $shipping, 2),
+            'old_total_cost'=> round((float) $order->total_cost, 2),
+        ]);
+    }
+
+    /**
+     * PUT /api/order-items/{item}/variant — swap the item's product variant for
+     * a different one and re-price. Staff or the order owner; blocked once the
+     * order is shipped/cancelled. Re-prices the item from the new variant
+     * (base_cost + 2nd_fee per its design faces) and recomputes order totals —
+     * same recompute path as updateItemAccessories.
+     *
+     * Body: { product_variant_id: int }
+     */
+    public function updateItemVariant(Request $request, OrderItem $item)
+    {
+        $caller = $request->user();
+        $item->loadMissing('order.user', 'metas');
+        $order = $item->order;
+        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+
+        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
+        $isOwner = $order->user_id === $caller?->id;
+        if (!$isStaff && !$isOwner) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if ((int) $order->status === Order::STATUS_CANCELLED) {
+            return response()->json(['message' => 'Order is cancelled — variant is locked'], 422);
+        }
+
+        $request->validate([
+            'product_variant_id' => 'required|integer|exists:product_variants,id',
+        ]);
+
+        $ownerTierId = $order->user?->tier_id;
+        if ($ownerTierId === null) {
+            return response()->json(['message' => "Order owner has no tier — can't price the variant"], 422);
+        }
+
+        return DB::transaction(function () use ($request, $item, $order, $ownerTierId) {
+            $newVariantId = (int) $request->product_variant_id;
+            // Re-price the item from the new variant using its existing design
+            // faces (base_cost + 2nd_fee × (faces − 1)).
+            $newPrice = $this->computeItemPrice($item->metas, $newVariantId, $ownerTierId);
+            $item->update([
+                'product_variant_id' => $newVariantId,
+                'order_type_label'   => $this->productOrderType($newVariantId),
+                'price'              => $newPrice,
+            ]);
+
+            // Recompute order totals from every item (mirrors updateItemAccessories).
+            $order->load('items.accessoryPrices', 'user');
+            $totalQty = 0;
+            $totalPrint = 0;
+            foreach ($order->items as $it) {
+                $itQty = max(1, (int) ($it->quantity ?? 1));
+                $itAcc = (float) $it->accessoryPrices->sum('price');
+                $totalPrint += ((float) $it->price + $itAcc) * $itQty;
+                $totalQty += $itQty;
+            }
+            $hasLabel = !empty($order->shipping_label);
+            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+            $shippingCost = $firstVariantId
+                ? $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty)
+                : (float) $order->shipping_cost;
+            $order->update([
+                'print_cost'    => $totalPrint,
+                'shipping_cost' => $shippingCost,
+                'total_cost'    => $totalPrint + $shippingCost,
+            ]);
+
+            return response()->json([
+                'message' => 'Variant updated; order totals recomputed',
+                'item_id' => $item->id,
+                'order'   => $order->fresh()->load([
+                    'items.metas', 'items.productVariant.product', 'items.material',
+                    'items.accessoryPrice.accessory', 'items.accessoryPrice.tier',
                     'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address',
                 ]),
             ]);
@@ -2331,6 +2569,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'mockup_front' => $data['mockup_front'] ?? null,
                     'mockup_back' => $data['mockup_back'] ?? null,
                     'order_type' => (int)($data['order_type'] ?? 0),
+                    'order_type_label' => $this->productOrderType((int) $variantId),
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
@@ -2540,7 +2779,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             // app doesn't need a second round-trip when switching variants.
             'payment_settings' => [
                 'pingpong' => \App\Models\AppSetting::getJson('invoice_pingpong', []),
-                'vnpay'    => \App\Models\AppSetting::getJson('invoice_vnpay', []),
+                // Inject the USD→VND exchange rate so the VNPay invoice can print
+                // the converted VND amount next to the USD total.
+                'vnpay'    => array_merge(
+                    \App\Models\AppSetting::getJson('invoice_vnpay', []),
+                    ['vnd_per_usd' => (float) (\App\Models\AppSetting::getJson('wallet_exchange_rate', [])['vnd_per_usd'] ?? config('services.vnpay.rate'))]
+                ),
             ],
         ]);
     }
@@ -3056,6 +3300,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
                     'order_type' => $itemData['order_type'] ?? 0,
+                    'order_type_label' => $this->productOrderType((int) $itemData['product_variant_id']),
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
@@ -3207,6 +3452,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'mockup_front'       => $src->mockup_front,
                     'mockup_back'        => $src->mockup_back,
                     'order_type'         => $src->order_type,
+                    'order_type_label'   => $src->order_type_label ?? $this->productOrderType((int) $src->product_variant_id),
                     'price'              => $src->price,
                     'quantity'           => $src->quantity,
                 ]);
@@ -3363,6 +3609,25 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     private function getVariantPrice(int $variantId, ?int $tierId): float
     {
         return $this->getVariantPriceByKey($variantId, $tierId, 'base_cost');
+    }
+
+    /**
+     * The order_type label of the product behind a variant (products.order_type).
+     * Snapshotted onto order_items.order_type_label at create/update time so the
+     * item's "Type" reflects the product chosen, even if the product changes
+     * later. Cached per request to avoid repeat lookups in bulk creates.
+     */
+    private array $orderTypeCache = [];
+    private function productOrderType(?int $variantId): ?string
+    {
+        if (!$variantId) return null;
+        if (array_key_exists($variantId, $this->orderTypeCache)) {
+            return $this->orderTypeCache[$variantId];
+        }
+        $label = \App\Models\ProductVariant::where('id', $variantId)
+            ->with('product:id,order_type')
+            ->first()?->product?->order_type;
+        return $this->orderTypeCache[$variantId] = $label;
     }
 
     /**
