@@ -91,6 +91,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-pay', [OrderController::class, 'bulkPay']);
     Route::get('/orders/unpaid-summary', [OrderController::class, 'unpaidSummary']);
     Route::post('/orders/pay-all-unpaid', [OrderController::class, 'payAllUnpaid']);
+    // Shipping-only recalc on explicitly selected orders (fix a mis-priced
+    // variant): preview the diff, then apply + refund overpaid. Admin/support.
+    Route::post('/orders/recalc-shipping/preview', [OrderController::class, 'recalcShippingPreview']);
+    Route::post('/orders/recalc-shipping/apply', [OrderController::class, 'recalcShippingApply']);
     Route::post('/orders/auto-pay/run', [OrderController::class, 'autoPayRun']);
     Route::get('/orders/auto-pay/status', [OrderController::class, 'autoPayStatus']);
     Route::post('/orders/auto-pay/run-for/{user}', [OrderController::class, 'autoPayRunFor']);

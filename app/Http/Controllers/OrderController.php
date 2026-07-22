@@ -3701,6 +3701,218 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     }
 
     /**
+     * Recompute ONLY the order's shipping against the current price tables,
+     * keeping print_cost exactly as stored. Used by the shipping-fix flow:
+     * a mis-entered shipping price on a variant is corrected in the price
+     * table, then affected orders are re-totalled without touching item /
+     * add-on prices (which may legitimately differ or have been edited).
+     *
+     * total_cost is rebuilt as (stored print_cost + corrected shipping) so it
+     * self-heals any prior drift while never re-pricing the print side.
+     * Returns ['print_cost','shipping_cost','total_cost']. Persists nothing.
+     */
+    private function recomputeOrderShipping(Order $order): array
+    {
+        $order->loadMissing('items', 'user');
+        $tierId = $order->user?->tier_id;
+
+        $totalQty = 0;
+        foreach ($order->items as $it) {
+            $totalQty += max(1, (int) ($it->quantity ?? 1));
+        }
+
+        $hasLabel       = !empty($order->shipping_label);
+        $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+        $newShipping    = $firstVariantId
+            ? round((float) $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty), 2)
+            : round((float) $order->shipping_cost, 2);
+
+        $print    = round((float) $order->print_cost, 2);
+        $newTotal = round($print + $newShipping, 2);
+
+        return [
+            'print_cost'    => $print,
+            'shipping_cost' => $newShipping,
+            'total_cost'    => $newTotal,
+        ];
+    }
+
+    /**
+     * POST /api/orders/recalc-shipping/preview — admin/support only.
+     *
+     * For the explicitly-selected order_ids, recompute shipping only (keeping
+     * print_cost) and report where it drifted from what the order stored. When
+     * the order was already paid and the correct total is now lower, reports the
+     * refund that would go back to the owner's wallet. Nothing is written.
+     *
+     * Per-order selection (not filter-wide) is deliberate: the caller picks
+     * exactly the orders touched by the mis-priced variant, avoiding a mass
+     * mistake. Body: { order_ids: int[] }.
+     */
+    public function recalcShippingPreview(Request $request)
+    {
+        $caller = $request->user();
+        if (!($caller?->role && in_array($caller->role->slug, ['admin', 'support'], true))) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $request->validate([
+            'order_ids'   => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        $orders = Order::with(['items', 'user'])->whereIn('id', $request->order_ids)->get();
+
+        $rows        = [];
+        $totalRefund = 0.0;
+        foreach ($orders as $order) {
+            $new      = $this->recomputeOrderShipping($order);
+            $oldShip  = round((float) $order->shipping_cost, 2);
+            $oldTotal = round((float) $order->total_cost, 2);
+            $newShip  = $new['shipping_cost'];
+            $newTotal = $new['total_cost'];
+            $paid     = round((float) $order->paid_cost, 2);
+            $refund   = max(0, round($paid - $newTotal, 2));
+
+            // Only surface orders whose shipping/total actually changed.
+            if (abs($newShip - $oldShip) < 0.005 && abs($newTotal - $oldTotal) < 0.005) {
+                continue;
+            }
+
+            $totalRefund += $refund;
+            $rows[] = [
+                'id'            => $order->id,
+                'system_id'     => $order->system_id,
+                'ref_id'        => $order->ref_id,
+                'user_id'       => $order->user_id,
+                'user_name'     => $order->user?->name,
+                'status'        => (int) $order->status,
+                'old_shipping'  => $oldShip,
+                'new_shipping'  => $newShip,
+                'diff_shipping' => round($newShip - $oldShip, 2),
+                'old_total'     => $oldTotal,
+                'new_total'     => $newTotal,
+                'paid_cost'     => $paid,
+                'is_paid'       => $paid > 0.005,
+                'refund'        => $refund,
+            ];
+        }
+
+        return response()->json([
+            'requested'    => count($request->order_ids),
+            'changed'      => count($rows),
+            'total_refund' => round($totalRefund, 2),
+            'orders'       => $rows,
+        ]);
+    }
+
+    /**
+     * POST /api/orders/recalc-shipping/apply — admin/support only.
+     *
+     * Applies the shipping-only recalc for the given order_ids. For each order
+     * whose shipping/total drifted:
+     *   1. Persist the corrected shipping_cost + total_cost (print_cost kept).
+     *   2. If it was paid and now overpaid (paid_cost > new total), refund the
+     *      difference to the owner's wallet and write a `refund` WalletTransaction
+     *      ("Refund chênh lệch shipping"), then set paid_cost = new total.
+     *   3. Underpaid orders are only re-totalled — no extra charge is taken.
+     *
+     * One DB::transaction so a failure rolls the whole batch back.
+     * Body: { order_ids: int[] }.
+     */
+    public function recalcShippingApply(Request $request)
+    {
+        $caller = $request->user();
+        if (!($caller?->role && in_array($caller->role->slug, ['admin', 'support'], true))) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $request->validate([
+            'order_ids'   => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        $orders = Order::with(['items', 'user'])->whereIn('id', $request->order_ids)->get();
+
+        $result = DB::transaction(function () use ($orders) {
+            $updated      = 0;
+            $refunded     = 0;
+            $totalRefund  = 0.0;
+            $walletCache  = []; // user_id => locked User (running balance across the batch)
+            $details      = [];
+
+            foreach ($orders as $order) {
+                $new      = $this->recomputeOrderShipping($order);
+                $newShip  = $new['shipping_cost'];
+                $newTotal = $new['total_cost'];
+                $oldShip  = round((float) $order->shipping_cost, 2);
+                $oldTotal = round((float) $order->total_cost, 2);
+                $paid     = round((float) $order->paid_cost, 2);
+
+                // Nothing drifted → leave the order untouched.
+                if (abs($newShip - $oldShip) < 0.005 && abs($newTotal - $oldTotal) < 0.005) {
+                    continue;
+                }
+
+                $refund  = max(0, round($paid - $newTotal, 2));
+                $updates = [
+                    'shipping_cost' => $newShip,
+                    'total_cost'    => $newTotal,
+                ];
+
+                if ($refund > 0 && $order->user) {
+                    $owner = $walletCache[$order->user_id]
+                        ??= \App\Models\User::lockForUpdate()->find($order->user_id);
+                    $balanceBefore = (float) $owner->wallet;
+                    $owner->increment('wallet', $refund);
+                    $owner->refresh();
+
+                    $updates['paid_cost'] = $newTotal;
+
+                    WalletTransaction::create([
+                        'user_id'         => $owner->id,
+                        'order_id'        => $order->id,
+                        'order_system_id' => $order->system_id,
+                        'type'            => 'refund',
+                        'status'          => WalletTransaction::STATUS_APPROVED,
+                        'amount'          => $refund,
+                        'balance_before'  => $balanceBefore,
+                        'balance_after'   => (float) $owner->wallet,
+                        'refunded_at'     => now(),
+                        'note'            => "Refund chênh lệch shipping đơn #{$order->system_id} ({$oldShip} → {$newShip})",
+                    ]);
+
+                    $refunded++;
+                    $totalRefund += $refund;
+                }
+
+                $order->update($updates);
+                $updated++;
+
+                $details[] = [
+                    'id'           => $order->id,
+                    'system_id'    => $order->system_id,
+                    'new_shipping' => $newShip,
+                    'new_total'    => $newTotal,
+                    'refund'       => $refund,
+                ];
+            }
+
+            return [$updated, $refunded, $totalRefund, $details];
+        });
+
+        [$updated, $refunded, $totalRefund, $details] = $result;
+
+        return response()->json([
+            'message'        => "Đã tính lại {$updated} đơn, refund {$refunded} đơn tổng \$" . number_format($totalRefund, 2),
+            'updated_count'  => $updated,
+            'refunded_count' => $refunded,
+            'total_refund'   => round($totalRefund, 2),
+            'details'        => $details,
+        ]);
+    }
+
+    /**
      * Shared list filters for GET /orders, /orders/export, /orders/invoice-data,
      * and GET /fulfill. Callers must apply seller/admin user scoping first.
      */
