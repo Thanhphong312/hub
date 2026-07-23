@@ -324,6 +324,19 @@
                                bg-white text-blue-600 border-blue-300 hover:bg-blue-50 hover:border-blue-400 hover:shadow-md">
                         🖨 Print Label
                     </button>
+                    {{-- Mark shipped WITHOUT printing the label (plain form → just updates status). --}}
+                    <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="flex-1">
+                        @csrf
+                        <input type="hidden" name="status" value="shipped" />
+                        <button type="submit"
+                            @if ($isShipped) disabled @endif
+                            class="w-full px-4 py-2.5 rounded-lg font-bold text-sm border-2 transition shadow-sm
+                                   {{ $isShipped
+                                      ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
+                                      : 'bg-teal-500 text-white border-teal-600 hover:bg-teal-600 hover:shadow-md' }}">
+                            ✓ {{ $isShipped ? 'Shipped' : 'Ship (no print)' }}
+                        </button>
+                    </form>
                     <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="flex-1">
                         @csrf
                         <input type="hidden" name="status" value="onhold" />
