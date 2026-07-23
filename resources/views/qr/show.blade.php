@@ -301,7 +301,7 @@
                 <p class="text-[10px] text-neutral-400 mt-1 truncate mb-3">{{ $printLabel }}</p>
 
                 {{-- Ship action buttons next to the label for one-click marking after print --}}
-                <div class="flex gap-2 pt-3 border-t border-neutral-100" data-system-id="{{ $order->system_id }}">
+                <div class="flex flex-wrap gap-2 pt-3 border-t border-neutral-100" data-system-id="{{ $order->system_id }}">
                     @php
                         $isShipped = $order->status === \App\Models\Order::STATUS_SHIPPED;
                         $isOnHold = $order->status === \App\Models\Order::STATUS_ONHOLD;
@@ -311,21 +311,21 @@
                         @if ($isShipped) disabled @endif
                         data-image-url="{{ route('qr.label-image', ['systemId' => $order->system_id]) }}"
                         data-status-url="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}"
-                        class="flex-1 px-4 py-2.5 rounded-lg font-bold text-sm border-2 transition shadow-sm
+                        class="flex-1 min-w-[160px] px-4 py-2.5 rounded-lg font-bold text-sm border-2 transition shadow-sm
                                {{ $isShipped
                                   ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
                                   : 'bg-green-500 text-white border-green-600 hover:bg-green-600 hover:shadow-md' }}">
-                        ✓ {{ $isShipped ? 'Shipped' : 'Ship & Print' }}
+                        🖨 {{ $isShipped ? 'Shipped' : 'Ship + In label' }}
                     </button>
                     <button type="button"
                         id="printOnlyBtn"
                         data-image-url="{{ route('qr.label-image', ['systemId' => $order->system_id]) }}"
-                        class="flex-1 px-4 py-2.5 rounded-lg font-bold text-sm border-2 transition shadow-sm
+                        class="flex-1 min-w-[160px] px-4 py-2.5 rounded-lg font-bold text-sm border-2 transition shadow-sm
                                bg-white text-blue-600 border-blue-300 hover:bg-blue-50 hover:border-blue-400 hover:shadow-md">
-                        🖨 Print Label
+                        🖨 In label (không ship)
                     </button>
                     {{-- Mark shipped WITHOUT printing the label (plain form → just updates status). --}}
-                    <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="flex-1">
+                    <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="flex-1 min-w-[160px]">
                         @csrf
                         <input type="hidden" name="status" value="shipped" />
                         <button type="submit"
@@ -334,10 +334,10 @@
                                    {{ $isShipped
                                       ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
                                       : 'bg-teal-500 text-white border-teal-600 hover:bg-teal-600 hover:shadow-md' }}">
-                            ✓ {{ $isShipped ? 'Shipped' : 'Ship (no print)' }}
+                            ✓ {{ $isShipped ? 'Shipped' : 'Ship (không in)' }}
                         </button>
                     </form>
-                    <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="flex-1">
+                    <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="flex-1 min-w-[160px]">
                         @csrf
                         <input type="hidden" name="status" value="onhold" />
                         <button type="submit"
