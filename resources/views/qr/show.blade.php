@@ -315,7 +315,7 @@
                                {{ $isShipped
                                   ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
                                   : 'bg-green-500 text-white border-green-600 hover:bg-green-600 hover:shadow-md' }}">
-                        🖨 {{ $isShipped ? 'Shipped' : 'Ship + In label' }}
+                        🖨 {{ $isShipped ? 'Shipped' : 'ship + print label' }}
                     </button>
                     <button type="button"
                         id="printOnlyBtn"
@@ -334,7 +334,7 @@
                                    {{ $isShipped
                                       ? 'bg-green-100 text-green-700 border-green-200 cursor-not-allowed opacity-60'
                                       : 'bg-teal-500 text-white border-teal-600 hover:bg-teal-600 hover:shadow-md' }}">
-                            ✓ {{ $isShipped ? 'Shipped' : 'Ship (không in)' }}
+                            ✓ {{ $isShipped ? 'Shipped' : 'shipped ( no printed label)' }}
                         </button>
                     </form>
                     <form method="POST" action="{{ route('qr.update-status', ['systemId' => $order->system_id]) }}" class="flex-1 min-w-[160px]">
