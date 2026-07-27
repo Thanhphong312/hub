@@ -47,6 +47,7 @@ class OrderController extends Controller
      *     @OA\Parameter(name="paper_type",          in="query", description="product_variants.paper_type exact", @OA\Schema(type="string")),
      *     @OA\Parameter(name="material_id",         in="query", description="order_items.material_id", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="accessory_id",        in="query", description="orders có item dùng accessory này", @OA\Schema(type="integer")),
+     *     @OA\Parameter(name="accessory_code",      in="query", description="Exact match trên accessory_prices.accessory_code (e.g. W, R, B). Kết hợp được với accessory_id.", @OA\Schema(type="string")),
      *     @OA\Parameter(name="sort_by",             in="query", @OA\Schema(type="string", default="id")),
      *     @OA\Parameter(name="sort_dir",            in="query", @OA\Schema(type="string", enum={"asc","desc"}, default="desc")),
      *     @OA\Parameter(name="page",                in="query", @OA\Schema(type="integer", default=1)),
@@ -4028,6 +4029,16 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $q->where(function ($w) use ($accessoryId) {
                     $w->whereHas('accessoryPrice', fn ($ap) => $ap->where('accessory_id', $accessoryId))
                       ->orWhereHas('accessoryPrices', fn ($ap) => $ap->where('accessory_id', $accessoryId));
+                });
+            });
+        }
+
+        if ($request->filled('accessory_code')) {
+            $code = strtoupper(trim($request->accessory_code));
+            $query->whereHas('items', function ($q) use ($code) {
+                $q->where(function ($w) use ($code) {
+                    $w->whereHas('accessoryPrice', fn ($ap) => $ap->where('accessory_code', $code))
+                      ->orWhereHas('accessoryPrices', fn ($ap) => $ap->where('accessory_code', $code));
                 });
             });
         }
