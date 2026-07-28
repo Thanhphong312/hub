@@ -27,6 +27,12 @@ use Illuminate\Support\Facades\Route;
 // Public
 Route::post('/login', [AuthController::class, 'login']);
 
+// Materials (chất liệu) — public read, no auth required. Catalogue data only
+// (id/name/description/is_default), no pricing or user-scoped fields. Writes
+// stay admin-only inside the auth:sanctum group below.
+Route::get('/products/{product}/materials', [ProductController::class, 'listMaterials']);
+Route::get('/materials/{material}', [ProductController::class, 'showMaterial']);
+
 // Public Telegram webhook — authenticated by the X-Telegram-Bot-Api-Secret-Token
 // header (verified in the controller against the configured webhook_secret).
 Route::post('/telegram/webhook', [TelegramController::class, 'handleWebhook'])
@@ -148,10 +154,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/products/{product}/variants', [ProductController::class, 'variants']);
     Route::get('/products/{product}/prices', [ProductController::class, 'prices']);
 
-    // Materials — public read (any authenticated user). Writes are admin-only
-    // and live in the admin group below.
-    Route::get('/products/{product}/materials', [ProductController::class, 'listMaterials']);
-    Route::get('/materials/{material}', [ProductController::class, 'showMaterial']);
+    // Materials read is public — registered above, outside auth:sanctum.
+    // Writes are admin-only and live in the admin group below.
 
     // Products (admin write)
     Route::middleware(CheckRole::class . ':admin')->group(function () {

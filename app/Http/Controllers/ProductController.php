@@ -675,8 +675,7 @@ class ProductController extends Controller
      * @OA\Get(
      *     path="/products/{product}/materials",
      *     tags={"Products"},
-     *     summary="List a product's materials",
-     *     security={{"bearerAuth":{}}},
+     *     summary="List a product's materials (public, no auth)",
      *     @OA\Parameter(name="product", in="path", required=true, @OA\Schema(type="integer"), example=1),
      *     @OA\Response(response=200, description="Material list",
      *         @OA\JsonContent(type="array",
@@ -701,8 +700,7 @@ class ProductController extends Controller
      * @OA\Get(
      *     path="/materials/{material}",
      *     tags={"Products"},
-     *     summary="Get one material",
-     *     security={{"bearerAuth":{}}},
+     *     summary="Get one material (public, no auth)",
      *     @OA\Parameter(name="material", in="path", required=true, @OA\Schema(type="integer"), example=7),
      *     @OA\Response(response=200, description="Material detail"),
      *     @OA\Response(response=404, description="Not found")
