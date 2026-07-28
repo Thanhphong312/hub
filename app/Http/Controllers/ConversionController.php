@@ -14,6 +14,21 @@ class ConversionController extends Controller
     /** Source meta keys we want to convert. */
     private const SOURCE_KEYS = ['front', 'back', 'left', 'right', 'neck', 'special'];
 
+    /**
+     * Variant sizes converted (and ganged) at their NATIVE design size instead
+     * of the default 10×7 stretch — e.g. greeting card 5x5 (design laid flat is
+     * 10×5). Matched case/format-insensitively (5x5, 5X5, 5×5, "5 x 5").
+     */
+    public const KEEP_NATIVE_SIZES = ['5x5'];
+
+    /** True when a variant size should keep its native design size on convert. */
+    public static function isKeepNativeSize(?string $size): bool
+    {
+        if ($size === null || $size === '') return false;
+        $norm = str_replace([' ', '×'], ['', 'x'], strtolower(trim($size)));
+        return in_array($norm, self::KEEP_NATIVE_SIZES, true);
+    }
+
     /** Regex matching every produced _qr meta key, e.g. front_qr, front_qr_1, back_qr_3. */
     private const QR_KEY_REGEX_SQL = '_qr(_[0-9]+)?$';
 
@@ -130,12 +145,19 @@ class ConversionController extends Controller
                         // the system_id overlay and rotate 180° for the
                         // back face of a greeting card (line_id "GC").
                         'line_id' => $item->productVariant?->product?->line_id,
+                        // Variant size (e.g. "5x5") — surfaced so the gang flow can
+                        // bucket keep-native sizes separately.
+                        'variant_size' => $item->productVariant?->size,
                         // Convert layout resolved from the product's order_type
                         // (Settings → Convert layouts). The composer switches on
-                        // this instead of matching product names.
-                        'convert_layout' => \App\Http\Controllers\SettingController::convertLayoutFor(
-                            $item->productVariant?->product?->order_type
-                        ),
+                        // this instead of matching product names. A keep-native
+                        // variant size (e.g. 5x5) overrides to 'native' so the
+                        // design is converted at its own size (no 10×7 stretch).
+                        'convert_layout' => self::isKeepNativeSize($item->productVariant?->size)
+                            ? 'native'
+                            : \App\Http\Controllers\SettingController::convertLayoutFor(
+                                $item->productVariant?->product?->order_type
+                            ),
                         // Full add-on code of this item (for the card-skin info block).
                         'addon_code' => $this->itemAddonCode($item),
                         'pending' => $pending,

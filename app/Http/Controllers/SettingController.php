@@ -287,6 +287,7 @@ class SettingController extends Controller
     public const CONVERT_LAYOUTS = [
         ['key' => 'default', 'label' => 'Mặc định (barcode trên design, góc dưới-trái)'],
         ['key' => 'outside', 'label' => 'Barcode ngoài design (band trắng dưới)'],
+        ['key' => 'native',  'label' => 'Giữ nguyên kích thước design (vd greeting card 5x5)'],
     ];
 
     /** Resolve the convert layout for an order_type label (default when unset). */
