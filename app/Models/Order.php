@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class Order extends Model
 {
     protected $fillable = [
-        'user_id', 'system_id', 'ref_id', 'note', 'status', 'ship_type', 'shipping_label',
+        'user_id', 'source', 'system_id', 'ref_id', 'note', 'status', 'ship_type', 'shipping_label',
         'shipping_label_converted', 'convert_label', 'proof_image',
         'tracking_id', 'print_cost', 'shipping_cost', 'total_cost',
         'paid_cost', 'completed_time', 'production', 'stock_decremented',
@@ -95,6 +95,36 @@ class Order extends Model
         6 => 'shipped',
         7 => 'cancelled',
     ];
+
+    // ------------------------------------------------------------------
+    // Order channel (orders.source). FPT orders live in the same tables as
+    // the normal ones and share pricing, wallet, convert and tracking; they
+    // are only separated where the operator must not mix them — the order
+    // list and the gangsheet composer.
+    // ------------------------------------------------------------------
+    const SOURCE_NORMAL = 'normal';
+    const SOURCE_FPT    = 'fpt';
+    const SOURCES = [self::SOURCE_NORMAL, self::SOURCE_FPT];
+
+    /** Normalise a request value to a known source, defaulting to 'normal'. */
+    public static function normalizeSource($value): string
+    {
+        $v = strtolower(trim((string) $value));
+        return in_array($v, self::SOURCES, true) ? $v : self::SOURCE_NORMAL;
+    }
+
+    /**
+     * Scope a query to one channel. `$value` comes straight off the request:
+     *   missing / unknown → 'normal' only (so existing screens are unchanged)
+     *   'fpt'             → FPT only
+     *   'all'             → no filter
+     * Rows written before the column existed default to 'normal'.
+     */
+    public function scopeOfSource($query, $value)
+    {
+        if (strtolower(trim((string) $value)) === 'all') return $query;
+        return $query->where('source', self::normalizeSource($value));
+    }
 
     /**
      * Orders that have a shipping label but no tracking yet — the queue the

@@ -11,6 +11,7 @@ class Gangsheet extends Model
         'filename',
         'file_url',
         'line_id',
+        'source',
         'page_format',
         'first_system_id',
         'last_system_id',

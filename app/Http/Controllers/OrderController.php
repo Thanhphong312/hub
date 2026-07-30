@@ -390,10 +390,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $request->validate([
             'ref_id' => 'required|string',
             'note' => 'nullable|string|max:5000',
+            'source' => 'nullable|string|in:' . implode(',', Order::SOURCES),
             'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
             'items.*.material_id' => 'nullable|exists:materials,id',
+            // FPT orders carry an uploaded SKU-label URL per item.
+            'items.*.sku_label' => 'nullable|string',
             // Legacy single accessory (kept for backward compat — callers may
             // still send it). Multi-accessory uses accessory_ids[] below.
             'items.*.accessory_item_id' => 'nullable|exists:accessory_prices,id',
@@ -477,6 +480,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $firstVariantId = (int) ($request->items[0]['product_variant_id'] ?? 0) ?: null;
             $order = Order::create([
                 'user_id' => $request->user()->id,
+                'source' => Order::normalizeSource($request->input('source')),
                 'system_id' => $this->generateSystemId(), // temporary, updated after we have order.id
                 'ref_id' => $finalRefId,
                 'note' => $request->input('note'),
@@ -502,6 +506,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'accessory_item_id' => null, // set by syncItemAccessories below
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
+                    'sku_label' => $itemData['sku_label'] ?? null,
                     'order_type' => $itemData['order_type'] ?? 0,
                     'order_type_label' => $this->productOrderType((int) $itemData['product_variant_id']),
                     'price' => $price,
@@ -2319,13 +2324,18 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      */
     public function importCsv(Request $request)
     {
-        $request->validate(['file' => 'required|file|mimes:csv,txt']);
+        $request->validate([
+            'file' => 'required|file|mimes:csv,txt',
+            'source' => 'nullable|string|in:' . implode(',', Order::SOURCES),
+        ]);
 
         $file = $request->file('file');
         $rows = array_map('str_getcsv', file($file->getPathname()));
         $header = array_map('trim', array_shift($rows));
 
         $user = $request->user();
+        // Whole import lands in one channel — the screen that uploaded it.
+        $importSource = Order::normalizeSource($request->input('source'));
         $created = [];
         $createdOrderIds = [];
         $errors = [];
@@ -2468,6 +2478,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
                     $order = Order::create([
                         'user_id' => $user->id,
+                        'source' => $importSource,
                         'system_id' => $this->generateSystemId(), // temporary
                         'ref_id' => $finalRef,
                         'status' => Order::STATUS_NEW_ORDER,
@@ -2522,6 +2533,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     ),
                     'mockup_front' => $data['mockup_front'] ?? null,
                     'mockup_back' => $data['mockup_back'] ?? null,
+                    'sku_label' => $data['sku_label'] ?? null,
                     'order_type' => (int)($data['order_type'] ?? 0),
                     'order_type_label' => $this->productOrderType((int) $variantId),
                     'price' => $price,
@@ -3169,10 +3181,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $request->validate([
             'ref_id' => 'nullable|string',
             'note' => 'nullable|string|max:5000',
+            'source' => 'nullable|string|in:' . implode(',', Order::SOURCES),
             'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
             'items.*.material_id' => 'nullable|exists:materials,id',
+            // FPT orders carry an uploaded SKU-label URL per item.
+            'items.*.sku_label' => 'nullable|string',
             // Legacy single accessory (kept for backward compat — callers may
             // still send it). Multi-accessory uses accessory_ids[] below.
             'items.*.accessory_item_id' => 'nullable|exists:accessory_prices,id',
@@ -3222,6 +3237,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $firstVariantId = (int) ($request->items[0]['product_variant_id'] ?? 0) ?: null;
             $order = Order::create([
                 'user_id' => $user->id,
+                'source' => Order::normalizeSource($request->input('source')),
                 'system_id' => $this->generateSystemId(), // temporary, updated after we have order.id
                 'ref_id' => $rawRefId,
                 'note' => $request->input('note'),
@@ -3247,6 +3263,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'accessory_item_id' => null,
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
+                    'sku_label' => $itemData['sku_label'] ?? null,
                     'order_type' => $itemData['order_type'] ?? 0,
                     'order_type_label' => $this->productOrderType((int) $itemData['product_variant_id']),
                     'price' => $price,
@@ -3376,6 +3393,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $firstVariantId = (int) ($order->items->first()->product_variant_id ?? 0) ?: null;
             $resend = Order::create([
                 'user_id'            => $owner->id,
+                'source'             => $order->source,   // a resend stays in its channel
                 'resend_of_order_id' => $order->id,
                 'resend_method'      => $data['method'],
                 'resend_reason'      => $data['reason'],
@@ -3399,6 +3417,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'material_id'        => $src->material_id,
                     'mockup_front'       => $src->mockup_front,
                     'mockup_back'        => $src->mockup_back,
+                    'sku_label'          => $src->sku_label,
                     'order_type'         => $src->order_type,
                     'order_type_label'   => $src->order_type_label ?? $this->productOrderType((int) $src->product_variant_id),
                     'price'              => $src->price,
@@ -3919,6 +3938,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      */
     private function applyOrderListFilters(Builder $query, Request $request): void
     {
+        // Channel scope FIRST — every list (index, export, invoice, API) goes
+        // through here, so an FPT order can never leak into a normal listing
+        // and vice-versa. No `source` param = 'normal', which is what every
+        // existing client sends. Pass source=all to see both.
+        $query->ofSource($request->input('source'));
+
         if ($request->has('status')) {
             $query->where('status', $request->status);
         }

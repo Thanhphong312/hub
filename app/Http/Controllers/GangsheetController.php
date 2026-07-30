@@ -19,6 +19,12 @@ class GangsheetController extends Controller
     {
         $query = Gangsheet::with('creator:id,name', 'partners:id,name', 'downloadedBy:id,name')->orderBy('id', 'desc');
 
+        // Channel scope. Gangs written before the column existed default to
+        // 'normal', so the normal screen keeps listing everything it used to.
+        if (strtolower(trim((string) $request->input('source'))) !== 'all') {
+            $query->where('source', \App\Models\Order::normalizeSource($request->input('source')));
+        }
+
         if ($request->filled('date_from')) {
             $query->whereDate('created_at', '>=', $request->date_from);
         }
@@ -235,6 +241,10 @@ class GangsheetController extends Controller
             ->whereHas('items.metas', fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX)->where('production', false))
             ->orderBy('id', 'asc');
 
+        // Channel scope — the FPT composer must never pull normal orders and
+        // vice-versa. No param = 'normal' (what the existing screen sends).
+        $query->ofSource($request->input('source'));
+
         if ($request->filled('line_id')) {
             $query->whereHas('items.productVariant.product', fn ($q) => $q->where('line_id', $request->line_id));
         }
@@ -323,6 +333,7 @@ class GangsheetController extends Controller
             'filename' => 'required|string',
             'file_url' => 'required|url',
             'line_id' => 'nullable|string|max:16',
+            'source' => 'nullable|string|in:' . implode(',', \App\Models\Order::SOURCES),
             'page_format' => 'nullable|string|max:16',
             'first_system_id' => 'nullable|string',
             'last_system_id' => 'nullable|string',
@@ -340,6 +351,7 @@ class GangsheetController extends Controller
                 'filename'        => $request->filename,
                 'file_url'        => $request->file_url,
                 'line_id'         => $request->line_id,
+                'source'          => \App\Models\Order::normalizeSource($request->input('source')),
                 'page_format'     => $request->page_format,
                 'first_system_id' => $request->first_system_id,
                 'last_system_id'  => $request->last_system_id,

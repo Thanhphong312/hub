@@ -61,6 +61,9 @@ class GangsheetGroupController extends Controller
 
         $summary = DB::transaction(function () use ($groupSize, $rules) {
             $pending = Order::with($this->orderEagerLoads())
+                // Automation only sweeps the normal channel. FPT orders are
+                // composed by hand on their own screen.
+                ->where('source', Order::SOURCE_NORMAL)
                 ->where('production', false)
                 ->whereNull('gangsheet_group_id')
                 ->where('status', '!=', Order::STATUS_SHIPPED)
