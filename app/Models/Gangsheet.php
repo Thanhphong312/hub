@@ -10,6 +10,7 @@ class Gangsheet extends Model
         'created_by_user_id',
         'filename',
         'file_url',
+        'png_urls',
         'line_id',
         'source',
         'page_format',
@@ -26,6 +27,7 @@ class Gangsheet extends Model
     protected function casts(): array
     {
         return [
+            'png_urls' => 'array',
             'order_ids' => 'array',
             'meta_ids' => 'array',
             'downloaded_at' => 'datetime',

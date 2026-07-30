@@ -247,6 +247,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheets', [GangsheetController::class, 'store']);
         Route::post('/gangsheets/bulk-delete', [GangsheetController::class, 'bulkDestroy']);
         Route::post('/gangsheets/{gangsheet}/toggle-downloaded', [GangsheetController::class, 'toggleDownloaded']);
+        // Attach per-page PNG exports to a gang built earlier (Manage tab).
+        Route::put('/gangsheets/{gangsheet}/png-urls', [GangsheetController::class, 'updatePngUrls']);
         Route::get('/gangsheets/{gangsheet}', [GangsheetController::class, 'show']);
         Route::delete('/gangsheets/{gangsheet}', [GangsheetController::class, 'destroy']);
 

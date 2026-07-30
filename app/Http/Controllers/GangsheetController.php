@@ -332,6 +332,8 @@ class GangsheetController extends Controller
         $request->validate([
             'filename' => 'required|string',
             'file_url' => 'required|url',
+            'png_urls' => 'nullable|array',
+            'png_urls.*' => 'url',
             'line_id' => 'nullable|string|max:16',
             'source' => 'nullable|string|in:' . implode(',', \App\Models\Order::SOURCES),
             'page_format' => 'nullable|string|max:16',
@@ -350,6 +352,7 @@ class GangsheetController extends Controller
             $gangsheet = app(\App\Services\GangsheetService::class)->record([
                 'filename'        => $request->filename,
                 'file_url'        => $request->file_url,
+                'png_urls'        => $request->input('png_urls'),
                 'line_id'         => $request->line_id,
                 'source'          => \App\Models\Order::normalizeSource($request->input('source')),
                 'page_format'     => $request->page_format,
@@ -371,6 +374,36 @@ class GangsheetController extends Controller
             'message' => 'Gangsheet saved',
             'gangsheet' => $gangsheet->load('creator:id,name'),
         ], 201);
+    }
+
+    /**
+     * Attach the per-page PNG exports to a gang that was built before (or
+     * without) them. The desktop app rasterises the stored PDF, uploads the
+     * pages to B2 and posts the resulting URLs here. Already-exported gangs
+     * are returned untouched so the caller can just reuse the existing files.
+     */
+    public function updatePngUrls(Request $request, Gangsheet $gangsheet)
+    {
+        $request->validate([
+            'png_urls' => 'required|array|min:1',
+            'png_urls.*' => 'url',
+        ]);
+
+        if (!empty($gangsheet->png_urls)) {
+            return response()->json([
+                'message' => 'Gangsheet already has PNG exports',
+                'gangsheet' => $gangsheet,
+                'reused' => true,
+            ]);
+        }
+
+        $gangsheet->update(['png_urls' => array_values($request->input('png_urls'))]);
+
+        return response()->json([
+            'message' => 'PNG exports saved',
+            'gangsheet' => $gangsheet->fresh(),
+            'reused' => false,
+        ]);
     }
 
     public function destroy(Gangsheet $gangsheet)

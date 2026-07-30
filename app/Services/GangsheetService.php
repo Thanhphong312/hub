@@ -33,6 +33,7 @@ class GangsheetService
                 'created_by_user_id' => $userId,
                 'filename'           => $data['filename'],
                 'file_url'           => $data['file_url'],
+                'png_urls'           => $data['png_urls'] ?? null,
                 'line_id'            => $data['line_id'] ?? null,
                 'source'             => $data['source'] ?? \App\Models\Order::SOURCE_NORMAL,
                 'page_format'        => $data['page_format'] ?? null,
