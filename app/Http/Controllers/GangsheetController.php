@@ -387,9 +387,13 @@ class GangsheetController extends Controller
         $request->validate([
             'png_urls' => 'required|array|min:1',
             'png_urls.*' => 'url',
+            'force' => 'nullable|boolean',
         ]);
 
-        if (!empty($gangsheet->png_urls)) {
+        // force=true is the "xuất lại" path: the caller rebuilt the pages on
+        // purpose (e.g. after the card-skin sheets became transparent) and
+        // wants the record to point at the new files.
+        if (!empty($gangsheet->png_urls) && !$request->boolean('force')) {
             return response()->json([
                 'message' => 'Gangsheet already has PNG exports',
                 'gangsheet' => $gangsheet,
