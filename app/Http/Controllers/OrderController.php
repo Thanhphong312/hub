@@ -2375,7 +2375,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $assignedInBatch = [];
 
-        $response = DB::transaction(function () use ($rows, $header, $user, $force, $rename, &$assignedInBatch, &$created, &$createdOrderIds, &$errors) {
+        $response = DB::transaction(function () use ($rows, $header, $user, $force, $rename, $importSource, &$assignedInBatch, &$created, &$createdOrderIds, &$errors) {
             // ref_id (after rename) → Order model already created in this batch.
             // Rows sharing a ref_id append items to the same order instead of
             // creating a new one.
