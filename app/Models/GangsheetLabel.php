@@ -11,6 +11,7 @@ class GangsheetLabel extends Model
         'created_by_user_id',
         'name',
         'line_id',
+        'source',
         'order_ids',
         'merged_from_label_ids',
         'file_url',

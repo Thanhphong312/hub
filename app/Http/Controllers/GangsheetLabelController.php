@@ -13,6 +13,12 @@ class GangsheetLabelController extends Controller
     {
         $query = GangsheetLabel::with('creator:id,name')->orderBy('id', 'desc');
 
+        // Channel scope — no param means 'normal', which is what the existing
+        // screen sends. Rows written before the column existed default to it.
+        if (strtolower(trim((string) $request->input('source'))) !== 'all') {
+            $query->where('source', \App\Models\Order::normalizeSource($request->input('source')));
+        }
+
         if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
@@ -167,6 +173,9 @@ class GangsheetLabelController extends Controller
             'created_by_user_id' => $request->user()?->id,
             'name' => 'merged_' . now()->format('Ymd_His'),
             'line_id' => $dominantLineId ?: null,
+            // Children are always merged within one screen, so they share a
+            // channel; take the first one's rather than defaulting to normal.
+            'source' => $labels->first()->source ?? \App\Models\Order::SOURCE_NORMAL,
             'order_ids' => $orderIds,
             'merged_from_label_ids' => $labels->pluck('id')->all(),
             'orders_count' => count($orderIds),
@@ -221,6 +230,7 @@ class GangsheetLabelController extends Controller
             'created_by_user_id'    => $request->user()?->id,
             'name'                  => 'labels_' . now()->format('Ymd_His'),
             'line_id'               => null,
+            'source'                => \App\Models\Order::normalizeSource($request->input('source')),
             'order_ids'             => $orderIds,
             'merged_from_label_ids' => null,
             'orders_count'          => count($orderIds),

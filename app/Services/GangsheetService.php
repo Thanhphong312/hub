@@ -28,14 +28,23 @@ class GangsheetService
         $orderIds = array_values(array_unique(array_map('intval', $data['order_ids'] ?? [])));
         $metaIds  = array_values(array_unique(array_map('intval', $data['meta_ids'] ?? [])));
 
-        return DB::transaction(function () use ($data, $orderIds, $metaIds, $userId) {
+        // The channel is a property of the ORDERS, not of the screen that asked:
+        // derive it from the first member order so every caller is correct by
+        // construction — the partner app never sends one, and Find / Re-gang
+        // could otherwise stamp "fpt" on a gang built from normal orders. The
+        // explicit value is only a fallback for when no order resolves.
+        $source = ($orderIds ? Order::whereIn('id', $orderIds)->orderBy('id')->value('source') : null)
+            ?? $data['source']
+            ?? Order::SOURCE_NORMAL;
+
+        return DB::transaction(function () use ($data, $orderIds, $metaIds, $userId, $source) {
             $gs = Gangsheet::create([
                 'created_by_user_id' => $userId,
                 'filename'           => $data['filename'],
                 'file_url'           => $data['file_url'],
                 'png_urls'           => $data['png_urls'] ?? null,
                 'line_id'            => $data['line_id'] ?? null,
-                'source'             => $data['source'] ?? \App\Models\Order::SOURCE_NORMAL,
+                'source'             => $source,
                 'page_format'        => $data['page_format'] ?? null,
                 'first_system_id'    => $data['first_system_id'] ?? null,
                 'last_system_id'     => $data['last_system_id'] ?? null,
@@ -63,6 +72,7 @@ class GangsheetService
                 'created_by_user_id' => $userId,
                 'name'               => $labelName,
                 'line_id'            => $gs->line_id,
+                'source'             => $gs->source,
                 'order_ids'          => $orderIds,
                 'orders_count'       => count($orderIds),
                 'total_items_qty'    => $totalItemsQty,
