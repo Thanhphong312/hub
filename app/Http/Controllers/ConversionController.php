@@ -160,6 +160,11 @@ class ConversionController extends Controller
                             ),
                         // Full add-on code of this item (for the card-skin info block).
                         'addon_code' => $this->itemAddonCode($item),
+                        // How many items the parent ORDER has. A card skin from a
+                        // multi-item order gets its own QR background colour so
+                        // the operator can spot the ones that must be packed
+                        // together — it overrides the per-chip colours.
+                        'order_items_count' => $order->items->count(),
                         'pending' => $pending,
                     ];
                 }
@@ -327,6 +332,9 @@ class ConversionController extends Controller
                         'line_id'           => $product->line_id ?? null,
                         'convert_layout'    => \App\Http\Controllers\SettingController::convertLayoutFor($product->order_type ?? null),
                         'addon_code'        => $this->itemAddonCode($item),
+                        // Same multi-item flag as pending(), so a re-render at a
+                        // new size keeps the purple QR background.
+                        'order_items_count' => $order->items->count(),
                         'targets'           => $targets,
                     ];
                 }
