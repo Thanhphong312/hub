@@ -104,6 +104,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/auto-pay/run', [OrderController::class, 'autoPayRun']);
     Route::get('/orders/auto-pay/status', [OrderController::class, 'autoPayStatus']);
     Route::post('/orders/auto-pay/run-for/{user}', [OrderController::class, 'autoPayRunFor']);
+    // Bulk-swap the `front` design of every order in a status, picking the URL
+    // by the item's chip add-on. Staff only — it rewrites artwork in bulk.
+    Route::post('/orders/bulk-update-front', [\App\Http\Controllers\BulkFrontUpdateController::class, 'run'])
+        ->middleware(CheckRole::class . ':admin,support');
     Route::post('/orders/bulk-reconvert', [OrderController::class, 'bulkReconvert']);
     Route::post('/orders/bulk-reconvert-label', [OrderController::class, 'bulkReconvertLabel']);
     Route::post('/orders/bulk-delete', [OrderController::class, 'bulkDestroy']);
