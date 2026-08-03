@@ -33,6 +33,8 @@ class TelegramController extends Controller
             'default_thread_id'  => 'nullable|integer',
             'topup_chat_id'      => 'nullable|string|max:120',
             'topup_thread_id'    => 'nullable|integer',
+            'design_check_chat_id'   => 'nullable|string|max:64',
+            'design_check_thread_id' => 'nullable|integer',
             'report_days'        => 'nullable|integer|min:0|max:365',
             'daily_cron_enabled' => 'nullable|boolean',
         ]);

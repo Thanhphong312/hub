@@ -30,6 +30,10 @@ class TelegramService
             'default_thread_id'  => null,
             'topup_chat_id'      => '',
             'topup_thread_id'    => null,
+            // Đích riêng cho cảnh báo design không đạt (topic "Wrongsize").
+            // Bỏ trống thì rơi về default_chat_id / default_thread_id.
+            'design_check_chat_id'   => '',
+            'design_check_thread_id' => null,
             'report_days'        => 0,
             'daily_cron_enabled' => false,
         ]);

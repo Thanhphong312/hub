@@ -108,6 +108,16 @@ Route::middleware('auth:sanctum')->group(function () {
     // by the item's chip add-on. Staff only — it rewrites artwork in bulk.
     Route::post('/orders/bulk-update-front', [\App\Http\Controllers\BulkFrontUpdateController::class, 'run'])
         ->middleware(CheckRole::class . ':admin,support');
+    // Card-skin design check (kích thước + lỗ khoét chip). App desktop đo pixel
+    // rồi POST kết quả về; ở đây chỉ phát hàng đợi, lưu verdict và trả báo cáo.
+    Route::get('/design-checks/pending', [\App\Http\Controllers\DesignCheckController::class, 'pending'])
+        ->middleware(CheckRole::class . ':admin,support');
+    Route::get('/design-checks', [\App\Http\Controllers\DesignCheckController::class, 'index'])
+        ->middleware(CheckRole::class . ':admin,support');
+    Route::post('/orders/{order}/design-check', [\App\Http\Controllers\DesignCheckController::class, 'store'])
+        ->middleware(CheckRole::class . ':admin,support');
+    Route::post('/design-checks/notify', [\App\Http\Controllers\DesignCheckController::class, 'notify'])
+        ->middleware(CheckRole::class . ':admin,support');
     Route::post('/orders/bulk-reconvert', [OrderController::class, 'bulkReconvert']);
     Route::post('/orders/bulk-reconvert-label', [OrderController::class, 'bulkReconvertLabel']);
     Route::post('/orders/bulk-delete', [OrderController::class, 'bulkDestroy']);
