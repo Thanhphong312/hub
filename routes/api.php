@@ -118,6 +118,11 @@ Route::middleware('auth:sanctum')->group(function () {
         ->middleware(CheckRole::class . ':admin,support');
     Route::post('/design-checks/notify', [\App\Http\Controllers\DesignCheckController::class, 'notify'])
         ->middleware(CheckRole::class . ':admin,support');
+    // Đục lỗ: lưu file đã đục chờ duyệt, rồi mới thay link thiết kế.
+    Route::post('/design-checks/{designCheck}/punched', [\App\Http\Controllers\DesignCheckController::class, 'punched'])
+        ->middleware(CheckRole::class . ':admin,support');
+    Route::post('/design-checks/{designCheck}/apply', [\App\Http\Controllers\DesignCheckController::class, 'apply'])
+        ->middleware(CheckRole::class . ':admin,support');
     Route::post('/orders/bulk-reconvert', [OrderController::class, 'bulkReconvert']);
     Route::post('/orders/bulk-reconvert-label', [OrderController::class, 'bulkReconvertLabel']);
     Route::post('/orders/bulk-delete', [OrderController::class, 'bulkDestroy']);

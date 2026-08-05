@@ -7,14 +7,19 @@ use Illuminate\Database\Eloquent\Model;
 class OrderDesignCheck extends Model
 {
     protected $fillable = [
-        'order_id', 'order_item_id', 'field', 'url', 'chip',
+        'order_id', 'order_item_id', 'field', 'url', 'punched_url', 'chip',
         'status', 'category', 'reason', 'width', 'height', 'hole_w', 'hole_h',
-        'checker_version', 'checked_at', 'notified_at',
+        'checker_version', 'checked_at', 'notified_at', 'punched_at', 'applied_at',
     ];
 
     protected function casts(): array
     {
-        return ['checked_at' => 'datetime', 'notified_at' => 'datetime'];
+        return [
+            'checked_at' => 'datetime',
+            'notified_at' => 'datetime',
+            'punched_at' => 'datetime',
+            'applied_at' => 'datetime',
+        ];
     }
 
     public function order()

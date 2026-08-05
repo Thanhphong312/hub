@@ -261,6 +261,70 @@ class DesignCheckController extends Controller
         ]);
     }
 
+    /**
+     * Gate 2 → 3: the app punched the hole and uploaded the result. Park the
+     * URL on the check row so it survives a reload and whoever approves next
+     * can see it. The live design is NOT touched yet.
+     */
+    public function punched(Request $request, OrderDesignCheck $designCheck)
+    {
+        $data = $request->validate(['punched_url' => 'required|url']);
+
+        $designCheck->update([
+            'punched_url' => $data['punched_url'],
+            'punched_at'  => now(),
+            'applied_at'  => null,   // bản đục mới → cần duyệt lại
+        ]);
+
+        return response()->json(['message' => 'Punched file saved for review', 'check' => $designCheck->fresh()]);
+    }
+
+    /**
+     * Gate 3: reviewed and accepted — swap the design link for the punched one.
+     * The _qr metas built from the old artwork are dropped so the converter
+     * rebuilds them, otherwise the press would keep printing the old file.
+     */
+    public function apply(Request $request, OrderDesignCheck $designCheck)
+    {
+        $request->validate(['reconvert' => 'nullable|boolean']);
+        $reconvert = $request->boolean('reconvert', true);
+
+        if (empty($designCheck->punched_url)) {
+            return response()->json(['message' => 'Nothing punched to apply'], 422);
+        }
+
+        $result = DB::transaction(function () use ($designCheck, $reconvert) {
+            \App\Models\OrderItemMeta::updateOrCreate(
+                ['order_item_id' => $designCheck->order_item_id, 'key' => $designCheck->field],
+                ['value' => $designCheck->punched_url],
+            );
+
+            $deleted = 0;
+            if ($reconvert) {
+                $deleted = \App\Models\OrderItemMeta::where('order_item_id', $designCheck->order_item_id)
+                    ->where('key', 'regexp', '_qr(_[0-9]+)?$')
+                    ->delete();
+                Order::whereKey($designCheck->order_id)->update(['production' => false]);
+            }
+
+            // Bản vá đã vào chỗ — kết quả check cũ không còn đúng nữa, đánh dấu
+            // để lượt cron sau đo lại chính file mới này.
+            $designCheck->update([
+                'applied_at'      => now(),
+                'url'             => $designCheck->punched_url,
+                'status'          => 'pending',
+                'checker_version' => null,
+            ]);
+
+            return $deleted;
+        });
+
+        return response()->json([
+            'message'    => 'Design replaced' . ($reconvert ? "; removed {$result} _qr meta(s)" : ''),
+            'qr_deleted' => $result,
+        ]);
+    }
+
     /** Chip of an item — multi pivot first, then the legacy single. */
     private function itemChipKind($item): string
     {

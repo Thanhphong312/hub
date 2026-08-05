@@ -179,6 +179,9 @@ class ConversionController extends Controller
         // intact so the carrier source is never lost.
         $labelStatuses = [Order::STATUS_NEW_ORDER, Order::STATUS_PROCESSING];
         $labelQuery = Order::query()
+            // Đơn FPT không đi đường convert label: chúng có nhãn SKU riêng cho
+            // từng item, không dùng overlay trên label hãng.
+            ->where('source', Order::SOURCE_NORMAL)
             ->whereIn('status', $labelStatuses)
             ->whereNotNull('shipping_label')
             ->where('shipping_label', '!=', '')
