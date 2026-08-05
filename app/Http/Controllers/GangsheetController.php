@@ -234,6 +234,7 @@ class GangsheetController extends Controller
             // Compose tab can filter "Scratch Card" by accessory.id, not name.
             'items.accessoryPrice.accessory:id,name,product_id,gangsheet_split',
             'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
+            'partner:id,name',
         ])
             ->where('production', false)
             ->whereNull('gangsheet_group_id')   // not already pulled into an automation group

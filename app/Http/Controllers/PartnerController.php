@@ -123,27 +123,25 @@ class PartnerController extends Controller
     }
 
     /**
-     * Orders the partner may compose / reconvert: every order that sits inside a
-     * gangsheet assigned to them. Same eager-load shape as the admin
+     * Orders the partner may compose / reconvert: orders whose partner_id
+     * matches the current user. Same eager-load shape as the admin
      * lookup-orders so the desktop compose pipeline can build the PDF. These
      * orders are already production=true (the admin ganged them), so the client
      * builds with includeProduced=true (re-gang semantics).
      */
     public function myOrders(Request $request)
     {
-        $orderIds = $this->assignedOrderIds($request->user());
-        if (empty($orderIds)) {
-            return response()->json(['orders' => []]);
-        }
+        $user = $request->user();
 
         $orders = Order::with([
             'items.metas' => fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX),
-            'items.productVariant.product:id,name,line_id',
+            'items.productVariant.product:id,name,line_id,order_type',
             'items.material:id,name',
             'items.accessoryPrice.accessory:id,name,product_id,gangsheet_split',
             'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
         ])
-            ->whereIn('id', $orderIds)
+            ->where('partner_id', $user->id)
+            ->where('status', '!=', Order::STATUS_SHIPPED)
             ->orderBy('id', 'asc')
             ->get();
 

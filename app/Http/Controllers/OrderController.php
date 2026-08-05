@@ -905,6 +905,38 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         ]);
     }
 
+    /**
+     * Assign / un-assign orders to a partner (set partner_id on orders).
+     * partner_id=null to un-assign.
+     */
+    public function bulkAssignPartner(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || (!$user->hasRole('admin') && !$user->hasRole('support'))) {
+            return response()->json(['message' => 'Admin or support required'], 403);
+        }
+
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+            'partner_id' => 'nullable|integer|exists:users,id',
+        ]);
+
+        $partnerId = $request->partner_id;
+        $count = Order::whereIn('id', $request->order_ids)
+            ->update(['partner_id' => $partnerId]);
+
+        $name = $partnerId
+            ? (\App\Models\User::find($partnerId)->name ?? "#{$partnerId}")
+            : '(unassigned)';
+
+        return response()->json([
+            'message' => "Assigned {$count} order(s) to partner {$name}",
+            'count' => $count,
+            'partner_id' => $partnerId,
+        ]);
+    }
+
     public function bulkSetProduction(Request $request)
     {
         $user = $request->user();

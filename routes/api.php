@@ -129,6 +129,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-re-production', [OrderController::class, 'bulkReProduction']);
     Route::post('/orders/bulk-set-production', [OrderController::class, 'bulkSetProduction']);
     Route::post('/orders/bulk-assign', [OrderController::class, 'bulkAssign']);
+    Route::post('/orders/bulk-assign-partner', [OrderController::class, 'bulkAssignPartner']);
     Route::post('/orders/bulk-merge-duplicates', [OrderController::class, 'bulkMergeDuplicates']);
     Route::post('/orders/refresh-duplicates', [OrderController::class, 'runDuplicateRefresh']);
     Route::get('/orders/pending-tracking', [OrderController::class, 'pendingTracking']);
