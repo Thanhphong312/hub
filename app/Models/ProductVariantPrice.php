@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class ProductVariantPrice extends Model
 {
-    protected $fillable = ['product_variant_id', 'tier_id', 'key', 'price'];
+    protected $fillable = ['product_variant_id', 'tier_id', 'key', 'price', 'partner_price'];
 
     const KEYS = ['base_cost', 'label_fee', 'shipping_cost', 'addition_fee', '2nd_fee'];
 

@@ -7,6 +7,7 @@ use App\Models\GangsheetLabel;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderItemMeta;
+use App\Models\ProductVariantPrice;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -141,11 +142,13 @@ class GangsheetController extends Controller
     }
 
     /**
-     * Admin assigns ONE partner to this gangsheet's orders and types the
-     * revenue each order earns that partner. The partner is attached to the
-     * gangsheet (so it shows in their app) and every listed order gets
-     * partner_id + partner_revenue. Orders already locked (the partner marked
-     * the gangsheet printed) are skipped and reported back.
+     * Admin assigns ONE partner to this gangsheet's orders. Revenue can be:
+     *   - explicitly provided per order (items[].revenue)
+     *   - auto-calculated from product_variant_partner_prices when
+     *     items[].revenue is null AND auto_price=true (default)
+     *
+     * Auto-calc sums partner_price × quantity for each order item, using
+     * the partner's tier_id. Orders already locked are skipped.
      */
     public function setPartnerRevenue(Request $request, Gangsheet $gangsheet)
     {
@@ -154,7 +157,10 @@ class GangsheetController extends Controller
             'items'             => 'present|array',
             'items.*.order_id'  => 'required|integer',
             'items.*.revenue'   => 'nullable|numeric|min:0',
+            'auto_price'        => 'sometimes|boolean',
         ]);
+
+        $autoPrice = $data['auto_price'] ?? true;
 
         $partner = \App\Models\User::whereKey($data['user_id'])
             ->whereHas('role', fn ($q) => $q->where('slug', 'partner'))
@@ -166,15 +172,16 @@ class GangsheetController extends Controller
         $gangOrderIds = array_flip(array_map('intval', $gangsheet->order_ids ?? []));
         $updated = 0;
         $skippedLocked = [];
+        $autoCalcDetails = [];
 
-        DB::transaction(function () use ($data, $partner, $gangsheet, $gangOrderIds, &$updated, &$skippedLocked) {
+        DB::transaction(function () use ($data, $partner, $gangsheet, $gangOrderIds, $autoPrice, &$updated, &$skippedLocked, &$autoCalcDetails) {
             // Attach the partner to the gangsheet (keep any others already on it).
             $gangsheet->partners()->syncWithoutDetaching([$partner->id]);
 
             foreach ($data['items'] as $item) {
                 $oid = (int) $item['order_id'];
                 if (!isset($gangOrderIds[$oid])) {
-                    continue; // not part of this gangsheet — ignore
+                    continue;
                 }
                 $order = Order::find($oid);
                 if (!$order) {
@@ -184,9 +191,22 @@ class GangsheetController extends Controller
                     $skippedLocked[] = $order->system_id;
                     continue;
                 }
+
+                $revenue = $item['revenue'] !== null
+                    ? round((float) $item['revenue'], 2)
+                    : null;
+
+                // Auto-calculate from partner prices when revenue not provided.
+                if ($revenue === null && $autoPrice && $partner->tier_id) {
+                    $revenue = $this->calcPartnerRevenue($order, $partner->tier_id);
+                    if ($revenue !== null) {
+                        $autoCalcDetails[] = ['order_id' => $oid, 'revenue' => $revenue];
+                    }
+                }
+
                 $order->update([
                     'partner_id'      => $partner->id,
-                    'partner_revenue' => $item['revenue'] !== null ? round((float) $item['revenue'], 2) : null,
+                    'partner_revenue' => $revenue,
                 ]);
                 $updated++;
             }
@@ -194,10 +214,66 @@ class GangsheetController extends Controller
 
         return response()->json([
             'message'        => "Đã gán doanh thu cho {$updated} đơn"
-                . (count($skippedLocked) ? ' · bỏ qua ' . count($skippedLocked) . ' đơn đã khoá' : ''),
+                . (count($skippedLocked) ? ' · bỏ qua ' . count($skippedLocked) . ' đơn đã khoá' : '')
+                . (count($autoCalcDetails) ? ' · tự tính ' . count($autoCalcDetails) . ' đơn từ bảng giá partner' : ''),
             'updated'        => $updated,
             'skipped_locked' => $skippedLocked,
+            'auto_calculated' => $autoCalcDetails,
         ]);
+    }
+
+    /**
+     * Calculate partner revenue for an order from partner_price columns.
+     *
+     * For each item:
+     *   variant partner cost = SUM(partner_price) across all 5 keys for that variant × tier
+     *   accessory partner cost = SUM(partner_price) from the item's accessory prices
+     *   item total = (variant_partner_cost + accessory_partner_cost) × quantity
+     *
+     * Returns null if no partner_price is set for any item.
+     */
+    private function calcPartnerRevenue(Order $order, int $tierId): ?float
+    {
+        $order->loadMissing(['items.accessoryPrices']);
+
+        $variantIds = $order->items->pluck('product_variant_id')->filter()->unique()->values()->all();
+        if (empty($variantIds)) {
+            return null;
+        }
+
+        // Build map: variantId => sum of partner_price across all keys for this tier
+        $variantPrices = ProductVariantPrice::where('tier_id', $tierId)
+            ->whereIn('product_variant_id', $variantIds)
+            ->whereNotNull('partner_price')
+            ->get()
+            ->groupBy('product_variant_id')
+            ->map(fn ($rows) => $rows->sum('partner_price'));
+
+        $total = 0;
+        $hasPrice = false;
+
+        foreach ($order->items as $item) {
+            $qty = max(1, (int) $item->quantity);
+            $itemPartner = 0;
+
+            // Variant partner price (sum of 5 keys)
+            if ($item->product_variant_id && $variantPrices->has($item->product_variant_id)) {
+                $itemPartner += (float) $variantPrices[$item->product_variant_id];
+                $hasPrice = true;
+            }
+
+            // Accessory partner prices
+            foreach ($item->accessoryPrices as $ap) {
+                if ($ap->partner_price !== null) {
+                    $itemPartner += (float) $ap->partner_price;
+                    $hasPrice = true;
+                }
+            }
+
+            $total += $itemPartner * $qty;
+        }
+
+        return $hasPrice ? round($total, 2) : null;
     }
 
     public function show(Gangsheet $gangsheet)

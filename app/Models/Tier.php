@@ -17,4 +17,5 @@ class Tier extends Model
     {
         return $this->hasMany(ProductVariantPrice::class);
     }
+
 }

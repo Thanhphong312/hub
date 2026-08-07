@@ -304,9 +304,10 @@ class ProductController extends Controller
                 ]);
                 foreach ($variant->prices as $price) {
                     $newVariant->prices()->create([
-                        'tier_id' => $price->tier_id,
-                        'key'     => $price->key,
-                        'price'   => $price->price,
+                        'tier_id'       => $price->tier_id,
+                        'key'           => $price->key,
+                        'price'         => $price->price,
+                        'partner_price' => $price->partner_price,
                     ]);
                 }
             }
@@ -323,6 +324,7 @@ class ProductController extends Controller
                         'style'          => $p->style,
                         'accessory_code' => $p->accessory_code,
                         'price'          => $p->price,
+                        'partner_price'  => $p->partner_price,
                         'stock'          => 0,
                         'purchase_url'   => $p->purchase_url,
                     ]);
@@ -472,17 +474,22 @@ class ProductController extends Controller
             'prices.*.tier_id' => 'required|exists:tiers,id',
             'prices.*.key' => "required|in:{$validKeys}",
             'prices.*.price' => 'required|numeric|min:0',
+            'prices.*.partner_price' => 'nullable|numeric|min:0',
         ]);
 
         $count = 0;
         foreach ($request->prices as $priceData) {
+            $update = ['price' => $priceData['price']];
+            if (array_key_exists('partner_price', $priceData)) {
+                $update['partner_price'] = $priceData['partner_price'];
+            }
             ProductVariantPrice::updateOrCreate(
                 [
                     'product_variant_id' => $priceData['product_variant_id'],
                     'tier_id' => $priceData['tier_id'],
                     'key' => $priceData['key'],
                 ],
-                ['price' => $priceData['price']]
+                $update
             );
             $count++;
         }
@@ -521,15 +528,22 @@ class ProductController extends Controller
                 continue;
             }
 
-            if ($data['price'] === '') continue; // skip empty prices
+            if ($data['price'] === '' && (!isset($data['partner_price']) || $data['partner_price'] === '')) continue;
+
+            $update = [];
+            if ($data['price'] !== '') $update['price'] = (float) $data['price'];
+            if (isset($data['partner_price']) && $data['partner_price'] !== '') {
+                $update['partner_price'] = (float) $data['partner_price'];
+            }
+            if (empty($update)) continue;
 
             ProductVariantPrice::updateOrCreate(
                 [
-                    'product_variant_id' => (int)$data['product_variant_id'],
-                    'tier_id' => (int)$data['tier_id'],
+                    'product_variant_id' => (int) $data['product_variant_id'],
+                    'tier_id' => (int) $data['tier_id'],
                     'key' => $data['key'],
                 ],
-                ['price' => (float)$data['price']]
+                $update
             );
             $count++;
         }
@@ -561,13 +575,13 @@ class ProductController extends Controller
 
         $callback = function () use ($variants, $tiers, $keys, $existingPrices) {
             $file = fopen('php://output', 'w');
-            fputcsv($file, ['product_variant_id', 'product_name', 'variant_color', 'variant_size', 'tier_id', 'tier_name', 'key', 'price']);
+            fputcsv($file, ['product_variant_id', 'product_name', 'variant_color', 'variant_size', 'tier_id', 'tier_name', 'key', 'price', 'partner_price']);
 
             foreach ($variants as $v) {
                 foreach ($tiers as $tier) {
                     foreach ($keys as $key) {
                         $lookup = $v->id . '-' . $tier->id . '-' . $key;
-                        $price = isset($existingPrices[$lookup]) ? $existingPrices[$lookup]->price : '';
+                        $row = $existingPrices[$lookup] ?? null;
                         fputcsv($file, [
                             $v->id,
                             $v->product?->name ?? '',
@@ -576,7 +590,8 @@ class ProductController extends Controller
                             $tier->id,
                             $tier->name,
                             $key,
-                            $price,
+                            $row ? $row->price : '',
+                            $row ? ($row->partner_price ?? '') : '',
                         ]);
                     }
                 }
@@ -604,7 +619,7 @@ class ProductController extends Controller
 
         $callback = function () use ($variants, $tiers, $keys) {
             $file = fopen('php://output', 'w');
-            fputcsv($file, ['product_variant_id', 'product_name', 'variant_color', 'variant_size', 'tier_id', 'tier_name', 'key', 'price']);
+            fputcsv($file, ['product_variant_id', 'product_name', 'variant_color', 'variant_size', 'tier_id', 'tier_name', 'key', 'price', 'partner_price']);
 
             foreach ($variants as $v) {
                 foreach ($tiers as $tier) {
@@ -617,6 +632,7 @@ class ProductController extends Controller
                             $tier->id,
                             $tier->name,
                             $key,
+                            '',
                             '',
                         ]);
                     }
@@ -830,6 +846,7 @@ class ProductController extends Controller
             'style' => 'nullable|string',
             'accessory_code' => 'nullable|string',
             'price' => 'required|numeric|min:0',
+            'partner_price' => 'nullable|numeric|min:0',
         ]);
 
         $price = AccessoryPrice::updateOrCreate(
@@ -841,6 +858,7 @@ class ProductController extends Controller
             [
                 'accessory_code' => $request->accessory_code,
                 'price' => $request->price,
+                'partner_price' => $request->partner_price,
             ]
         );
 
@@ -857,9 +875,10 @@ class ProductController extends Controller
             'style' => 'nullable|string',
             'accessory_code' => 'nullable|string',
             'price' => 'nullable|numeric|min:0',
+            'partner_price' => 'nullable|numeric|min:0',
         ]);
 
-        $price->update($request->only('tier_id', 'style', 'accessory_code', 'price'));
+        $price->update($request->only('tier_id', 'style', 'accessory_code', 'price', 'partner_price'));
         return response()->json([
             'message' => 'Accessory price updated',
             'price' => $price->fresh()->load('tier'),
@@ -871,4 +890,5 @@ class ProductController extends Controller
         $price->delete();
         return response()->json(['message' => 'Accessory price deleted']);
     }
+
 }

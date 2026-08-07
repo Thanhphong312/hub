@@ -204,6 +204,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/products/{product}/materials', [ProductController::class, 'storeMaterial']);
         Route::put('/materials/{material}', [ProductController::class, 'updateMaterial']);
         Route::delete('/materials/{material}', [ProductController::class, 'destroyMaterial']);
+
     });
 
     // Delivery tracking (ShipEngine) — config + manual control (admin only).
