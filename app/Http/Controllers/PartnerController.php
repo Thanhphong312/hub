@@ -228,6 +228,72 @@ class PartnerController extends Controller
     }
 
     /**
+     * Attach per-page PNG exports to a gangsheet the partner owns.
+     * Same contract as GangsheetController::updatePngUrls but scoped to
+     * the partner's assigned gangsheets.
+     */
+    public function updatePngUrls(Request $request, Gangsheet $gangsheet)
+    {
+        $user = $request->user();
+        if (!$user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
+            return response()->json(['message' => 'Not found'], 404);
+        }
+
+        $request->validate([
+            'png_urls' => 'required|array|min:1',
+            'png_urls.*' => 'required|url',
+            'force' => 'sometimes|boolean',
+        ]);
+
+        if ($gangsheet->png_urls && !$request->boolean('force')) {
+            return response()->json(['message' => 'PNG đã tồn tại. Gửi force=true để ghi đè.'], 409);
+        }
+
+        $gangsheet->update(['png_urls' => $request->png_urls]);
+        return response()->json(['gangsheet' => $gangsheet->only('id', 'png_urls')]);
+    }
+
+    /**
+     * Reconvert all orders in one of the partner's assigned gangsheets.
+     * Convenience wrapper so the partner doesn't need to list order IDs
+     * manually — the gang's order_ids field is used.
+     */
+    public function reconvertGangsheet(Request $request, Gangsheet $gangsheet)
+    {
+        $user = $request->user();
+        if (!$user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
+            return response()->json(['message' => 'Not found'], 404);
+        }
+
+        $orderIds = $gangsheet->order_ids ?? [];
+        if (empty($orderIds)) {
+            return response()->json(['message' => 'Gangsheet này không có đơn nào', 'count' => 0], 200);
+        }
+
+        $allowed = array_flip($this->assignedOrderIds($user));
+        $orderIds = array_values(array_filter(
+            array_unique(array_map('intval', $orderIds)),
+            fn ($id) => isset($allowed[$id])
+        ));
+
+        $orders = Order::whereIn('id', $orderIds)->get();
+        $totalDeleted = 0;
+        foreach ($orders as $order) {
+            $itemIds = $order->items()->pluck('id');
+            $totalDeleted += OrderItemMeta::whereIn('order_item_id', $itemIds)
+                ->where('key', 'regexp', self::QR_KEY_REGEX)
+                ->delete();
+            $order->update(['production' => false]);
+        }
+
+        return response()->json([
+            'message' => "Reconvert queued cho {$orders->count()} đơn; xoá {$totalDeleted} _qr meta(s).",
+            'count' => $orders->count(),
+            'deleted' => $totalDeleted,
+        ]);
+    }
+
+    /**
      * Reconvert the _qr designs of the partner's own orders: delete their _qr
      * metas + unset production so the converter cron rebuilds them from the
      * mockup URLs. Scoped — only orders inside this partner's assigned gangs.
