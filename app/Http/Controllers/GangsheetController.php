@@ -411,6 +411,9 @@ class GangsheetController extends Controller
             'file_url' => 'required|url',
             'png_urls' => 'nullable|array',
             'png_urls.*' => 'url',
+            // One PDF per page (card-skin gangs). file_url stays the first page.
+            'pdf_urls' => 'nullable|array',
+            'pdf_urls.*' => 'url',
             'line_id' => 'nullable|string|max:16',
             'source' => 'nullable|string|in:' . implode(',', \App\Models\Order::SOURCES),
             'page_format' => 'nullable|string|max:16',
@@ -430,6 +433,7 @@ class GangsheetController extends Controller
                 'filename'        => $request->filename,
                 'file_url'        => $request->file_url,
                 'png_urls'        => $request->input('png_urls'),
+                'pdf_urls'        => $request->input('pdf_urls'),
                 'line_id'         => $request->line_id,
                 'source'          => \App\Models\Order::normalizeSource($request->input('source')),
                 'page_format'     => $request->page_format,

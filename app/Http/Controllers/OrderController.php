@@ -31,6 +31,7 @@ class OrderController extends Controller
      *     @OA\Parameter(name="ref_id",              in="query", description="Contains match", @OA\Schema(type="string")),
      *     @OA\Parameter(name="ref_ids",             in="query", description="Comma/newline separated exact ref_id list", @OA\Schema(type="string")),
      *     @OA\Parameter(name="system_id",           in="query", description="Contains match", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="system_ids",          in="query", description="Comma/newline separated exact system_id list", @OA\Schema(type="string")),
      *     @OA\Parameter(name="tracking_id",         in="query", @OA\Schema(type="string")),
      *     @OA\Parameter(name="tracking_status",     in="query", description="ShipEngine status, or `none` = chưa check", @OA\Schema(type="string")),
      *     @OA\Parameter(name="date_from",           in="query", @OA\Schema(type="string", format="date")),
@@ -2878,6 +2879,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     @OA\Parameter(name="ref_id",             in="query", @OA\Schema(type="string")),
      *     @OA\Parameter(name="ref_ids",            in="query", @OA\Schema(type="string")),
      *     @OA\Parameter(name="system_id",          in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="system_ids",         in="query", description="Comma/newline separated exact system_id list", @OA\Schema(type="string")),
      *     @OA\Parameter(name="tracking_id",        in="query", @OA\Schema(type="string")),
      *     @OA\Parameter(name="tracking_status",    in="query", @OA\Schema(type="string")),
      *     @OA\Parameter(name="date_from",          in="query", @OA\Schema(type="string", format="date")),
@@ -3102,6 +3104,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     @OA\Parameter(name="ref_id",             in="query", @OA\Schema(type="string")),
      *     @OA\Parameter(name="ref_ids",            in="query", @OA\Schema(type="string")),
      *     @OA\Parameter(name="system_id",          in="query", @OA\Schema(type="string")),
+     *     @OA\Parameter(name="system_ids",         in="query", description="Comma/newline separated exact system_id list", @OA\Schema(type="string")),
      *     @OA\Parameter(name="tracking_id",        in="query", @OA\Schema(type="string")),
      *     @OA\Parameter(name="date_from",          in="query", @OA\Schema(type="string", format="date")),
      *     @OA\Parameter(name="date_to",            in="query", @OA\Schema(type="string", format="date")),
@@ -3998,6 +4001,17 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         if ($request->has('system_id')) {
             $query->where('system_id', 'like', '%' . $request->system_id . '%');
+        }
+
+        // Paste-a-list lookup, same shape as ref_ids above: split on whitespace
+        // or commas, exact match (not LIKE) so one pasted id can never drag in
+        // a longer one that merely contains it.
+        if ($request->filled('system_ids')) {
+            $list = preg_split('/[\s,]+/', (string) $request->system_ids, -1, PREG_SPLIT_NO_EMPTY);
+            $list = array_values(array_unique(array_map('trim', $list)));
+            if (!empty($list)) {
+                $query->whereIn('system_id', $list);
+            }
         }
 
         if ($request->has('tracking_id')) {

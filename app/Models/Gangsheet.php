@@ -11,6 +11,7 @@ class Gangsheet extends Model
         'filename',
         'file_url',
         'png_urls',
+        'pdf_urls',
         'line_id',
         'source',
         'page_format',
@@ -28,6 +29,7 @@ class Gangsheet extends Model
     {
         return [
             'png_urls' => 'array',
+            'pdf_urls' => 'array',
             'order_ids' => 'array',
             'meta_ids' => 'array',
             'downloaded_at' => 'datetime',
