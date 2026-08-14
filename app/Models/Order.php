@@ -76,6 +76,17 @@ class Order extends Model
         return $this->belongsTo(User::class, 'partner_id');
     }
 
+    /**
+     * Support threads on this order. Reading them raw ignores the platform
+     * rules — always constrain with Ticket::scopeVisibleTo, including in the
+     * withCount() on the order list, or a seller learns that a partner-only
+     * thread exists on their order.
+     */
+    public function tickets()
+    {
+        return $this->hasMany(Ticket::class);
+    }
+
     const STATUS_NEW_ORDER = 0;
     const STATUS_PROCESSING = 1;
     const STATUS_WRONGSIZE = 2;

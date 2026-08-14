@@ -14,6 +14,9 @@ use Illuminate\Http\Request;
  */
 class PartnerController extends Controller
 {
+    // Same order filters as the admin Orders page — see orderIndex().
+    use \App\Http\Controllers\Concerns\FiltersOrderList;
+
     private const QR_KEY_REGEX = '_qr(_[0-9]+)?$';
 
     /** Distinct order ids across all gangsheets assigned to this partner. */
@@ -146,6 +149,57 @@ class PartnerController extends Controller
             ->get();
 
         return response()->json(['orders' => $orders]);
+    }
+
+    /**
+     * Searchable, paginated list of the orders assigned to this partner.
+     *
+     * Separate from myOrders(): that one feeds the compose pipeline and returns
+     * every unshipped order at once, unpaginated. This is the browsing screen,
+     * and it runs the SAME filter set as the admin Orders page (FiltersOrderList)
+     * so a partner searching by system_id, ref_id, date or product behaves
+     * exactly like an admin doing it.
+     *
+     * Prices and seller identity are stripped here as in showOrder().
+     */
+    public function orderIndex(Request $request)
+    {
+        $user = $request->user();
+
+        $query = Order::with([
+            'items.productVariant.product:id,name,line_id,order_type',
+            'items.material:id,name',
+            'items.accessoryPrice.accessory:id,name',
+            'items.accessoryPrices.accessory:id,name',
+        ])
+            // Row scope FIRST — the shared filters authorise nothing.
+            ->where('partner_id', $user->id);
+
+        // Ticket markers, scoped to what a partner may read (both platforms, but
+        // only on their own orders).
+        $query->withCount([
+            'tickets as tickets_count' => fn ($q) => $q->visibleTo($user),
+            'tickets as open_tickets_count' => fn ($q) => $q->visibleTo($user)
+                ->whereIn('status', [\App\Models\Ticket::STATUS_OPEN, \App\Models\Ticket::STATUS_NEW_MESSAGE]),
+        ]);
+
+        $this->applyOrderListFilters($query, $request);
+
+        $orders = $query->orderByDesc('id')
+            ->paginate(min(100, max(1, (int) $request->get('per_page', 20))));
+
+        $orders->getCollection()->each(function ($o) {
+            $o->makeHidden(['user_id', 'print_cost', 'shipping_cost', 'total_cost', 'paid_cost', 'base_support']);
+            foreach ($o->items as $item) {
+                $item->makeHidden('price');
+                $item->accessoryPrice?->makeHidden('price');
+                foreach ($item->accessoryPrices as $ap) {
+                    $ap->makeHidden('price');
+                }
+            }
+        });
+
+        return response()->json($orders);
     }
 
     /**

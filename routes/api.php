@@ -323,6 +323,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheets/{gangsheet}/reconvert', [PartnerController::class, 'reconvertGangsheet']);
         // Compose + reconvert, scoped to orders inside the partner's assigned gangs.
         Route::get('/orders', [PartnerController::class, 'myOrders']);
+        // Browsing list: paginated + the admin filter set. MUST stay above
+        // /orders/{order} — routes match in registration order and the
+        // wildcard would otherwise swallow 'list'.
+        Route::get('/orders/list', [PartnerController::class, 'orderIndex']);
         // Detail view — same fields as the admin order page minus price and
         // seller identity (stripped server-side, see showOrder).
         Route::get('/orders/{order}', [PartnerController::class, 'showOrder']);
