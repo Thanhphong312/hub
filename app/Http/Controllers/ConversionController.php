@@ -63,6 +63,25 @@ class ConversionController extends Controller
             // they are dead and re-generating _qr metas for them just clogs
             // the admin's Convert page.
             ->where('status', '!=', Order::STATUS_CANCELLED)
+            // Skip orders whose items are already fully converted. Every source
+            // meta with a value expects `quantity` targets, so an item still has
+            // work exactly when its _qr count is short of that. Without this the
+            // query hauls in every order ever converted just to discard it, and
+            // eager-loading that many blows the memory limit.
+            ->whereHas('items', function ($q) {
+                $qrRegex = self::QR_KEY_REGEX_SQL;
+                $sourceKeys = "'" . implode("','", self::SOURCE_KEYS) . "'";
+                $q->whereRaw(
+                    "(select count(*) from order_item_metas m
+                        where m.order_item_id = order_items.id
+                          and m.`key` regexp '{$qrRegex}')
+                     < (select count(*) from order_item_metas s
+                        where s.order_item_id = order_items.id
+                          and s.`key` in ({$sourceKeys})
+                          and s.value is not null and s.value <> '')
+                       * greatest(coalesce(order_items.quantity, 1), 1)"
+                );
+            })
             ->orderBy('id', 'asc');
 
         // Sellers can only convert their own orders. Admin/support can convert
@@ -71,9 +90,10 @@ class ConversionController extends Controller
             $query->where('user_id', $user->id);
         }
 
-        $orders = $query->get();
-
         $result = [];
+        // Chunked so peak memory stays flat no matter how long the backlog is —
+        // the filter above keeps the set small, this keeps it bounded.
+        $query->chunkById(200, function ($orders) use (&$result) {
         foreach ($orders as $order) {
             $accessorySummary = $this->computeAccessorySummary($order);
             foreach ($order->items as $item) {
@@ -170,6 +190,7 @@ class ConversionController extends Controller
                 }
             }
         }
+        });
 
         // Convert-label queue. Orders in NEW_ORDER or producing status with a
         // shipping_label set but no convert_label yet. The converter produces
