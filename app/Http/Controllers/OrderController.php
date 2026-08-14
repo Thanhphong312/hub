@@ -65,7 +65,9 @@ class OrderController extends Controller
             ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
-        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
+        // `partner` is the partner-role user the order was handed to (nullable),
+        // so the list can name them instead of just carrying a partner_id.
+        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user', 'partner:id,name']));
 
         // Delivery tracking state (skip the heavy `raw` JSON column).
         $query->with(['tracking' => fn ($q) => $q->select(
