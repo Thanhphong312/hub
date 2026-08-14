@@ -149,6 +149,45 @@ class PartnerController extends Controller
     }
 
     /**
+     * Full detail for ONE order assigned to this partner — same shape as the
+     * admin order page minus everything commercial.
+     *
+     * The stripping happens HERE, not in the partner UI: an endpoint that
+     * returns the seller's name and the order total is one screen away from
+     * leaking them, however the client renders it. `partner_revenue` stays —
+     * that is the partner's own money, not the seller's price.
+     */
+    public function showOrder(Request $request, Order $order)
+    {
+        $user = $request->user();
+        // 404, not 403: whether an order exists is not a partner's business
+        // unless it is theirs.
+        abort_unless($order->partner_id === $user->id, 404, 'Order not found');
+
+        $order->load([
+            'items.metas',
+            'items.productVariant.product:id,name,line_id,order_type',
+            'items.material:id,name',
+            'items.accessoryPrice.accessory:id,name',
+            'items.accessoryPrices.accessory:id,name',
+            'address',
+        ]);
+
+        // Seller identity: user_id is dropped and the `user` relation is never
+        // loaded above.
+        $order->makeHidden(['user_id', 'print_cost', 'shipping_cost', 'total_cost', 'paid_cost', 'base_support']);
+        foreach ($order->items as $item) {
+            $item->makeHidden('price');
+            $item->accessoryPrice?->makeHidden('price');
+            foreach ($item->accessoryPrices as $ap) {
+                $ap->makeHidden('price');
+            }
+        }
+
+        return response()->json(['order' => $order]);
+    }
+
+    /**
      * B2 credentials so the partner desktop app can upload its composed PDF
      * directly to Backblaze (same contract as GangsheetController). Date-scoped
      * folder; the client appends the filename.

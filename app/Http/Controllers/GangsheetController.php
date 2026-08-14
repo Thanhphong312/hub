@@ -127,17 +127,58 @@ class GangsheetController extends Controller
         );
     }
 
-    /** Admin sets which partner users a gangsheet is assigned to. */
+    /**
+     * Admin sets which partner users a gangsheet is assigned to.
+     *
+     * The pivot alone only grants file access — the partner app reads its
+     * ORDER list, revenue and printed-lock off `orders.partner_id`. So when the
+     * gang is handed to exactly ONE partner, that id is stamped onto the gang's
+     * orders too; otherwise the partner would see the sheet with an empty order
+     * list behind it.
+     *
+     * Exactly one, because `orders.partner_id` holds a single owner: with two
+     * partners on a gang there is no non-arbitrary choice, so the pivot is
+     * updated and the orders are left alone (`orders_assigned` comes back 0 and
+     * the caller says so).
+     *
+     * Orders already locked (`partner_locked_at`, i.e. the partner marked them
+     * printed) are skipped — same rule as setPartnerRevenue. Revenue is NOT
+     * touched here; that stays an explicit step.
+     *
+     * Removing a partner does NOT clear `orders.partner_id`: an order can
+     * belong to two gangs, so clearing from one would silently strip an
+     * assignment made by the other. Use POST /orders/bulk-assign-partner with
+     * partner_id=null to unassign deliberately.
+     */
     public function setPartners(Request $request, Gangsheet $gangsheet)
     {
         $request->validate([
             'user_ids'   => 'present|array',
             'user_ids.*' => 'integer|exists:users,id',
         ]);
-        $gangsheet->partners()->sync($request->user_ids ?? []);
+
+        $userIds = array_values(array_unique(array_map('intval', $request->user_ids ?? [])));
+        $gangsheet->partners()->sync($userIds);
+
+        $assigned = 0;
+        $skippedLocked = 0;
+        if (count($userIds) === 1) {
+            $orderIds = $gangsheet->order_ids ?? [];
+            if (!empty($orderIds)) {
+                $skippedLocked = Order::whereIn('id', $orderIds)
+                    ->whereNotNull('partner_locked_at')
+                    ->count();
+                $assigned = Order::whereIn('id', $orderIds)
+                    ->whereNull('partner_locked_at')
+                    ->update(['partner_id' => $userIds[0]]);
+            }
+        }
+
         return response()->json([
-            'message'     => 'Partners updated',
-            'partner_ids' => $gangsheet->partners()->pluck('users.id'),
+            'message'               => 'Partners updated',
+            'partner_ids'           => $gangsheet->partners()->pluck('users.id'),
+            'orders_assigned'       => $assigned,
+            'orders_skipped_locked' => $skippedLocked,
         ]);
     }
 

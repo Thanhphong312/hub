@@ -165,6 +165,16 @@ Route::middleware('auth:sanctum')->group(function () {
     // merged PDF. See mergedLabelBuilder.jsx.
     Route::get('/orders/{order}/convert-label-blob', [OrderController::class, 'convertLabelBlob']);
 
+    // Order support tickets. No role middleware: every rule is data-scoped in
+    // Ticket::scopeVisibleTo (seller sees platform 1 on their own orders,
+    // partner sees both platforms on orders assigned to them, staff sees all),
+    // so a role gate here would only duplicate it — wrongly.
+    Route::get('/tickets', [\App\Http\Controllers\TicketController::class, 'index']);
+    Route::post('/tickets', [\App\Http\Controllers\TicketController::class, 'store']);
+    Route::get('/tickets/{ticket}', [\App\Http\Controllers\TicketController::class, 'show']);
+    Route::post('/tickets/{ticket}/reply', [\App\Http\Controllers\TicketController::class, 'reply']);
+    Route::post('/tickets/{ticket}/solve', [\App\Http\Controllers\TicketController::class, 'solve']);
+
     // Products (read for all)
     Route::get('/products', [ProductController::class, 'index']);
     // Cross-product flat search — useful when seller knows SKU but not product.
@@ -313,6 +323,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheets/{gangsheet}/reconvert', [PartnerController::class, 'reconvertGangsheet']);
         // Compose + reconvert, scoped to orders inside the partner's assigned gangs.
         Route::get('/orders', [PartnerController::class, 'myOrders']);
+        // Detail view — same fields as the admin order page minus price and
+        // seller identity (stripped server-side, see showOrder).
+        Route::get('/orders/{order}', [PartnerController::class, 'showOrder']);
         Route::get('/storage-credentials', [PartnerController::class, 'storageCredentials']);
         Route::post('/gangsheets', [PartnerController::class, 'storeGangsheet']);
         Route::post('/orders/reconvert', [PartnerController::class, 'reconvert']);
