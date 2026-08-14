@@ -101,6 +101,26 @@ class GangsheetController extends Controller
             $g->duplicate_gang_ids = array_values(array_map('intval', array_keys($others)));
         });
 
+        // How much of each gang is still outstanding. order_ids is a JSON
+        // column, so there is no relation to withCount — instead resolve every
+        // id on the page in ONE query and count in PHP, rather than a query per
+        // gang. `orders_count` on the row is what the gang was built from and
+        // never changes; this is what is left to ship today.
+        $pageOrderIds = collect($paginated->items())
+            ->flatMap(fn ($g) => $g->order_ids ?? [])
+            ->map(fn ($id) => (int) $id)->unique()->values();
+
+        $unshipped = $pageOrderIds->isEmpty()
+            ? collect()
+            : Order::whereIn('id', $pageOrderIds)
+                ->where('status', '!=', Order::STATUS_SHIPPED)
+                ->pluck('id')->flip();
+
+        $paginated->getCollection()->each(function ($g) use ($unshipped) {
+            $g->unshipped_orders_count = collect($g->order_ids ?? [])
+                ->filter(fn ($id) => $unshipped->has((int) $id))->count();
+        });
+
         return response()->json($paginated);
     }
 
