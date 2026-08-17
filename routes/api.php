@@ -327,6 +327,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // /orders/{order} — routes match in registration order and the
         // wildcard would otherwise swallow 'list'.
         Route::get('/orders/list', [PartnerController::class, 'orderIndex']);
+        // Find / Re-gang: resolve a pasted system_id list, scoped to this partner.
+        Route::post('/orders/lookup', [PartnerController::class, 'lookupOrders']);
         // Detail view — same fields as the admin order page minus price and
         // seller identity (stripped server-side, see showOrder).
         Route::get('/orders/{order}', [PartnerController::class, 'showOrder']);

@@ -152,6 +152,57 @@ class PartnerController extends Controller
     }
 
     /**
+     * Look up the partner's orders by an explicit list of system_ids — the
+     * Find / Re-gang tab, which rebuilds a sheet for orders that already have
+     * production=true.
+     *
+     * Same eager-load shape as myOrders() so the desktop compose pipeline can
+     * build straight from the result, and the same row scope: an id belonging
+     * to someone else's order comes back under `missing`, never as data.
+     */
+    public function lookupOrders(Request $request)
+    {
+        $request->validate([
+            'system_ids'   => 'required|array|min:1',
+            'system_ids.*' => 'string',
+        ]);
+
+        $user = $request->user();
+        $ids = array_values(array_unique(array_map('trim', $request->system_ids)));
+
+        $orders = Order::with([
+            'items.metas' => fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX),
+            'items.productVariant.product:id,name,line_id,order_type',
+            'items.material:id,name',
+            'items.accessoryPrice.accessory:id,name,product_id,gangsheet_split',
+            'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
+        ])
+            ->where('partner_id', $user->id)
+            ->whereIn('system_id', $ids)
+            ->orderBy('id', 'asc')
+            ->get();
+
+        $orders->each(function ($o) {
+            $o->makeHidden(['user_id', 'print_cost', 'shipping_cost', 'total_cost', 'paid_cost', 'base_support']);
+            foreach ($o->items as $item) {
+                $item->makeHidden('price');
+                $item->accessoryPrice?->makeHidden('price');
+                foreach ($item->accessoryPrices as $ap) {
+                    $ap->makeHidden('price');
+                }
+            }
+        });
+
+        $found = $orders->pluck('system_id')->all();
+
+        return response()->json([
+            'orders'  => $orders,
+            'found'   => $found,
+            'missing' => array_values(array_diff($ids, $found)),
+        ]);
+    }
+
+    /**
      * Searchable, paginated list of the orders assigned to this partner.
      *
      * Separate from myOrders(): that one feeds the compose pipeline and returns
@@ -281,6 +332,11 @@ class PartnerController extends Controller
         $request->validate([
             'filename' => 'required|string',
             'file_url' => 'required|url',
+            // One PDF per page (card-skin gangs). file_url stays the first page.
+            'pdf_urls' => 'nullable|array',
+            'pdf_urls.*' => 'url',
+            'png_urls' => 'nullable|array',
+            'png_urls.*' => 'url',
             'line_id' => 'nullable|string|max:16',
             'page_format' => 'nullable|string|max:16',
             'first_system_id' => 'nullable|string',
@@ -307,6 +363,8 @@ class PartnerController extends Controller
             $gangsheet = app(\App\Services\GangsheetService::class)->record([
                 'filename'        => $request->filename,
                 'file_url'        => $request->file_url,
+                'png_urls'        => $request->input('png_urls'),
+                'pdf_urls'        => $request->input('pdf_urls'),
                 'line_id'         => $request->line_id,
                 'page_format'     => $request->page_format,
                 'first_system_id' => $request->first_system_id,
