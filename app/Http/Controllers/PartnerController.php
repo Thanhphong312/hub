@@ -171,6 +171,12 @@ class PartnerController extends Controller
             'items.material:id,name',
             'items.accessoryPrice.accessory:id,name',
             'items.accessoryPrices.accessory:id,name',
+            // Delivery state. Column list skips the heavy `raw` carrier JSON,
+            // which nothing on the partner screens reads.
+            'tracking' => fn ($q) => $q->select(
+                'id', 'order_id', 'tracking_id', 'status', 'status_description',
+                'date_intransit', 'delivered_at', 'last_event_at', 'checked_at'
+            ),
         ])
             // Row scope FIRST — the shared filters authorise nothing.
             ->where('partner_id', $user->id);
@@ -225,6 +231,10 @@ class PartnerController extends Controller
             'items.accessoryPrice.accessory:id,name',
             'items.accessoryPrices.accessory:id,name',
             'address',
+            'tracking' => fn ($q) => $q->select(
+                'id', 'order_id', 'tracking_id', 'status', 'status_description',
+                'date_intransit', 'delivered_at', 'last_event_at', 'checked_at'
+            ),
         ]);
 
         // Seller identity: user_id is dropped and the `user` relation is never
