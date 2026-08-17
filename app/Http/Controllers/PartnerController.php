@@ -30,6 +30,29 @@ class PartnerController extends Controller
         return array_keys($ids);
     }
 
+    /**
+     * Order ids this partner may build a gangsheet from.
+     *
+     * Two notions of "assigned" exist and both have to count. orders.partner_id
+     * is how orders are handed out now — it drives myOrders, orderIndex,
+     * lookupOrders and showOrder, so it is what the partner actually sees on
+     * screen. The older notion is membership of a gangsheet assigned to them,
+     * which is all that exists for orders ganged before partner_id was added.
+     *
+     * Checking only the gang pivot (as this guard used to) rejected every order
+     * handed over by partner_id that was not already inside one of their gangs:
+     * the partner could list it and pick it, then have the save refused.
+     */
+    private function composableOrderIds($user): array
+    {
+        $ids = array_flip($this->assignedOrderIds($user));
+        foreach (Order::where('partner_id', $user->id)->pluck('id') as $oid) {
+            $ids[(int) $oid] = true;
+        }
+
+        return array_keys($ids);
+    }
+
     /** Dashboard totals: assigned gangsheets + distinct orders across them. */
     public function dashboard(Request $request)
     {
@@ -350,7 +373,7 @@ class PartnerController extends Controller
         ]);
 
         $user = $request->user();
-        $allowed = array_flip($this->assignedOrderIds($user));
+        $allowed = array_flip($this->composableOrderIds($user));
         $orderIds = array_values(array_unique(array_map('intval', $request->order_ids)));
         foreach ($orderIds as $oid) {
             if (!isset($allowed[$oid])) {
@@ -457,7 +480,8 @@ class PartnerController extends Controller
     /**
      * Reconvert the _qr designs of the partner's own orders: delete their _qr
      * metas + unset production so the converter cron rebuilds them from the
-     * mockup URLs. Scoped — only orders inside this partner's assigned gangs.
+     * mockup URLs. Scoped to the orders the partner may work on — the same set
+     * the Reconvert tab lists, which is partner_id as well as gang membership.
      */
     public function reconvert(Request $request)
     {
@@ -466,7 +490,7 @@ class PartnerController extends Controller
             'order_ids.*' => 'integer',
         ]);
 
-        $allowed = array_flip($this->assignedOrderIds($request->user()));
+        $allowed = array_flip($this->composableOrderIds($request->user()));
         $orderIds = array_values(array_filter(
             array_unique(array_map('intval', $request->order_ids)),
             fn ($id) => isset($allowed[$id])
