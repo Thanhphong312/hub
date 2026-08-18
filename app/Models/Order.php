@@ -10,7 +10,7 @@ class Order extends Model
         'user_id', 'source', 'system_id', 'ref_id', 'note', 'status', 'ship_type', 'shipping_label',
         'shipping_label_converted', 'convert_label', 'proof_image',
         'tracking_id', 'print_cost', 'shipping_cost', 'total_cost',
-        'paid_cost', 'completed_time', 'production', 'stock_decremented',
+        'paid_cost', 'completed_time', 'completed_by', 'production', 'stock_decremented',
         'gangsheet_group_id', 'qr_bg_status', 'qr_bg_checked_at',
         'resend_of_order_id', 'resend_method', 'resend_reason', 'base_support',
         'partner_id', 'partner_revenue', 'partner_locked_at',
@@ -74,6 +74,16 @@ class Order extends Model
     public function partner()
     {
         return $this->belongsTo(User::class, 'partner_id');
+    }
+
+    /**
+     * Who marked the order shipped. Null for orders shipped before the column
+     * existed, and for any path that ships an order without a logged-in user
+     * behind it.
+     */
+    public function completedBy()
+    {
+        return $this->belongsTo(User::class, 'completed_by');
     }
 
     /**

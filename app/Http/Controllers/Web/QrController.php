@@ -54,6 +54,11 @@ class QrController extends Controller
         $data = ['status' => $statusValue];
         if ($statusValue === Order::STATUS_SHIPPED) {
             $data['completed_time'] = now();
+            // Who closed it out, alongside when. Written only on the way to
+            // shipped, and left alone when an order is put back on hold — the
+            // same as completed_time has always behaved, so the pair stays
+            // consistent and the Dashboard's completed_time stats are untouched.
+            $data['completed_by'] = $request->user()?->id;
         }
 
         $order->update($data);

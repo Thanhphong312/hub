@@ -180,10 +180,15 @@ class ConversionController extends Controller
                             ),
                         // Full add-on code of this item (for the card-skin info block).
                         'addon_code' => $this->itemAddonCode($item),
-                        // How many items the parent ORDER has. A card skin from a
-                        // multi-item order gets its own QR background colour so
+                        // How many card skins the parent ORDER produces (Σ
+                        // quantity). ≥2 ⇒ the cards get the purple background so
                         // the operator can spot the ones that must be packed
                         // together — it overrides the per-chip colours.
+                        'order_card_total' => $this->orderCardTotal($order),
+                        // Legacy name for the same signal, counting item rows.
+                        // Kept so desktop builds shipped before order_card_total
+                        // still colour multi-line orders purple; droppable once
+                        // every client is updated.
                         'order_items_count' => $order->items->count(),
                         'pending' => $pending,
                     ];
@@ -356,9 +361,10 @@ class ConversionController extends Controller
                         'line_id'           => $product->line_id ?? null,
                         'convert_layout'    => \App\Http\Controllers\SettingController::convertLayoutFor($product->order_type ?? null),
                         'addon_code'        => $this->itemAddonCode($item),
-                        // Same multi-item flag as pending(), so a re-render at a
-                        // new size keeps the purple QR background.
-                        'order_items_count' => $order->items->count(),
+                        // Same card count as pending(), so a re-render at a new
+                        // size keeps the purple background.
+                        'order_card_total'  => $this->orderCardTotal($order),
+                        'order_items_count' => $order->items->count(),   // legacy, see pending()
                         'targets'           => $targets,
                     ];
                 }
@@ -377,6 +383,41 @@ class ConversionController extends Controller
      *   "N" when no accessory). Items sharing the same letter are merged so a
      *   long order doesn't produce a runaway "1P-1P-1P-1P-…" string.
      */
+    /** True when the item has at least one non-empty source design meta. */
+    private function itemHasSourceDesign($item): bool
+    {
+        $byKey = $item->metas->keyBy('key');
+        foreach (self::SOURCE_KEYS as $sk) {
+            $m = $byKey->get($sk);
+            if ($m && !empty($m->value)) return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * How many card skins an order produces — Σ quantity, not the number of
+     * item rows.
+     *
+     * This is what decides the purple "pack these together" background. Counted
+     * in CARDS because one line with quantity 3 still ships three cards that
+     * belong in the same parcel; counting rows called that a single-card order
+     * and left it unmarked.
+     *
+     * Items with no source design are skipped: they produce no card at all, so
+     * counting them would mark a genuinely single-card order as multi.
+     */
+    private function orderCardTotal($order): int
+    {
+        $total = 0;
+        foreach ($order->items as $item) {
+            if (!$this->itemHasSourceDesign($item)) continue;
+            $total += max(1, (int) ($item->quantity ?? 1));
+        }
+
+        return $total;
+    }
+
     /** Full accessory code(s) of ONE item's selected add-ons (joined by '/'). */
     private function itemAddonCode($item): string
     {

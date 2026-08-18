@@ -260,6 +260,10 @@
             <div class="flex justify-between text-xs text-neutral-500 pt-1.5 border-t border-neutral-100"><span>Created</span><span>{{ $order->created_at->toDateTimeString() }}</span></div>
             @if ($order->completed_time)
                 <div class="flex justify-between text-xs text-neutral-500"><span>Completed</span><span>{{ $order->completed_time->toDateTimeString() }}</span></div>
+                {{-- Null for orders shipped before completed_by existed. --}}
+                @if ($order->completedBy)
+                    <div class="flex justify-between text-xs text-neutral-500"><span>Completed by</span><span>{{ $order->completedBy->name }}</span></div>
+                @endif
             @endif
         </div>
 
