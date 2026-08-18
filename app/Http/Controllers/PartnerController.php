@@ -100,7 +100,63 @@ class PartnerController extends Controller
             }
         }
 
-        return response()->json($query->paginate($request->get('per_page', 20)));
+        $paginated = $query->paginate($request->get('per_page', 20));
+
+        // How much of each gang is still outstanding. order_ids is a JSON
+        // column, so there is no relation to withCount — resolve every id on
+        // the page in ONE query and count in PHP rather than a query per gang.
+        // `orders_count` is what the gang was built from and never moves; this
+        // is what is left to ship today.
+        $pageOrderIds = collect($paginated->items())
+            ->flatMap(fn ($g) => $g->order_ids ?? [])
+            ->map(fn ($id) => (int) $id)->unique()->values();
+
+        $unshipped = $pageOrderIds->isEmpty()
+            ? collect()
+            : Order::whereIn('id', $pageOrderIds)
+                ->where('status', '!=', Order::STATUS_SHIPPED)
+                ->pluck('id')->flip();
+
+        $paginated->getCollection()->each(function ($g) use ($unshipped) {
+            $g->unshipped_orders_count = collect($g->order_ids ?? [])
+                ->filter(fn ($id) => $unshipped->has((int) $id))->count();
+        });
+
+        return response()->json($paginated);
+    }
+
+    /**
+     * Partner deletes one of their own gangsheets.
+     *
+     * Only the record goes: the orders and their _qr metas keep production=true,
+     * exactly as the admin delete behaves. Removing the row is how a partner
+     * clears a sheet they rebuilt or ganged by mistake; it does not un-produce
+     * the work.
+     *
+     * Refused once any partner has marked it printed — at that point the
+     * revenue split is locked against it and deleting would strand that.
+     */
+    public function destroyGangsheet(Request $request, Gangsheet $gangsheet)
+    {
+        $user = $request->user();
+        if (!$user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
+            return response()->json(['message' => 'Not found'], 404);
+        }
+
+        $printed = $user->assignedGangsheets()
+            ->where('gangsheets.id', $gangsheet->id)
+            ->wherePivotNotNull('printed_at')
+            ->exists();
+        if ($printed) {
+            return response()->json([
+                'message' => 'Gang này đã đánh dấu đã in — bỏ tick "Đã in" trước khi xoá.',
+            ], 422);
+        }
+
+        $filename = $gangsheet->filename;
+        $gangsheet->delete();
+
+        return response()->json(['message' => 'Đã xoá ' . $filename]);
     }
 
     /** One assigned gangsheet + its orders. 404 if not assigned to this partner. */

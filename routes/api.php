@@ -319,6 +319,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/gangsheets', [PartnerController::class, 'gangsheets']);
         Route::post('/gangsheets/{gangsheet}/printed', [PartnerController::class, 'markPrinted']);
         Route::get('/gangsheets/{gangsheet}', [PartnerController::class, 'show']);
+        // Partner clears a sheet they ganged by mistake. Refused once it is
+        // marked printed — see destroyGangsheet.
+        Route::delete('/gangsheets/{gangsheet}', [PartnerController::class, 'destroyGangsheet']);
         Route::put('/gangsheets/{gangsheet}/png-urls', [PartnerController::class, 'updatePngUrls']);
         Route::post('/gangsheets/{gangsheet}/reconvert', [PartnerController::class, 'reconvertGangsheet']);
         // Compose + reconvert, scoped to orders inside the partner's assigned gangs.
