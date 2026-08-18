@@ -20,6 +20,11 @@ class QrController extends Controller
             'items.accessoryPrice.tier',
             'address',
             'user',
+            // Named on the page: who the order was handed to, and who closed
+            // it out. Eager-loaded rather than left to Blade so the view does
+            // not fire two extra queries per render.
+            'partner:id,name',
+            'completedBy:id,name',
         ])->where('system_id', $systemId)->first();
 
         if (!$order) {
