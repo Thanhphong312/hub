@@ -100,6 +100,11 @@ class PartnerController extends Controller
             }
         }
 
+        // Only gangs with work left — same filter as the admin list.
+        if ($request->boolean('unshipped')) {
+            $query->hasUnshippedOrders();
+        }
+
         $paginated = $query->paginate($request->get('per_page', 20));
 
         // How much of each gang is still outstanding. order_ids is a JSON

@@ -79,6 +79,12 @@ class GangsheetController extends Controller
             }
         }
 
+        // Only gangs with work left. Applied to the QUERY, not the page, so
+        // pagination counts what it actually returns.
+        if ($request->boolean('unshipped')) {
+            $query->hasUnshippedOrders();
+        }
+
         $paginated = $query->paginate($request->get('per_page', 20));
 
         // Duplicate detection: a gang is flagged when it shares an order_id with
