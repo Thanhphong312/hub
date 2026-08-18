@@ -280,6 +280,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheets/{gangsheet}/toggle-downloaded', [GangsheetController::class, 'toggleDownloaded']);
         // Attach per-page PNG exports to a gang built earlier (Manage tab).
         Route::put('/gangsheets/{gangsheet}/png-urls', [GangsheetController::class, 'updatePngUrls']);
+        // Re-gang in place: fetch the orders behind a sheet, rebuild, then
+        // swap the files on the SAME record (keeps partners, downloaded mark).
+        Route::get('/gangsheets/{gangsheet}/rebuild-source', [GangsheetController::class, 'rebuildSource']);
+        Route::put('/gangsheets/{gangsheet}/files', [GangsheetController::class, 'replaceFiles']);
         Route::get('/gangsheets/{gangsheet}', [GangsheetController::class, 'show']);
         Route::delete('/gangsheets/{gangsheet}', [GangsheetController::class, 'destroy']);
 

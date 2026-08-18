@@ -363,6 +363,76 @@ class GangsheetController extends Controller
     }
 
     /**
+     * The orders behind one gangsheet, eager-loaded the way the desktop
+     * builder needs them — same shape as lookupOrders / pendingOrders.
+     *
+     * Feeds the Manage tab's "Re-gang": rebuilding the sheet needs the item
+     * metas and variants, which show() deliberately does not carry (it feeds a
+     * read-only detail panel). includeProduced is implied — every meta on an
+     * existing gang is already produced.
+     */
+    public function rebuildSource(Gangsheet $gangsheet)
+    {
+        $orderIds = $gangsheet->order_ids ?? [];
+
+        $orders = empty($orderIds) ? collect() : Order::with([
+            'items.metas' => fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX),
+            'items.productVariant.product:id,name,line_id,order_type',
+            'items.material:id,name',
+            'items.accessoryPrice.accessory:id,name,product_id,gangsheet_split',
+            'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
+        ])->whereIn('id', $orderIds)->orderBy('id', 'asc')->get();
+
+        return response()->json([
+            'gangsheet' => $gangsheet,
+            'orders'    => $orders,
+            // Ids in order_ids whose order has since been deleted. Rebuilding
+            // without them would silently produce a smaller sheet, so the
+            // caller is told rather than left to compare counts.
+            'missing'   => array_values(array_diff(
+                array_map('intval', $orderIds),
+                $orders->pluck('id')->map(fn ($i) => (int) $i)->all()
+            )),
+        ]);
+    }
+
+    /**
+     * Point an existing gangsheet at freshly built files.
+     *
+     * The record keeps its identity — order_ids, meta_ids, partner assignment,
+     * the downloaded mark — and only the artefacts move. That is the whole
+     * point over delete-and-rebuild: a re-gang to fix the files should not
+     * detach the partner it was handed to or forget it had been printed.
+     *
+     * filename comes along because the builder derives it from the current
+     * date and counts, and the new PDFs are uploaded under that new name; a
+     * record still pointing at the old name would be a dead link.
+     */
+    public function replaceFiles(Request $request, Gangsheet $gangsheet)
+    {
+        $data = $request->validate([
+            'filename'   => 'required|string',
+            'file_url'   => 'required|url',
+            'pdf_urls'   => 'nullable|array',
+            'pdf_urls.*' => 'url',
+            'png_urls'   => 'nullable|array',
+            'png_urls.*' => 'url',
+        ]);
+
+        $gangsheet->update([
+            'filename' => $data['filename'],
+            'file_url' => $data['file_url'],
+            'pdf_urls' => $data['pdf_urls'] ?? null,
+            'png_urls' => $data['png_urls'] ?? null,
+        ]);
+
+        return response()->json([
+            'message'   => 'Đã thay file cho ' . $data['filename'],
+            'gangsheet' => $gangsheet->fresh()->load('creator:id,name', 'partners:id,name'),
+        ]);
+    }
+
+    /**
      * Orders ready to be ganged: have at least one *_qr meta whose own
      * production=0, are themselves production=0, and have NOT been shipped yet
      * (no point producing prints for a shipped order).
