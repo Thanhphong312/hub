@@ -288,6 +288,9 @@ class SettingController extends Controller
         ['key' => 'default', 'label' => 'Mặc định (barcode trên design, góc dưới-trái)'],
         ['key' => 'outside', 'label' => 'Barcode ngoài design (band trắng dưới)'],
         ['key' => 'native',  'label' => 'Giữ nguyên kích thước design (vd greeting card 5x5)'],
+        // Pass Sleeve: same card as the skin, band on the RIGHT, and ganged 6
+        // distinct designs to a sheet with no duplicate copy underneath.
+        ['key' => 'sleeve',  'label' => 'Pass Sleeve (band bên phải, gang 6 cái/trang)'],
     ];
 
     /** Resolve the convert layout for an order_type label (default when unset). */
