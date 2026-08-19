@@ -327,6 +327,7 @@ class ProductController extends Controller
                         'partner_price'  => $p->partner_price,
                         'stock'          => 0,
                         'purchase_url'   => $p->purchase_url,
+                        'image_des'      => $p->image_des,
                     ]);
                 }
             }
@@ -339,6 +340,7 @@ class ProductController extends Controller
                     'status'       => $m->status,
                     'stock'        => 0,
                     'purchase_url' => $m->purchase_url,
+                    'image_des'    => $m->image_des,
                 ]);
             }
 
@@ -847,6 +849,7 @@ class ProductController extends Controller
             'accessory_code' => 'nullable|string',
             'price' => 'required|numeric|min:0',
             'partner_price' => 'nullable|numeric|min:0',
+            'image_des' => 'nullable|string|max:1000',
         ]);
 
         $price = AccessoryPrice::updateOrCreate(
@@ -859,6 +862,7 @@ class ProductController extends Controller
                 'accessory_code' => $request->accessory_code,
                 'price' => $request->price,
                 'partner_price' => $request->partner_price,
+                'image_des' => $request->image_des,
             ]
         );
 
@@ -876,9 +880,10 @@ class ProductController extends Controller
             'accessory_code' => 'nullable|string',
             'price' => 'nullable|numeric|min:0',
             'partner_price' => 'nullable|numeric|min:0',
+            'image_des' => 'nullable|string|max:1000',
         ]);
 
-        $price->update($request->only('tier_id', 'style', 'accessory_code', 'price', 'partner_price'));
+        $price->update($request->only('tier_id', 'style', 'accessory_code', 'price', 'partner_price', 'image_des'));
         return response()->json([
             'message' => 'Accessory price updated',
             'price' => $price->fresh()->load('tier'),

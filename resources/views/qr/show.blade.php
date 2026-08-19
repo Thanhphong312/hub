@@ -549,6 +549,18 @@
                                     @if ($style)
                                         / <span class="px-2 py-0.5 rounded {{ $styleColor }} font-extrabold text-base uppercase tracking-wide">{{ $style }}</span>
                                     @endif
+                                    {{-- Reference photo of this exact add-on, so the packer matches the
+                                         thing in front of them rather than the name. Click opens it full
+                                         size. Absent until someone uploads one. --}}
+                                    @if ($isImageish($item->accessoryPrice->image_des))
+                                        <a href="{{ $item->accessoryPrice->image_des }}" target="_blank" rel="noreferrer"
+                                           title="Ảnh mô tả: {{ $style ?: $item->accessoryPrice->accessory?->name }}"
+                                           class="inline-block w-10 h-10 rounded border border-neutral-300 overflow-hidden bg-neutral-50 align-middle hover:ring-2 hover:ring-orange-400">
+                                            <img src="{{ $driveThumb($item->accessoryPrice->image_des, 'w200') }}"
+                                                 alt="add-on" class="w-full h-full object-cover"
+                                                 onerror="this.parentElement.style.display='none'">
+                                        </a>
+                                    @endif
                                 </span>
                             @endif
                         </div>
