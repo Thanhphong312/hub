@@ -550,6 +550,18 @@
                                     };
                                 @endphp
                                 <span class="text-neutral-700 inline-flex items-center gap-1.5">
+                                    {{-- Right on the line, not in a panel further down: the packer
+                                         reads the style and picks the part in one glance. Click opens
+                                         it full size. --}}
+                                    @if ($isImageish($acc->image_des))
+                                        <a href="{{ $acc->image_des }}" target="_blank" rel="noreferrer"
+                                           title="{{ $style ?: $acc->accessory?->name }}"
+                                           class="inline-block w-12 h-12 rounded border border-neutral-300 overflow-hidden bg-neutral-50 shrink-0 hover:ring-2 hover:ring-orange-400 transition">
+                                            <img src="{{ $driveThumb($acc->image_des, 'w200') }}" alt="add-on"
+                                                 class="w-full h-full object-cover" loading="lazy"
+                                                 onerror="this.parentElement.style.display='none'">
+                                        </a>
+                                    @endif
                                     Accessory: {{ $acc->accessory?->name }}
                                     @if ($style)
                                         / <span class="px-2 py-0.5 rounded {{ $styleColor }} font-extrabold text-base uppercase tracking-wide">{{ $style }}</span>
@@ -559,31 +571,6 @@
                         </div>
                     </div>
                 </div>
-
-                {{-- Add-on illustrations: what the packer should physically pick.
-                     Full tiles rather than a thumbnail next to the label, because
-                     this is the thing being matched by eye. Skipped entirely when
-                     no add-on has a photo. --}}
-                @php $accWithImage = $accList->filter(fn ($a) => $isImageish($a->image_des)); @endphp
-                @if ($accWithImage->isNotEmpty())
-                    <div class="p-4 border-b border-neutral-100">
-                        <h3 class="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">Add-on</h3>
-                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                            @foreach ($accWithImage as $acc)
-                                <a href="{{ $acc->image_des }}" target="_blank" rel="noreferrer" class="block group">
-                                    <div class="aspect-square bg-neutral-50 border border-neutral-200 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
-                                        <img src="{{ $driveThumb($acc->image_des) }}" alt="add-on" class="w-full h-full object-cover" loading="lazy"
-                                             onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2&quot;>ảnh lỗi</div>'" />
-                                    </div>
-                                    <div class="mt-1 text-[11px] text-neutral-700 font-semibold">{{ $acc->style ?: $acc->accessory?->name }}</div>
-                                    @if ($acc->style && $acc->accessory?->name)
-                                        <div class="text-[10px] text-neutral-400">{{ $acc->accessory->name }}</div>
-                                    @endif
-                                </a>
-                            @endforeach
-                        </div>
-                    </div>
-                @endif
 
                 {{-- Mockups + source design metas — split into two side-by-side panels --}}
                 @php
