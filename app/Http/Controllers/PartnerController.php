@@ -89,6 +89,13 @@ class PartnerController extends Controller
             ->with('creator:id,name')
             ->orderBy('gangsheets.id', 'desc');
 
+        // Channel scope, same rule as the admin list: no param means 'normal',
+        // which is what every existing client sends, and gangs written before
+        // the column existed default to normal too. 'all' opts out.
+        if (strtolower(trim((string) $request->input('source'))) !== 'all') {
+            $query->where('gangsheets.source', Order::normalizeSource($request->input('source')));
+        }
+
         if ($request->filled('date_from')) $query->whereDate('gangsheets.created_at', '>=', $request->date_from);
         if ($request->filled('date_to'))   $query->whereDate('gangsheets.created_at', '<=', $request->date_to);
         if ($request->filled('line_id'))   $query->where('gangsheets.line_id', $request->line_id);
@@ -228,6 +235,9 @@ class PartnerController extends Controller
             'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
         ])
             ->where('partner_id', $user->id)
+            // Compose one channel at a time: an FPT sheet must never be built
+            // out of normal orders, and vice-versa.
+            ->ofSource($request->input('source'))
             ->where('status', '!=', Order::STATUS_SHIPPED)
             ->orderBy('id', 'asc')
             ->get();
@@ -422,6 +432,7 @@ class PartnerController extends Controller
             'png_urls' => 'nullable|array',
             'png_urls.*' => 'url',
             'line_id' => 'nullable|string|max:16',
+            'source' => 'nullable|string|in:' . implode(',', Order::SOURCES),
             'page_format' => 'nullable|string|max:16',
             'first_system_id' => 'nullable|string',
             'last_system_id' => 'nullable|string',
@@ -450,6 +461,7 @@ class PartnerController extends Controller
                 'png_urls'        => $request->input('png_urls'),
                 'pdf_urls'        => $request->input('pdf_urls'),
                 'line_id'         => $request->line_id,
+                'source'          => Order::normalizeSource($request->input('source')),
                 'page_format'     => $request->page_format,
                 'first_system_id' => $request->first_system_id,
                 'last_system_id'  => $request->last_system_id,
