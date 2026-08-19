@@ -85,6 +85,12 @@ class GangsheetController extends Controller
             $query->hasUnshippedOrders();
         }
 
+        // Gangs nobody has been given yet — the ones still waiting to be handed
+        // out. A plain relation check, unlike the JSON order_ids filters above.
+        if ($request->boolean('no_partner')) {
+            $query->whereDoesntHave('partners');
+        }
+
         $paginated = $query->paginate($request->get('per_page', 20));
 
         // Duplicate detection: a gang is flagged when it shares an order_id with
