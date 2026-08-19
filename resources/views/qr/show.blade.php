@@ -493,9 +493,14 @@
             @php
                 $variant = $item->productVariant;
                 $product = $variant?->product;
-                $accUnit = $item->accessoryPrice ? (float) $item->accessoryPrice->price : 0;
+                // An item can carry several add-ons (a chip AND a holographic,
+                // say). The pivot is the real list; accessory_item_id is the
+                // legacy single choice, still set on older orders, so fall back
+                // to it only when the pivot is empty rather than showing both.
+                $accList = $item->accessoryPrices->isNotEmpty()
+                    ? $item->accessoryPrices
+                    : collect(array_filter([$item->accessoryPrice]));
                 $qty = $item->quantity ?? 1;
-                $subtotal = ((float) $item->price + $accUnit) * $qty;
 
                 $metasByKey = $item->metas->keyBy('key');
                 $sourceMetas = collect($sourceKeys)
@@ -529,9 +534,9 @@
                                 <span class="font-mono">SKU: {{ $variant->sku }}</span>
                             @endif
                             <span>Qty: <span class="font-semibold text-neutral-700">{{ $qty }}</span></span>
-                            @if ($item->accessoryPrice)
+                            @foreach ($accList as $acc)
                                 @php
-                                    $style = trim((string) ($item->accessoryPrice->style ?? ''));
+                                    $style = trim((string) ($acc->style ?? ''));
                                     $styleColor = match (strtolower($style)) {
                                         'pink' => 'bg-pink-100 text-pink-700 border border-pink-300',
                                         'red' => 'bg-red-100 text-red-700 border border-red-300',
@@ -545,27 +550,40 @@
                                     };
                                 @endphp
                                 <span class="text-neutral-700 inline-flex items-center gap-1.5">
-                                    Accessory: {{ $item->accessoryPrice->accessory?->name }}
+                                    Accessory: {{ $acc->accessory?->name }}
                                     @if ($style)
                                         / <span class="px-2 py-0.5 rounded {{ $styleColor }} font-extrabold text-base uppercase tracking-wide">{{ $style }}</span>
                                     @endif
-                                    {{-- Reference photo of this exact add-on, so the packer matches the
-                                         thing in front of them rather than the name. Click opens it full
-                                         size. Absent until someone uploads one. --}}
-                                    @if ($isImageish($item->accessoryPrice->image_des))
-                                        <a href="{{ $item->accessoryPrice->image_des }}" target="_blank" rel="noreferrer"
-                                           title="Ảnh mô tả: {{ $style ?: $item->accessoryPrice->accessory?->name }}"
-                                           class="inline-block w-10 h-10 rounded border border-neutral-300 overflow-hidden bg-neutral-50 align-middle hover:ring-2 hover:ring-orange-400">
-                                            <img src="{{ $driveThumb($item->accessoryPrice->image_des, 'w200') }}"
-                                                 alt="add-on" class="w-full h-full object-cover"
-                                                 onerror="this.parentElement.style.display='none'">
-                                        </a>
-                                    @endif
                                 </span>
-                            @endif
+                            @endforeach
                         </div>
                     </div>
                 </div>
+
+                {{-- Add-on illustrations: what the packer should physically pick.
+                     Full tiles rather than a thumbnail next to the label, because
+                     this is the thing being matched by eye. Skipped entirely when
+                     no add-on has a photo. --}}
+                @php $accWithImage = $accList->filter(fn ($a) => $isImageish($a->image_des)); @endphp
+                @if ($accWithImage->isNotEmpty())
+                    <div class="p-4 border-b border-neutral-100">
+                        <h3 class="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">Add-on</h3>
+                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                            @foreach ($accWithImage as $acc)
+                                <a href="{{ $acc->image_des }}" target="_blank" rel="noreferrer" class="block group">
+                                    <div class="aspect-square bg-neutral-50 border border-neutral-200 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
+                                        <img src="{{ $driveThumb($acc->image_des) }}" alt="add-on" class="w-full h-full object-cover" loading="lazy"
+                                             onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2&quot;>ảnh lỗi</div>'" />
+                                    </div>
+                                    <div class="mt-1 text-[11px] text-neutral-700 font-semibold">{{ $acc->style ?: $acc->accessory?->name }}</div>
+                                    @if ($acc->style && $acc->accessory?->name)
+                                        <div class="text-[10px] text-neutral-400">{{ $acc->accessory->name }}</div>
+                                    @endif
+                                </a>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
 
                 {{-- Mockups + source design metas — split into two side-by-side panels --}}
                 @php

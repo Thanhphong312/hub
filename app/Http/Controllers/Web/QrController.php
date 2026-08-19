@@ -18,6 +18,10 @@ class QrController extends Controller
             'items.productVariant.product',
             'items.accessoryPrice.accessory',
             'items.accessoryPrice.tier',
+            // The multi-add-on pivot: an item can have a chip AND a
+            // holographic. accessoryPrice above is only the legacy single one.
+            'items.accessoryPrices.accessory',
+            'items.accessoryPrices.tier',
             'address',
             'user',
             // Named on the page: who the order was handed to, and who closed
