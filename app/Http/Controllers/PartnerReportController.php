@@ -24,6 +24,9 @@ class PartnerReportController extends Controller
     /** Default span of the daily strip on each card. */
     private const DAILY_DAYS = 14;
 
+    /** Item meta keys that count as a printed face, per OrderController. */
+    private const DESIGN_KEYS = ['front', 'back', 'left', 'right', 'neck', 'special'];
+
     /**
      * One card per partner: how much they have shipped, and what is owed.
      *
@@ -126,7 +129,9 @@ class PartnerReportController extends Controller
         $listId = $partner->partner_price_list_id;
 
         $rows = $orders->map(function ($o) use ($listId, $tz) {
-            $breakdown = $listId ? $this->priceBreakdown($o, $listId) : ['total' => null, 'lines' => []];
+            $breakdown = $listId
+                ? $this->priceBreakdown($o, $listId)
+                : ['total' => null, 'items' => [], 'order' => []];
             $computed = $breakdown['total'];
             $current = $o->partner_revenue === null ? null : (float) $o->partner_revenue;
 
@@ -151,8 +156,12 @@ class PartnerReportController extends Controller
                 // Locked with no amount protects nothing — those still get
                 // priced, or they would stay blank forever.
                 'settled' => $o->partner_locked_at !== null && $current !== null,
-                // How that number was arrived at, item by item.
-                'breakdown' => $breakdown['lines'],
+                // How that number was arrived at: per item, then the
+                // once-per-order shipping component.
+                'breakdown' => [
+                    'items' => $breakdown['items'],
+                    'order' => $breakdown['order'],
+                ],
                 // Only meaningful when both sides have a number.
                 'diff' => ($current !== null && $computed !== null)
                     ? round($computed - $current, 2) : null,
@@ -243,60 +252,93 @@ class PartnerReportController extends Controller
     /**
      * One order's worth against a rate card, with the working shown.
      *
-     * Mirrors calcPartnerRevenue in GangsheetController: only the keys the card
-     * actually prices are summed. `total` is null when the card prices nothing
-     * on this order, so "no rate" stays distinguishable from a real zero.
+     * Follows the same formula the order itself is priced by (see
+     * OrderController::computeResendPricing / computeOrderShipping), with the
+     * partner's rates substituted for the seller's:
      *
-     * `lines` is the same arithmetic laid out per item — which key or accessory
-     * contributed what — because an amount nobody can check is an amount
-     * nobody can argue with.
+     *   per item   base_cost + 2nd_fee x (so mat in - 1) + add-ons, all x SL
+     *   per order  tiktok_ship  -> label_fee, only when the order has a label
+     *              otherwise    -> shipping_cost + addition_fee x (tong SL - 1)
+     *
+     * Summing every key on the card instead would charge 2nd_fee on one-sided
+     * designs and addition_fee on single-item orders - money the order never
+     * actually incurred.
+     *
+     * `total` is null when the card prices nothing on this order, so "no rate"
+     * stays distinguishable from a real zero.
      */
     private function priceBreakdown(Order $order, int $listId): array
     {
-        $order->loadMissing(['items.productVariant.product:id,name,line_id', 'items.accessoryPrices.accessory:id,name']);
+        $order->loadMissing([
+            'items.productVariant.product:id,name,line_id',
+            'items.accessoryPrices.accessory:id,name',
+            'items.metas',
+        ]);
+
+        $empty = ['total' => null, 'items' => [], 'order' => []];
 
         $variantIds = $order->items->pluck('product_variant_id')->filter()->unique()->values()->all();
         if (empty($variantIds)) {
-            return ['total' => null, 'lines' => []];
+            return $empty;
         }
 
-        // Kept per key, not summed, so the breakdown can name each contributor.
-        $variantPrices = PartnerVariantPrice::where('partner_price_list_id', $listId)
+        // (variant, key) -> rate. Missing means the card does not pay that key.
+        $rates = PartnerVariantPrice::where('partner_price_list_id', $listId)
             ->whereIn('product_variant_id', $variantIds)
             ->get()
-            ->groupBy('product_variant_id');
+            ->groupBy('product_variant_id')
+            ->map(fn ($rows) => $rows->pluck('price', 'key')->map(fn ($p) => (float) $p));
+        $rate = fn (?int $vid, string $key) => $vid ? ($rates[$vid][$key] ?? null) : null;
 
         $accIds = $order->items->flatMap(fn ($i) => $i->accessoryPrices->pluck('id'))
             ->unique()->values()->all();
-        $accPrices = empty($accIds) ? collect() : PartnerAccessoryPrice::where('partner_price_list_id', $listId)
+        $accRates = empty($accIds) ? collect() : PartnerAccessoryPrice::where('partner_price_list_id', $listId)
             ->whereIn('accessory_price_id', $accIds)
             ->pluck('price', 'accessory_price_id');
 
-        $total = 0;
         $hasPrice = false;
+        $total = 0.0;
         $lines = [];
 
         foreach ($order->items as $item) {
             $qty = max(1, (int) $item->quantity);
-            $unit = 0;
+            $vid = $item->product_variant_id;
+            $unit = 0.0;
             $parts = [];
 
-            foreach ($variantPrices[$item->product_variant_id] ?? [] as $vp) {
-                $unit += (float) $vp->price;
+            $base = $rate($vid, 'base_cost');
+            if ($base !== null) {
+                $unit += $base;
                 $hasPrice = true;
-                $parts[] = ['type' => 'variant', 'label' => $vp->key, 'price' => (float) $vp->price];
+                $parts[] = ['label' => 'base_cost', 'note' => null, 'unit' => $base];
+            }
+
+            // Face fee, exactly as the order charges it: 2nd_fee x (faces - 1).
+            $faces = $item->metas
+                ->filter(fn ($m) => in_array($m->key, self::DESIGN_KEYS, true) && trim((string) $m->value) !== '')
+                ->count();
+            $second = $rate($vid, '2nd_fee');
+            if ($faces > 1 && $second !== null) {
+                $amt = ($faces - 1) * $second;
+                $unit += $amt;
+                $hasPrice = true;
+                $parts[] = ['label' => '2nd_fee', 'note' => $faces.' mặt in → × '.($faces - 1), 'unit' => $amt];
+            } elseif ($second !== null) {
+                // Priced on the card but not owed here - say so, rather than
+                // leave the reader wondering why the rate went unused.
+                $parts[] = ['label' => '2nd_fee', 'note' => 'đơn 1 mặt → không tính', 'unit' => 0.0];
             }
 
             foreach ($item->accessoryPrices as $ap) {
-                $label = trim(($ap->accessory?->name ?? 'Add-on').' · '.($ap->style ?: $ap->accessory_code));
-                if ($accPrices->has($ap->id)) {
-                    $unit += (float) $accPrices[$ap->id];
+                $label = 'Add-on: '.trim(($ap->accessory?->name ?? 'Add-on').' · '.($ap->style ?: $ap->accessory_code));
+                if ($accRates->has($ap->id)) {
+                    $unit += (float) $accRates[$ap->id];
                     $hasPrice = true;
-                    $parts[] = ['type' => 'accessory', 'label' => $label, 'price' => (float) $accPrices[$ap->id]];
+                    $parts[] = ['label' => $label, 'note' => null, 'unit' => (float) $accRates[$ap->id]];
                 } else {
-                    // On the order but absent from the card: shown at zero so a
+                    // On the order but absent from the card: shown at null so a
                     // missing rate reads as an omission, not as free work.
-                    $parts[] = ['type' => 'accessory', 'label' => $label, 'price' => null];
+                    $parts[] = ['label' => $label, 'note' => null, 'unit' => null];
                 }
             }
 
@@ -311,6 +353,52 @@ class PartnerReportController extends Controller
             ];
         }
 
-        return ['total' => $hasPrice ? round($total, 2) : null, 'lines' => $lines];
+        // Shipping is charged once per order off the first item's variant -
+        // the same reference computeOrderShipping uses.
+        $refVid = (int) ($order->items->first()?->product_variant_id ?? 0);
+        $totalQty = (int) $order->items->sum(fn ($i) => max(1, (int) $i->quantity));
+        $orderParts = [];
+
+        if ($order->ship_type === Order::SHIP_TIKTOK) {
+            $labelFee = $rate($refVid, 'label_fee');
+            $hasLabel = ! empty($order->shipping_label);
+            if ($labelFee !== null && $hasLabel) {
+                $total += $labelFee;
+                $hasPrice = true;
+                $orderParts[] = ['label' => 'label_fee', 'note' => 'tiktok_ship, đơn có label', 'amount' => $labelFee];
+            } elseif ($labelFee !== null) {
+                $orderParts[] = ['label' => 'label_fee', 'note' => 'tiktok_ship, đơn chưa có label → không tính', 'amount' => 0.0];
+            }
+        } else {
+            $ship = $rate($refVid, 'shipping_cost');
+            $addition = $rate($refVid, 'addition_fee');
+            $extra = max(0, $totalQty - 1);
+
+            if ($ship !== null) {
+                $total += $ship;
+                $hasPrice = true;
+                $orderParts[] = ['label' => 'shipping_cost', 'note' => $order->ship_type, 'amount' => $ship];
+            }
+            if ($addition !== null) {
+                $amt = $extra * $addition;
+                $total += $amt;
+                if ($amt > 0) {
+                    $hasPrice = true;
+                }
+                $orderParts[] = [
+                    'label' => 'addition_fee',
+                    'note' => $extra > 0
+                        ? 'tổng SL '.$totalQty.' → × '.$extra
+                        : 'tổng SL 1 → không tính',
+                    'amount' => round($amt, 2),
+                ];
+            }
+        }
+
+        return [
+            'total' => $hasPrice ? round($total, 2) : null,
+            'items' => $lines,
+            'order' => $orderParts,
+        ];
     }
 }
