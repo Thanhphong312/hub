@@ -576,8 +576,14 @@
                 @php
                     $hasMockup = $isImageish($item->mockup_front) || $isImageish($item->mockup_back);
                     $hasDesign = $sourceMetas->isNotEmpty();
+                    // FPT orders carry an uploaded SKU label per item — the
+                    // sticker that goes on the parcel. Shown whenever the item
+                    // has one rather than gated on order.source: only FPT items
+                    // ever get one, and keying off the data cannot hide a label
+                    // that genuinely exists.
+                    $skuLabel = $isImageish($item->sku_label) ? $item->sku_label : null;
                 @endphp
-                @if ($hasMockup || $hasDesign)
+                @if ($hasMockup || $hasDesign || $skuLabel)
                     <div class="p-4 border-b border-neutral-100">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
@@ -600,6 +606,24 @@
                                                 <div class="mt-1 text-[11px] text-neutral-600 font-medium">Mockup back</div>
                                             </a>
                                         @endif
+                                        @if ($skuLabel)
+                                            <a href="{{ $skuLabel }}" target="_blank" rel="noreferrer" class="block group">
+                                                <div class="aspect-square bg-neutral-50 border-2 border-blue-300 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
+                                                    <img src="{{ $driveThumb($skuLabel) }}" alt="sku label" class="w-full h-full object-contain" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $skuLabel }}</div>'" />
+                                                </div>
+                                                <div class="mt-1 text-[11px] text-blue-700 font-semibold">SKU label</div>
+                                            </a>
+                                        @endif
+                                    </div>
+                                @elseif ($skuLabel)
+                                    {{-- No mockup, but there is a label to show. --}}
+                                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                                        <a href="{{ $skuLabel }}" target="_blank" rel="noreferrer" class="block group">
+                                            <div class="aspect-square bg-neutral-50 border-2 border-blue-300 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
+                                                <img src="{{ $driveThumb($skuLabel) }}" alt="sku label" class="w-full h-full object-contain" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $skuLabel }}</div>'" />
+                                            </div>
+                                            <div class="mt-1 text-[11px] text-blue-700 font-semibold">SKU label</div>
+                                        </a>
                                     </div>
                                 @else
                                     <p class="text-xs text-neutral-400">No mockup uploaded.</p>
