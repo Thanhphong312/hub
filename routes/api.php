@@ -273,6 +273,11 @@ Route::middleware('auth:sanctum')->group(function () {
         // Partner assignment (admin assigns gangs to partner users).
         Route::get('/gangsheets/partner-users', [GangsheetController::class, 'partnerUsers']);
 
+        // Partner reporting: what each partner shipped and what it owes them.
+        Route::get('/partner-report/dashboard', [\App\Http\Controllers\PartnerReportController::class, 'dashboard']);
+        Route::get('/partner-report/{partner}/orders', [\App\Http\Controllers\PartnerReportController::class, 'orders']);
+        Route::post('/partner-report/{partner}/apply-revenue', [\App\Http\Controllers\PartnerReportController::class, 'applyRevenue']);
+
         // Partner rate cards: what a partner is paid, per card rather than per
         // partner, so workshops on the same terms share one.
         Route::get('/partner-price-lists', [\App\Http\Controllers\PartnerPriceListController::class, 'index']);
