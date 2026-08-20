@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\FiltersOrderList;
 use App\Models\Gangsheet;
 use App\Models\Order;
 use App\Models\OrderItemMeta;
+use App\Models\Ticket;
+use App\Services\GangsheetService;
 use Illuminate\Http\Request;
 
 /**
@@ -15,7 +18,7 @@ use Illuminate\Http\Request;
 class PartnerController extends Controller
 {
     // Same order filters as the admin Orders page — see orderIndex().
-    use \App\Http\Controllers\Concerns\FiltersOrderList;
+    use FiltersOrderList;
 
     private const QR_KEY_REGEX = '_qr(_[0-9]+)?$';
 
@@ -25,8 +28,11 @@ class PartnerController extends Controller
         $gangs = $user->assignedGangsheets()->get(['gangsheets.id', 'order_ids']);
         $ids = [];
         foreach ($gangs as $g) {
-            foreach (($g->order_ids ?? []) as $oid) $ids[(int) $oid] = true;
+            foreach (($g->order_ids ?? []) as $oid) {
+                $ids[(int) $oid] = true;
+            }
         }
+
         return array_keys($ids);
     }
 
@@ -61,24 +67,39 @@ class PartnerController extends Controller
         $gangs = $user->assignedGangsheets()->get(['gangsheets.id', 'order_ids', 'metas_count']);
         $orderIds = [];
         foreach ($gangs as $g) {
-            foreach (($g->order_ids ?? []) as $oid) $orderIds[$oid] = true;
+            foreach (($g->order_ids ?? []) as $oid) {
+                $orderIds[$oid] = true;
+            }
         }
 
         // Doanh thu được phân chia cho partner này (tổng partner_revenue trên
         // các đơn admin đã gán cho họ). locked = đã chốt (đánh dấu đã in).
+        // Split by whether the seller has settled the order, using the hub's
+        // own definition of unpaid (paid_cost < total_cost). This is the
+        // customer's payment, never the partner's payout — the amounts summed
+        // here are always partner_revenue, so the labels must say whose payment
+        // is meant or a partner will read it as money owed to them.
         $revenue = Order::where('partner_id', $user->id)
             ->selectRaw('COALESCE(SUM(partner_revenue),0) as total, '
-                . 'COALESCE(SUM(CASE WHEN partner_locked_at IS NOT NULL THEN partner_revenue ELSE 0 END),0) as locked, '
-                . 'COUNT(*) as cnt')
+                .'COALESCE(SUM(CASE WHEN partner_locked_at IS NOT NULL THEN partner_revenue ELSE 0 END),0) as locked, '
+                .'COALESCE(SUM(CASE WHEN paid_cost >= total_cost THEN partner_revenue ELSE 0 END),0) as paid, '
+                .'COALESCE(SUM(CASE WHEN paid_cost < total_cost THEN partner_revenue ELSE 0 END),0) as unpaid, '
+                .'SUM(CASE WHEN paid_cost >= total_cost THEN 1 ELSE 0 END) as paid_cnt, '
+                .'SUM(CASE WHEN paid_cost < total_cost THEN 1 ELSE 0 END) as unpaid_cnt, '
+                .'COUNT(*) as cnt')
             ->first();
 
         return response()->json([
             'total_gangsheets' => $gangs->count(),
-            'total_orders'     => count($orderIds),
-            'total_metas'      => (int) $gangs->sum('metas_count'),
-            'revenue_total'    => round((float) ($revenue->total ?? 0), 2),
-            'revenue_locked'   => round((float) ($revenue->locked ?? 0), 2),
-            'revenue_orders'   => (int) ($revenue->cnt ?? 0),
+            'total_orders' => count($orderIds),
+            'total_metas' => (int) $gangs->sum('metas_count'),
+            'revenue_total' => round((float) ($revenue->total ?? 0), 2),
+            'revenue_locked' => round((float) ($revenue->locked ?? 0), 2),
+            'revenue_orders' => (int) ($revenue->cnt ?? 0),
+            'revenue_paid' => round((float) ($revenue->paid ?? 0), 2),
+            'revenue_unpaid' => round((float) ($revenue->unpaid ?? 0), 2),
+            'orders_paid' => (int) ($revenue->paid_cnt ?? 0),
+            'orders_unpaid' => (int) ($revenue->unpaid_cnt ?? 0),
         ]);
     }
 
@@ -96,9 +117,15 @@ class PartnerController extends Controller
             $query->where('gangsheets.source', Order::normalizeSource($request->input('source')));
         }
 
-        if ($request->filled('date_from')) $query->whereDate('gangsheets.created_at', '>=', $request->date_from);
-        if ($request->filled('date_to'))   $query->whereDate('gangsheets.created_at', '<=', $request->date_to);
-        if ($request->filled('line_id'))   $query->where('gangsheets.line_id', $request->line_id);
+        if ($request->filled('date_from')) {
+            $query->whereDate('gangsheets.created_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('gangsheets.created_at', '<=', $request->date_to);
+        }
+        if ($request->filled('line_id')) {
+            $query->where('gangsheets.line_id', $request->line_id);
+        }
         if ($request->filled('page_format')) {
             if ($request->page_format === 'letter') {
                 $query->where(fn ($q) => $q->where('gangsheets.page_format', 'letter')->orWhereNull('gangsheets.page_format'));
@@ -151,7 +178,7 @@ class PartnerController extends Controller
     public function destroyGangsheet(Request $request, Gangsheet $gangsheet)
     {
         $user = $request->user();
-        if (!$user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
+        if (! $user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
             return response()->json(['message' => 'Not found'], 404);
         }
 
@@ -168,14 +195,14 @@ class PartnerController extends Controller
         $filename = $gangsheet->filename;
         $gangsheet->delete();
 
-        return response()->json(['message' => 'Đã xoá ' . $filename]);
+        return response()->json(['message' => 'Đã xoá '.$filename]);
     }
 
     /** One assigned gangsheet + its orders. 404 if not assigned to this partner. */
     public function show(Request $request, Gangsheet $gangsheet)
     {
         $assigned = $request->user()->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists();
-        if (!$assigned) {
+        if (! $assigned) {
             return response()->json(['message' => 'Not found'], 404);
         }
 
@@ -197,7 +224,7 @@ class PartnerController extends Controller
     {
         $request->validate(['printed' => 'required|boolean']);
         $user = $request->user();
-        if (!$user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
+        if (! $user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
             return response()->json(['message' => 'Not found'], 404);
         }
         $printedAt = $request->boolean('printed') ? now() : null;
@@ -207,7 +234,7 @@ class PartnerController extends Controller
         // Once printed, admin can no longer change the partner or the amount;
         // un-printing reverses it so a mistaken mark can be corrected.
         $orderIds = $gangsheet->order_ids ?? [];
-        if (!empty($orderIds)) {
+        if (! empty($orderIds)) {
             Order::whereIn('id', $orderIds)
                 ->where('partner_id', $user->id)
                 ->update(['partner_locked_at' => $printedAt]);
@@ -257,7 +284,7 @@ class PartnerController extends Controller
     public function lookupOrders(Request $request)
     {
         $request->validate([
-            'system_ids'   => 'required|array|min:1',
+            'system_ids' => 'required|array|min:1',
             'system_ids.*' => 'string',
         ]);
 
@@ -290,8 +317,8 @@ class PartnerController extends Controller
         $found = $orders->pluck('system_id')->all();
 
         return response()->json([
-            'orders'  => $orders,
-            'found'   => $found,
+            'orders' => $orders,
+            'found' => $found,
             'missing' => array_values(array_diff($ids, $found)),
         ]);
     }
@@ -331,7 +358,7 @@ class PartnerController extends Controller
         $query->withCount([
             'tickets as tickets_count' => fn ($q) => $q->visibleTo($user),
             'tickets as open_tickets_count' => fn ($q) => $q->visibleTo($user)
-                ->whereIn('status', [\App\Models\Ticket::STATUS_OPEN, \App\Models\Ticket::STATUS_NEW_MESSAGE]),
+                ->whereIn('status', [Ticket::STATUS_OPEN, Ticket::STATUS_NEW_MESSAGE]),
         ]);
 
         $this->applyOrderListFilters($query, $request);
@@ -404,6 +431,7 @@ class PartnerController extends Controller
     public function storageCredentials(Request $request)
     {
         $cfg = config('filesystems.disks.b2');
+
         return response()->json([
             'access_key_id' => $cfg['key'] ?? null,
             'secret_access_key' => $cfg['secret'] ?? null,
@@ -411,7 +439,7 @@ class PartnerController extends Controller
             'endpoint' => $cfg['endpoint'] ?? null,
             'bucket' => $cfg['bucket'] ?? null,
             'public_url_base' => rtrim($cfg['url'] ?? '', '/'),
-            'folder' => 'gangsheet/' . now()->format('Y-m-d'),
+            'folder' => 'gangsheet/'.now()->format('Y-m-d'),
         ]);
     }
 
@@ -432,7 +460,7 @@ class PartnerController extends Controller
             'png_urls' => 'nullable|array',
             'png_urls.*' => 'url',
             'line_id' => 'nullable|string|max:16',
-            'source' => 'nullable|string|in:' . implode(',', Order::SOURCES),
+            'source' => 'nullable|string|in:'.implode(',', Order::SOURCES),
             'page_format' => 'nullable|string|max:16',
             'first_system_id' => 'nullable|string',
             'last_system_id' => 'nullable|string',
@@ -448,31 +476,32 @@ class PartnerController extends Controller
         $allowed = array_flip($this->composableOrderIds($user));
         $orderIds = array_values(array_unique(array_map('intval', $request->order_ids)));
         foreach ($orderIds as $oid) {
-            if (!isset($allowed[$oid])) {
+            if (! isset($allowed[$oid])) {
                 return response()->json(['message' => "Order {$oid} is not assigned to you"], 403);
             }
         }
         $metaIds = array_values(array_unique(array_map('intval', $request->meta_ids)));
 
         try {
-            $gangsheet = app(\App\Services\GangsheetService::class)->record([
-                'filename'        => $request->filename,
-                'file_url'        => $request->file_url,
-                'png_urls'        => $request->input('png_urls'),
-                'pdf_urls'        => $request->input('pdf_urls'),
-                'line_id'         => $request->line_id,
-                'source'          => Order::normalizeSource($request->input('source')),
-                'page_format'     => $request->page_format,
+            $gangsheet = app(GangsheetService::class)->record([
+                'filename' => $request->filename,
+                'file_url' => $request->file_url,
+                'png_urls' => $request->input('png_urls'),
+                'pdf_urls' => $request->input('pdf_urls'),
+                'line_id' => $request->line_id,
+                'source' => Order::normalizeSource($request->input('source')),
+                'page_format' => $request->page_format,
                 'first_system_id' => $request->first_system_id,
-                'last_system_id'  => $request->last_system_id,
-                'orders_count'    => (int) $request->orders_count,
-                'metas_count'     => (int) $request->metas_count,
-                'order_ids'       => $orderIds,
-                'meta_ids'        => $metaIds,
+                'last_system_id' => $request->last_system_id,
+                'orders_count' => (int) $request->orders_count,
+                'metas_count' => (int) $request->metas_count,
+                'order_ids' => $orderIds,
+                'meta_ids' => $metaIds,
             ], $user->id);
         } catch (\Throwable $e) {
-            \Log::error('[partner-gangsheet] DB save failed: ' . $e->getMessage(), ['filename' => $request->filename]);
-            return response()->json(['message' => 'Failed to record gang sheet: ' . $e->getMessage()], 500);
+            \Log::error('[partner-gangsheet] DB save failed: '.$e->getMessage(), ['filename' => $request->filename]);
+
+            return response()->json(['message' => 'Failed to record gang sheet: '.$e->getMessage()], 500);
         }
 
         // Auto-assign the new gang to this partner (keep any other partners).
@@ -492,7 +521,7 @@ class PartnerController extends Controller
     public function updatePngUrls(Request $request, Gangsheet $gangsheet)
     {
         $user = $request->user();
-        if (!$user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
+        if (! $user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
             return response()->json(['message' => 'Not found'], 404);
         }
 
@@ -502,11 +531,12 @@ class PartnerController extends Controller
             'force' => 'sometimes|boolean',
         ]);
 
-        if ($gangsheet->png_urls && !$request->boolean('force')) {
+        if ($gangsheet->png_urls && ! $request->boolean('force')) {
             return response()->json(['message' => 'PNG đã tồn tại. Gửi force=true để ghi đè.'], 409);
         }
 
         $gangsheet->update(['png_urls' => $request->png_urls]);
+
         return response()->json(['gangsheet' => $gangsheet->only('id', 'png_urls')]);
     }
 
@@ -518,7 +548,7 @@ class PartnerController extends Controller
     public function reconvertGangsheet(Request $request, Gangsheet $gangsheet)
     {
         $user = $request->user();
-        if (!$user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
+        if (! $user->assignedGangsheets()->where('gangsheets.id', $gangsheet->id)->exists()) {
             return response()->json(['message' => 'Not found'], 404);
         }
 
