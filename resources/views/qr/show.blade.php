@@ -582,6 +582,10 @@
                     // ever get one, and keying off the data cannot hide a label
                     // that genuinely exists.
                     $skuLabel = $isImageish($item->sku_label) ? $item->sku_label : null;
+                    // Labels come through as PDF as often as PNG. A PDF in an
+                    // <img> just fails, and the old fallback dumped the whole
+                    // URL into the tile — these filenames run to 200 characters.
+                    $skuIsPdf = $skuLabel && str_contains(strtolower(parse_url($skuLabel, PHP_URL_PATH) ?? ''), '.pdf');
                 @endphp
                 @if ($hasMockup || $hasDesign || $skuLabel)
                     <div class="p-4 border-b border-neutral-100">
@@ -607,23 +611,13 @@
                                             </a>
                                         @endif
                                         @if ($skuLabel)
-                                            <a href="{{ $skuLabel }}" target="_blank" rel="noreferrer" class="block group">
-                                                <div class="aspect-square bg-neutral-50 border-2 border-blue-300 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
-                                                    <img src="{{ $driveThumb($skuLabel) }}" alt="sku label" class="w-full h-full object-contain" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $skuLabel }}</div>'" />
-                                                </div>
-                                                <div class="mt-1 text-[11px] text-blue-700 font-semibold">SKU label</div>
-                                            </a>
+                                            @include('qr.partials.sku-label', ['url' => $skuLabel, 'isPdf' => $skuIsPdf])
                                         @endif
                                     </div>
                                 @elseif ($skuLabel)
                                     {{-- No mockup, but there is a label to show. --}}
                                     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                                        <a href="{{ $skuLabel }}" target="_blank" rel="noreferrer" class="block group">
-                                            <div class="aspect-square bg-neutral-50 border-2 border-blue-300 rounded overflow-hidden group-hover:ring-2 group-hover:ring-orange-400 transition">
-                                                <img src="{{ $driveThumb($skuLabel) }}" alt="sku label" class="w-full h-full object-contain" loading="lazy" onerror="this.parentElement.innerHTML='<div class=&quot;text-[10px] text-neutral-400 p-2 break-all&quot;>{{ $skuLabel }}</div>'" />
-                                            </div>
-                                            <div class="mt-1 text-[11px] text-blue-700 font-semibold">SKU label</div>
-                                        </a>
+                                        @include('qr.partials.sku-label', ['url' => $skuLabel, 'isPdf' => $skuIsPdf])
                                     </div>
                                 @else
                                     <p class="text-xs text-neutral-400">No mockup uploaded.</p>
