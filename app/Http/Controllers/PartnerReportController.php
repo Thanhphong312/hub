@@ -88,6 +88,19 @@ class PartnerReportController extends Controller
                     // Shipped but with no completed_time, so absent from `daily`.
                     'undated' => (clone $shipped)->whereNull('completed_time')->count(),
                     'revenue_total' => round((float) (clone $shipped)->sum('partner_revenue'), 2),
+                    // Split by whether the seller has settled the order, using
+                    // the hub's own definition of unpaid (paid_cost <
+                    // total_cost). Money owed on orders nobody has paid for yet
+                    // is money going out ahead of money coming in, which is the
+                    // number worth seeing separately.
+                    'revenue_paid' => round((float) (clone $shipped)
+                        ->whereColumn('paid_cost', '>=', 'total_cost')->sum('partner_revenue'), 2),
+                    'revenue_unpaid' => round((float) (clone $shipped)
+                        ->whereColumn('paid_cost', '<', 'total_cost')->sum('partner_revenue'), 2),
+                    'orders_paid' => (clone $shipped)
+                        ->whereColumn('paid_cost', '>=', 'total_cost')->count(),
+                    'orders_unpaid' => (clone $shipped)
+                        ->whereColumn('paid_cost', '<', 'total_cost')->count(),
                     'revenue_locked' => round((float) (clone $shipped)->whereNotNull('partner_locked_at')->sum('partner_revenue'), 2),
                     // Shipped work carrying no amount yet — the backlog the
                     // "tính tiền" button exists to clear.
@@ -151,6 +164,7 @@ class PartnerReportController extends Controller
                 'current' => $current,
                 'computed' => $computed,
                 'locked' => $o->partner_locked_at !== null,
+                'paid' => (float) $o->paid_cost >= (float) $o->total_cost,
                 // Locked AND already carrying an amount: that number was
                 // settled against, so it is the one applyRevenue protects.
                 // Locked with no amount protects nothing — those still get
@@ -183,6 +197,12 @@ class PartnerReportController extends Controller
                 'locked' => $rows->where('locked', true)->count(),
                 'settled' => $rows->where('settled', true)->count(),
                 'unpriced' => $rows->whereNull('current')->count(),
+                // Same split as the cards, over the amounts computed here.
+                'computed_paid' => round((float) $rows->where('paid', true)
+                    ->sum(fn ($r) => $r['computed'] ?? $r['current'] ?? 0), 2),
+                'computed_unpaid' => round((float) $rows->where('paid', false)
+                    ->sum(fn ($r) => $r['computed'] ?? $r['current'] ?? 0), 2),
+                'orders_unpaid' => $rows->where('paid', false)->count(),
             ],
         ]);
     }
