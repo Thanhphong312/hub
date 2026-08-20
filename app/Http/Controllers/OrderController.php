@@ -2,24 +2,33 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\FiltersOrderList;
 use App\Models\AccessoryPrice;
+use App\Models\Address;
+use App\Models\AppSetting;
+use App\Models\Material;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderItemMeta;
-use App\Models\Address;
+use App\Models\Product;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantPrice;
+use App\Models\Ticket;
 use App\Models\User;
 use App\Models\WalletTransaction;
+use App\Services\CarrierTrackingService;
 use App\Services\ImageValidationService;
-use Illuminate\Database\Eloquent\Builder;
+use App\Services\ShippoService;
+use App\Services\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class OrderController extends Controller
 {
-    use \App\Http\Controllers\Concerns\FiltersOrderList;
+    use FiltersOrderList;
 
     /**
      * @OA\Get(
@@ -28,6 +37,7 @@ class OrderController extends Controller
      *     summary="List orders",
      *     description="Paginated list. Seller chỉ thấy đơn của mình. Product filters match nếu đơn có **ít nhất một** order_item thỏa điều kiện. Load filter options qua GET /products và GET /variants.",
      *     security={{"bearerAuth":{}}},
+     *
      *     @OA\Parameter(name="status",              in="query", description="Status 0–7 (6=shipped)", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="ship_type",           in="query", @OA\Schema(type="string", enum={"tiktok_ship","seller_ship"})),
      *     @OA\Parameter(name="ref_id",              in="query", description="Contains match", @OA\Schema(type="string")),
@@ -55,6 +65,7 @@ class OrderController extends Controller
      *     @OA\Parameter(name="sort_dir",            in="query", @OA\Schema(type="string", enum={"asc","desc"}, default="desc")),
      *     @OA\Parameter(name="page",                in="query", @OA\Schema(type="integer", default=1)),
      *     @OA\Parameter(name="per_page",            in="query", @OA\Schema(type="integer", default=20)),
+     *
      *     @OA\Response(response=200, description="Paginated list")
      * )
      */
@@ -83,7 +94,7 @@ class OrderController extends Controller
         $query->withCount([
             'tickets as tickets_count' => fn ($q) => $q->visibleTo($user),
             'tickets as open_tickets_count' => fn ($q) => $q->visibleTo($user)
-                ->whereIn('status', [\App\Models\Ticket::STATUS_OPEN, \App\Models\Ticket::STATUS_NEW_MESSAGE]),
+                ->whereIn('status', [Ticket::STATUS_OPEN, Ticket::STATUS_NEW_MESSAGE]),
         ]);
 
         // Seller chỉ thấy đơn của mình
@@ -92,7 +103,7 @@ class OrderController extends Controller
         }
 
         // Filter by user_id (admin/support)
-        if ($request->has('user_id') && !$request->user()->hasRole('seller')) {
+        if ($request->has('user_id') && ! $request->user()->hasRole('seller')) {
             $query->where('user_id', $request->user_id);
         }
 
@@ -141,7 +152,9 @@ class OrderController extends Controller
      *     tags={"Orders"},
      *     summary="Get order",
      *     security={{"bearerAuth":{}}},
+     *
      *     @OA\Parameter(name="order", in="path", required=true, @OA\Schema(type="integer"), example=123),
+     *
      *     @OA\Response(response=200, description="OK"),
      *     @OA\Response(response=404, description="Not found")
      * )
@@ -166,14 +179,15 @@ class OrderController extends Controller
         }
 
         try {
-            $res = \Illuminate\Support\Facades\Http::timeout(15)->get($order->convert_label);
-            if (!$res->ok()) {
+            $res = Http::timeout(15)->get($order->convert_label);
+            if (! $res->ok()) {
                 return response()->json([
                     'message' => "Upstream returned HTTP {$res->status()}",
                 ], 502);
             }
+
             return response($res->body(), 200, [
-                'Content-Type'  => $res->header('Content-Type') ?: 'image/jpeg',
+                'Content-Type' => $res->header('Content-Type') ?: 'image/jpeg',
                 'Cache-Control' => 'public, max-age=300',
             ]);
         } catch (\Throwable $e) {
@@ -200,8 +214,11 @@ class OrderController extends Controller
 
     private function shouldHideQrMetas($user): bool
     {
-        if (!$user || !$user->role) return true;
-        return !in_array($user->role->slug, ['admin', 'support']);
+        if (! $user || ! $user->role) {
+            return true;
+        }
+
+        return ! in_array($user->role->slug, ['admin', 'support']);
     }
 
     /**
@@ -211,21 +228,26 @@ class OrderController extends Controller
      */
     private function generateUniqueRefId($userId, ?string $baseRefId, array &$assignedInBatch, ?int $excludeOrderId = null): ?string
     {
-        if ($baseRefId === null || $baseRefId === '') return null;
+        if ($baseRefId === null || $baseRefId === '') {
+            return null;
+        }
 
         $existsForUser = function (string $candidate) use ($userId, $excludeOrderId) {
             $q = Order::where('user_id', $userId)->where('ref_id', $candidate);
-            if ($excludeOrderId) $q->where('id', '!=', $excludeOrderId);
+            if ($excludeOrderId) {
+                $q->where('id', '!=', $excludeOrderId);
+            }
+
             return $q->exists();
         };
 
-        if (!isset($assignedInBatch[$baseRefId]) && !$existsForUser($baseRefId)) {
+        if (! isset($assignedInBatch[$baseRefId]) && ! $existsForUser($baseRefId)) {
             return $baseRefId;
         }
         $n = 1;
         while (true) {
-            $candidate = $baseRefId . '_r_' . $n;
-            if (!isset($assignedInBatch[$candidate]) && !$existsForUser($candidate)) {
+            $candidate = $baseRefId.'_r_'.$n;
+            if (! isset($assignedInBatch[$candidate]) && ! $existsForUser($candidate)) {
                 return $candidate;
             }
             $n++;
@@ -240,16 +262,21 @@ class OrderController extends Controller
     private function collectAccessoryIds(array $itemData): array
     {
         $ids = [];
-        if (!empty($itemData['accessory_ids']) && is_array($itemData['accessory_ids'])) {
+        if (! empty($itemData['accessory_ids']) && is_array($itemData['accessory_ids'])) {
             foreach ($itemData['accessory_ids'] as $id) {
                 $i = (int) $id;
-                if ($i > 0) $ids[$i] = true;
+                if ($i > 0) {
+                    $ids[$i] = true;
+                }
             }
         }
-        if (!empty($itemData['accessory_item_id'])) {
+        if (! empty($itemData['accessory_item_id'])) {
             $i = (int) $itemData['accessory_item_id'];
-            if ($i > 0) $ids[$i] = true;
+            if ($i > 0) {
+                $ids[$i] = true;
+            }
         }
+
         return array_keys($ids);
     }
 
@@ -318,29 +345,13 @@ class OrderController extends Controller
      *     summary="Create order (Sanctum)",
      *     description="Tạo 1 đơn mới. Phải gửi 1 trong 2: `shipping_label` URL HOẶC `address` đầy đủ. Items hỗ trợ multi-accessory qua `accessory_ids[]`.
 
-### `items[].metas` keys
-
-Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{ key, value }` — `value` là URL ảnh design (Drive/B2/direct image), `key` là tên mặt in. Các key cho phép:
-
-| key | Mặt in | Khi nào dùng |
-|-----|--------|--------------|
-| `front` | Mặt trước | Đa số sản phẩm 1 hoặc 2 mặt. Thường bắt buộc. |
-| `back` | Mặt sau | Đơn 2 mặt. Tự cộng thêm `2nd_fee` vào item price (vd \$0.50). |
-| `left` | Mặt trái | Đơn có 3 mặt+ (vd áo có in tay trái). |
-| `right` | Mặt phải | Tương tự `left`. |
-| `neck` | Phần cổ | Thường cho áo / pass sleeve cần in tag cổ. |
-| `special` | Mặt đặc biệt | Mọi case khác — packer xem hint trong gangsheet. |
-
-**Pricing rule:** `item.price = base_cost + (N − 1) × 2nd_fee` với N là số meta key có giá trị (counted distinct). Variant prices lấy theo `(product_variant_id, tier_id)` từ table `product_variant_prices`.
-
-**Bỏ qua meta key trống** — backend filter mọi entry có `value` rỗng trước khi save.
-
-**Không truyền `*_qr` key** — đó là các meta server tự sinh sau khi convert (overlay barcode), không nhận từ client.",
      *     security={{"bearerAuth":{}}},
      *     @OA\RequestBody(
      *         required=true,
+     *
      *         @OA\JsonContent(
      *             required={"ref_id","items"},
+     *
      *             @OA\Property(property="ref_id", type="string", example="TIKTOK-1234567", description="ID đơn nội bộ (unique per seller)"),
      *             @OA\Property(property="shipping_label", type="string", example="https://drive.google.com/file/d/ABC/view", description="URL carrier label. Nếu có thì không cần address."),
      *             @OA\Property(
@@ -356,8 +367,10 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *             ),
      *             @OA\Property(
      *                 property="items", type="array", minItems=1,
+     *
      *                 @OA\Items(
      *                     required={"product_variant_id"},
+     *
      *                     @OA\Property(property="product_variant_id", type="integer", example=42),
      *                     @OA\Property(property="material_id",        type="integer", example=7, description="Optional. Material (chất liệu) id — must belong to the product. Lấy ds qua GET /products (each product has materials[])."),
      *                     @OA\Property(property="accessory_ids",      type="array", @OA\Items(type="integer"), example={18,19}, description="Mảng accessory_prices.id (multi-acc)"),
@@ -369,8 +382,10 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *                     @OA\Property(
      *                         property="metas", type="array",
      *                         description="Artwork URLs theo từng mặt in. Xem bảng đầy đủ ở description chính. Mỗi entry: { key, value }. Mỗi mặt thêm (ngoài front) cộng thêm 2nd_fee vào item price.",
+     *
      *                         @OA\Items(
      *                             required={"key","value"},
+     *
      *                             @OA\Property(
      *                                 property="key", type="string",
      *                                 enum={"front","back","left","right","neck","special"},
@@ -391,6 +406,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *             @OA\Property(property="rename", type="boolean", default=false, description="Auto thêm suffix `_r_1` nếu trùng")
      *         )
      *     ),
+     *
      *     @OA\Response(response=201, description="Order created"),
      *     @OA\Response(response=409, description="Duplicate ref_id"),
      *     @OA\Response(response=422, description="Validation error")
@@ -401,12 +417,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $byStamp = $request->boolean('ship_by_stamp');
         // Stamp orders always use an address (no carrier label), so a label
         // and stamp are mutually exclusive.
-        $hasLabel = !$byStamp && !empty($request->shipping_label);
+        $hasLabel = ! $byStamp && ! empty($request->shipping_label);
 
         $request->validate([
             'ref_id' => 'required|string',
             'note' => 'nullable|string|max:5000',
-            'source' => 'nullable|string|in:' . implode(',', Order::SOURCES),
+            'source' => 'nullable|string|in:'.implode(',', Order::SOURCES),
             'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
@@ -445,7 +461,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $stampQty = collect($request->items)->sum(fn ($i) => max(1, (int) ($i['quantity'] ?? 1)));
             if ($stampQty > $stampMax) {
                 return response()->json([
-                    'message' => 'Ship bằng stamp tối đa ' . $stampMax . ' items. Đơn này ' . $stampQty . ' items — vui lòng dùng label thường.',
+                    'message' => 'Ship bằng stamp tối đa '.$stampMax.' items. Đơn này '.$stampQty.' items — vui lòng dùng label thường.',
                 ], 422);
             }
         }
@@ -456,15 +472,15 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         // external API / bulk paths have their own methods.
         $imgService = app(ImageValidationService::class);
         $imgResult = $imgService->validatePayload($request->items);
-        if (!$imgResult['ok']) {
+        if (! $imgResult['ok']) {
             return response()->json([
                 'message' => 'Invalid image URLs',
                 'failures' => array_map(fn ($f) => [
                     'item_no' => $f['itemNo'],
-                    'field'   => $f['field'],
-                    'label'   => $f['label'],
-                    'url'     => $f['url'],
-                    'reason'  => $f['reason'],
+                    'field' => $f['field'],
+                    'label' => $f['label'],
+                    'url' => $f['url'],
+                    'reason' => $f['reason'],
                 ], $imgResult['failures']),
             ], 422);
         }
@@ -474,7 +490,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $force = $request->boolean('force');
         $rename = $request->boolean('rename');
 
-        if ($rawRefId && !$force) {
+        if ($rawRefId && ! $force) {
             $exists = Order::where('user_id', $userId)->where('ref_id', $rawRefId)->exists();
             if ($exists) {
                 return response()->json([
@@ -513,7 +529,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $refVariantId = null;
             foreach ($request->items as $itemData) {
                 $price = $this->computeItemPrice($itemData['metas'] ?? null, $itemData['product_variant_id'], $userTierId);
-                $quantity = max(1, (int)($itemData['quantity'] ?? 1));
+                $quantity = max(1, (int) ($itemData['quantity'] ?? 1));
 
                 $item = OrderItem::create([
                     'order_id' => $order->id,
@@ -532,9 +548,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $accessoryUnitPrice = $this->syncItemAccessories($item, $accessoryIds, $userTierId);
                 $printCost += ($price + $accessoryUnitPrice) * $quantity;
                 $totalQty += $quantity;
-                if ($refVariantId === null) $refVariantId = $itemData['product_variant_id'];
+                if ($refVariantId === null) {
+                    $refVariantId = $itemData['product_variant_id'];
+                }
 
-                if (!empty($itemData['metas'])) {
+                if (! empty($itemData['metas'])) {
                     foreach ($itemData['metas'] as $meta) {
                         OrderItemMeta::create([
                             'order_item_id' => $item->id,
@@ -545,7 +563,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 }
             }
 
-            if (!$hasLabel && $request->address) {
+            if (! $hasLabel && $request->address) {
                 Address::create(array_merge($request->address, ['order_id' => $order->id]));
             }
 
@@ -565,9 +583,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
             // Best-effort Telegram notification — never blocks order creation.
             try {
-                app(\App\Services\TelegramService::class)->notifyNewOrder($order, $request->user());
+                app(TelegramService::class)->notifyNewOrder($order, $request->user());
             } catch (\Throwable $e) {
-                \Log::warning('[telegram] notifyNewOrder: ' . $e->getMessage());
+                \Log::warning('[telegram] notifyNewOrder: '.$e->getMessage());
             }
 
             return response()->json([
@@ -587,7 +605,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function shipCostPreview(Request $request, Order $order)
     {
         $user = $request->user();
-        if (!($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
+        if (! ($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
             return response()->json(['message' => 'Only staff can preview ship cost'], 403);
         }
         $request->validate([
@@ -595,10 +613,10 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         ]);
 
         $order->loadMissing('items');
-        $totalQty       = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
+        $totalQty = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
         $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
-        $tierId         = $order->user?->tier_id;
-        $shipType       = $request->ship_type;
+        $tierId = $order->user?->tier_id;
+        $shipType = $request->ship_type;
 
         if ($shipType === Order::SHIP_STAMP) {
             $shipping = Order::stampShippingCost($totalQty);
@@ -607,7 +625,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 ? $this->computeOrderShipping($firstVariantId, $tierId, false, $totalQty)
                 : 0;
         } else { // tiktok_ship: label_fee when a label is present, else 0.
-            $hasLabel = !empty($order->shipping_label);
+            $hasLabel = ! empty($order->shipping_label);
             $shipping = ($firstVariantId && $hasLabel)
                 ? $this->computeOrderShipping($firstVariantId, $tierId, true, $totalQty)
                 : 0;
@@ -615,11 +633,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $shipping = round((float) $shipping, 2);
 
         return response()->json([
-            'ship_type'     => $shipType,
+            'ship_type' => $shipType,
             'shipping_cost' => $shipping,
-            'print_cost'    => round((float) $order->print_cost, 2),
-            'total_cost'    => round((float) $order->print_cost + $shipping, 2),
-            'clears_label'  => in_array($shipType, [Order::SHIP_STAMP, Order::SHIP_SELLER], true),
+            'print_cost' => round((float) $order->print_cost, 2),
+            'total_cost' => round((float) $order->print_cost + $shipping, 2),
+            'clears_label' => in_array($shipType, [Order::SHIP_STAMP, Order::SHIP_SELLER], true),
         ]);
     }
 
@@ -635,19 +653,19 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             // Proof photo of the stamp stuck on the envelope — uploaded by the
             // fulfiller and shown to the seller (stamp has no tracking).
             'proof_image' => 'nullable|url|max:1024',
-            'ship_type'   => 'nullable|in:' . Order::SHIP_TIKTOK . ',' . Order::SHIP_SELLER . ',' . Order::SHIP_STAMP,
+            'ship_type' => 'nullable|in:'.Order::SHIP_TIKTOK.','.Order::SHIP_SELLER.','.Order::SHIP_STAMP,
             // Shipping address — required for stamp orders. Staff-only edit.
-            'address'              => 'sometimes|array',
-            'address.first_name'   => 'nullable|string|max:120',
-            'address.last_name'    => 'nullable|string|max:120',
-            'address.address_1'    => 'nullable|string|max:255',
-            'address.address_2'    => 'nullable|string|max:255',
-            'address.city'         => 'nullable|string|max:120',
-            'address.state'        => 'nullable|string|max:120',
-            'address.zipcode'      => 'nullable|string|max:32',
-            'address.country'      => 'nullable|string|max:120',
-            'address.phone'        => 'nullable|string|max:64',
-            'address.email'        => 'nullable|string|max:191',
+            'address' => 'sometimes|array',
+            'address.first_name' => 'nullable|string|max:120',
+            'address.last_name' => 'nullable|string|max:120',
+            'address.address_1' => 'nullable|string|max:255',
+            'address.address_2' => 'nullable|string|max:255',
+            'address.city' => 'nullable|string|max:120',
+            'address.state' => 'nullable|string|max:120',
+            'address.zipcode' => 'nullable|string|max:32',
+            'address.country' => 'nullable|string|max:120',
+            'address.phone' => 'nullable|string|max:64',
+            'address.email' => 'nullable|string|max:191',
         ]);
 
         $user = $request->user();
@@ -656,7 +674,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         // (e.g. note), which must not trip this guard.
         if ($user && $user->hasRole('seller') && $request->filled('status')
             && (int) $request->status !== (int) $order->status
-            && !in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
+            && ! in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
             return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
         }
         // A shipped order is final for sellers — they can't cancel/un-ship it.
@@ -679,7 +697,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         //   tiktok_ship  → label_fee (when a label is present)
         // The caller can override by passing an explicit shipping_cost.
         if ($request->filled('ship_type') && $request->ship_type !== $order->ship_type) {
-            if (!($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
+            if (! ($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
                 return response()->json(['message' => 'Only staff can change ship_type'], 403);
             }
             $data['ship_type'] = $request->ship_type;
@@ -690,20 +708,20 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $tierId = $order->user?->tier_id;
 
             if ($request->ship_type === Order::SHIP_STAMP) {
-                $data['shipping_cost']  = Order::stampShippingCost($totalQty);
+                $data['shipping_cost'] = Order::stampShippingCost($totalQty);
                 $data['shipping_label'] = null;
-                $data['tracking_id']    = null;
+                $data['tracking_id'] = null;
             } elseif ($request->ship_type === Order::SHIP_SELLER) {
                 // seller_ship: base + addition × (qty-1). Clear label/tracking
                 // since the seller will buy + attach their own.
-                $data['shipping_cost']  = $firstVariantId
+                $data['shipping_cost'] = $firstVariantId
                     ? $this->computeOrderShipping($firstVariantId, $tierId, false, $totalQty)
                     : 0;
                 $data['shipping_label'] = null;
-                $data['tracking_id']    = null;
-            } elseif (!$request->has('shipping_cost')) {
+                $data['tracking_id'] = null;
+            } elseif (! $request->has('shipping_cost')) {
                 // tiktok_ship: charge label_fee if a label is set, else 0.
-                $hasLabel = !empty($request->shipping_label ?? $order->shipping_label);
+                $hasLabel = ! empty($request->shipping_label ?? $order->shipping_label);
                 $data['shipping_cost'] = ($firstVariantId && $hasLabel)
                     ? $this->computeOrderShipping($firstVariantId, $tierId, true, $totalQty)
                     : 0;
@@ -712,7 +730,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         // Recalculate total_cost if any cost-affecting field changed
         if (array_key_exists('shipping_cost', $data) || array_key_exists('print_cost', $data)) {
-            $printCost    = $data['print_cost']    ?? $order->print_cost;
+            $printCost = $data['print_cost'] ?? $order->print_cost;
             $shippingCost = $data['shipping_cost'] ?? $order->shipping_cost;
             $data['total_cost'] = round((float) $printCost + (float) $shippingCost, 2);
         }
@@ -733,7 +751,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 'city', 'state', 'zipcode', 'country', 'phone', 'email',
             ])->toArray();
             if (array_filter($addrData, fn ($v) => $v !== null && $v !== '')) {
-                \App\Models\Address::updateOrCreate(
+                Address::updateOrCreate(
                     ['order_id' => $order->id],
                     $addrData
                 );
@@ -755,18 +773,19 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function destroy(Request $request, Order $order)
     {
         $user = $request->user();
-        if (!$user || !$user->hasRole('admin')) {
+        if (! $user || ! $user->hasRole('admin')) {
             return response()->json(['message' => 'Only admin can delete orders'], 403);
         }
 
         $order->delete();
+
         return response()->json(['message' => 'Order deleted']);
     }
 
     public function bulkReProduction(Request $request)
     {
         $user = $request->user();
-        if (!$user || !$user->hasRole('admin')) {
+        if (! $user || ! $user->hasRole('admin')) {
             return response()->json(['message' => 'Only admin can bulk re-production'], 403);
         }
 
@@ -796,7 +815,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function bulkMergeDuplicates(Request $request)
     {
         $user = $request->user();
-        if (!$user || !$user->hasRole('admin')) {
+        if (! $user || ! $user->hasRole('admin')) {
             return response()->json(['message' => 'Only admin can merge orders'], 403);
         }
 
@@ -815,8 +834,8 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         }
 
         // Group selected orders by (user_id, ref_id). Only groups of size >= 2 merge.
-        $groups = $orders->groupBy(fn($o) => $o->user_id . '|' . $o->ref_id)
-            ->filter(fn($g) => $g->count() >= 2);
+        $groups = $orders->groupBy(fn ($o) => $o->user_id.'|'.$o->ref_id)
+            ->filter(fn ($g) => $g->count() >= 2);
 
         if ($groups->isEmpty()) {
             return response()->json(['message' => 'No duplicate ref_id groups in the selection'], 400);
@@ -829,16 +848,16 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         DB::transaction(function () use ($groups, &$merged, &$deleted, &$details) {
             foreach ($groups as $key => $group) {
                 // Winner = newest (highest id). Losers = the rest.
-                $sorted  = $group->sortByDesc('id')->values();
-                $winner  = $sorted->first();
-                $losers  = $sorted->slice(1);
+                $sorted = $group->sortByDesc('id')->values();
+                $winner = $sorted->first();
+                $losers = $sorted->slice(1);
                 $loserIds = $losers->pluck('id')->all();
 
                 // 1. Move OrderItems from losers to winner.
                 OrderItem::whereIn('order_id', $loserIds)->update(['order_id' => $winner->id]);
 
                 // 2. Re-link historical wallet_transactions so paid/refund history follows the winner.
-                \App\Models\WalletTransaction::whereIn('order_id', $loserIds)->update(['order_id' => $winner->id]);
+                WalletTransaction::whereIn('order_id', $loserIds)->update(['order_id' => $winner->id]);
 
                 // 3. Sum paid_cost across the group → winner inherits total payment.
                 $totalPaid = $group->sum('paid_cost');
@@ -852,33 +871,33 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $totalQty = 0;
                 $totalPrint = 0;
                 foreach ($winner->items as $it) {
-                    $qty   = max(1, (int) ($it->quantity ?? 1));
-                    $acc   = (float) $it->accessoryPrices->sum('price');
+                    $qty = max(1, (int) ($it->quantity ?? 1));
+                    $acc = (float) $it->accessoryPrices->sum('price');
                     $totalPrint += ((float) $it->price + $acc) * $qty;
-                    $totalQty   += $qty;
+                    $totalQty += $qty;
                 }
-                $hasLabel = !empty($winner->shipping_label);
+                $hasLabel = ! empty($winner->shipping_label);
                 $firstVariantId = (int) ($winner->items->first()?->product_variant_id ?? 0);
                 $shippingCost = $firstVariantId
                     ? $this->computeOrderShipping($firstVariantId, $winner->user?->tier_id, $hasLabel, $totalQty)
                     : (float) $winner->shipping_cost;
 
                 $winner->update([
-                    'print_cost'    => $totalPrint,
+                    'print_cost' => $totalPrint,
                     'shipping_cost' => $shippingCost,
-                    'total_cost'    => $totalPrint + $shippingCost,
-                    'paid_cost'     => $totalPaid,
+                    'total_cost' => $totalPrint + $shippingCost,
+                    'paid_cost' => $totalPaid,
                 ]);
 
                 $merged++;
                 $details[] = [
-                    'ref_id'         => $winner->ref_id,
-                    'winner_id'      => $winner->id,
-                    'winner_system'  => $winner->system_id,
-                    'merged_count'   => $losers->count(),
-                    'loser_ids'      => $loserIds,
-                    'item_count'     => $winner->items->count(),
-                    'total_cost'     => $totalPrint + $shippingCost,
+                    'ref_id' => $winner->ref_id,
+                    'winner_id' => $winner->id,
+                    'winner_system' => $winner->system_id,
+                    'merged_count' => $losers->count(),
+                    'loser_ids' => $loserIds,
+                    'item_count' => $winner->items->count(),
+                    'total_cost' => $totalPrint + $shippingCost,
                 ];
             }
         });
@@ -897,7 +916,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function bulkAssign(Request $request)
     {
         $user = $request->user();
-        if (!$user || !$user->hasRole('admin')) {
+        if (! $user || ! $user->hasRole('admin')) {
             return response()->json(['message' => 'Only admin can bulk assign orders'], 403);
         }
 
@@ -910,7 +929,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $count = Order::whereIn('id', $request->order_ids)
             ->update(['user_id' => $request->user_id]);
 
-        $target = \App\Models\User::find($request->user_id);
+        $target = User::find($request->user_id);
 
         $this->refreshDuplicateRefIds();
 
@@ -928,7 +947,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function bulkAssignPartner(Request $request)
     {
         $user = $request->user();
-        if (!$user || (!$user->hasRole('admin') && !$user->hasRole('support'))) {
+        if (! $user || (! $user->hasRole('admin') && ! $user->hasRole('support'))) {
             return response()->json(['message' => 'Admin or support required'], 403);
         }
 
@@ -939,16 +958,34 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         ]);
 
         $partnerId = $request->partner_id;
-        $count = Order::whereIn('id', $request->order_ids)
-            ->update(['partner_id' => $partnerId]);
+
+        // Settled orders are left alone. partner_locked_at means the partner
+        // marked the gang printed and was paid against that amount; moving the
+        // order to someone else would move money both sides agreed on.
+        $skippedLocked = Order::whereIn('id', $request->order_ids)
+            ->whereNotNull('partner_locked_at')
+            ->count();
+
+        $movable = Order::whereIn('id', $request->order_ids)->whereNull('partner_locked_at');
+
+        // Any amount already computed belongs to the previous partner and was
+        // priced off their rate card, so it cannot follow the order to someone
+        // else. Cleared here and recomputed from the new partner's card via
+        // Partner → Tính tiền.
+        $count = (clone $movable)->update([
+            'partner_id' => $partnerId,
+            'partner_revenue' => null,
+        ]);
 
         $name = $partnerId
-            ? (\App\Models\User::find($partnerId)->name ?? "#{$partnerId}")
-            : '(unassigned)';
+            ? (User::find($partnerId)->name ?? "#{$partnerId}")
+            : '(chưa chia)';
 
         return response()->json([
-            'message' => "Assigned {$count} order(s) to partner {$name}",
+            'message' => "Đã chuyển {$count} đơn sang partner {$name}"
+                .($skippedLocked ? " · bỏ qua {$skippedLocked} đơn đã chốt tiền" : ''),
             'count' => $count,
+            'skipped_locked' => $skippedLocked,
             'partner_id' => $partnerId,
         ]);
     }
@@ -956,7 +993,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function bulkSetProduction(Request $request)
     {
         $user = $request->user();
-        if (!$user || !$user->hasRole('admin')) {
+        if (! $user || ! $user->hasRole('admin')) {
             return response()->json(['message' => 'Only admin can bulk set production'], 403);
         }
 
@@ -986,7 +1023,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function bulkDestroy(Request $request)
     {
         $user = $request->user();
-        if (!$user || !$user->hasRole('admin')) {
+        if (! $user || ! $user->hasRole('admin')) {
             return response()->json(['message' => 'Only admin can delete orders'], 403);
         }
 
@@ -1012,8 +1049,8 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      */
     private function refreshDuplicateRefIds(): void
     {
-        \Illuminate\Support\Facades\DB::table('duplicate_ref_ids')->delete();
-        \Illuminate\Support\Facades\DB::statement("
+        DB::table('duplicate_ref_ids')->delete();
+        DB::statement("
             INSERT INTO duplicate_ref_ids (user_id, ref_id, count, computed_at)
             SELECT user_id, ref_id, COUNT(*) AS cnt, NOW()
             FROM orders
@@ -1026,7 +1063,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function pendingTracking(Request $request)
     {
         $user = $request->user();
-        if (!$user || !in_array($user->role?->slug, ['admin', 'support'])) {
+        if (! $user || ! in_array($user->role?->slug, ['admin', 'support'])) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -1043,7 +1080,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function saveTracking(Request $request, Order $order)
     {
         $user = $request->user();
-        if (!$user || !in_array($user->role?->slug, ['admin', 'support'])) {
+        if (! $user || ! in_array($user->role?->slug, ['admin', 'support'])) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -1063,7 +1100,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function fetchTrackingOne(Request $request, Order $order)
     {
         $user = $request->user();
-        if (!$user || !in_array($user->role?->slug, ['admin', 'support'])) {
+        if (! $user || ! in_array($user->role?->slug, ['admin', 'support'])) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -1076,10 +1113,10 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         try {
             // Shared carrier call (Drive-URL rewrite + multi-key parse live in the service).
-            $result = app(\App\Services\CarrierTrackingService::class)->fetch($order->shipping_label);
+            $result = app(CarrierTrackingService::class)->fetch($order->shipping_label);
             $tracking = $result['tracking_id'] ?? null;
 
-            if (!$tracking) {
+            if (! $tracking) {
                 // Use 422 (not 502) so web servers don't replace our JSON body
                 // with their own HTML error page — frontend needs the upstream
                 // message to know whether to retry or skip the order.
@@ -1107,13 +1144,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function runDuplicateRefresh(Request $request)
     {
         $user = $request->user();
-        if (!$user || !in_array($user->role?->slug, ['admin', 'support'])) {
+        if (! $user || ! in_array($user->role?->slug, ['admin', 'support'])) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
         $started = microtime(true);
         $this->refreshDuplicateRefIds();
-        $count = \Illuminate\Support\Facades\DB::table('duplicate_ref_ids')->count();
+        $count = DB::table('duplicate_ref_ids')->count();
         $ms = (int) ((microtime(true) - $started) * 1000);
 
         return response()->json([
@@ -1136,11 +1173,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         ]);
 
         $user = $request->user();
-        if (!$user) abort(401);
+        if (! $user) {
+            abort(401);
+        }
         $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
 
         $query = Order::whereIn('id', $request->order_ids);
-        if (!$isStaff) {
+        if (! $isStaff) {
             $query->where('user_id', $user->id);
         }
         $orders = $query->get();
@@ -1176,7 +1215,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $user = $request->user();
         $isStaff = $user?->role && in_array($user->role->slug, ['admin', 'support']);
         $isOwner = $item->order && $item->order->user_id === $user?->id;
-        if (!$isStaff && !$isOwner) {
+        if (! $isStaff && ! $isOwner) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -1184,11 +1223,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $request->validate([
             'metas' => 'required|array|min:1',
-            'metas.*.key' => ['required', 'string', \Illuminate\Validation\Rule::in($sourceKeys)],
+            'metas.*.key' => ['required', 'string', Rule::in($sourceKeys)],
             'metas.*.value' => 'nullable|string',
         ]);
 
-        return DB::transaction(function () use ($request, $item, $sourceKeys) {
+        return DB::transaction(function () use ($request, $item) {
             $changedKeys = [];
             foreach ($request->metas as $m) {
                 $key = $m['key'];
@@ -1199,7 +1238,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     ->first();
 
                 $oldValue = $existing?->value;
-                if ($oldValue === $value) continue; // skip no-op
+                if ($oldValue === $value) {
+                    continue;
+                } // skip no-op
 
                 if ($existing) {
                     if ($value === null || $value === '') {
@@ -1218,14 +1259,14 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $changedKeys[] = $key;
             }
 
-            if (!empty($changedKeys)) {
+            if (! empty($changedKeys)) {
                 // Drop the corresponding _qr metas so the converter regenerates
                 // them from the new source URLs.
                 $qrPattern = '_qr(_[0-9]+)?$';
                 $deleted = OrderItemMeta::where('order_item_id', $item->id)
                     ->where(function ($q) use ($changedKeys, $qrPattern) {
                         foreach ($changedKeys as $k) {
-                            $q->orWhere('key', 'regexp', '^' . $k . $qrPattern);
+                            $q->orWhere('key', 'regexp', '^'.$k.$qrPattern);
                         }
                     })
                     ->delete();
@@ -1237,7 +1278,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     ->update(['production' => false]);
 
                 return response()->json([
-                    'message' => "Updated " . count($changedKeys) . " meta(s); removed {$deleted} _qr meta(s) for regeneration",
+                    'message' => 'Updated '.count($changedKeys)." meta(s); removed {$deleted} _qr meta(s) for regeneration",
                     'changed_keys' => $changedKeys,
                     'deleted_qr' => $deleted,
                 ]);
@@ -1261,18 +1302,18 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $user = $request->user();
         $isStaff = $user?->role && in_array($user->role->slug, ['admin', 'support']);
         $isOwner = $item->order && $item->order->user_id === $user?->id;
-        if (!$isStaff && !$isOwner) {
+        if (! $isStaff && ! $isOwner) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
         $data = $request->validate([
             'mockup_front' => 'nullable|string',
-            'mockup_back'  => 'nullable|string',
+            'mockup_back' => 'nullable|string',
         ]);
 
         $item->update([
             'mockup_front' => $data['mockup_front'] ?? null,
-            'mockup_back'  => $data['mockup_back'] ?? null,
+            'mockup_back' => $data['mockup_back'] ?? null,
         ]);
 
         return response()->json([
@@ -1300,11 +1341,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $caller = $request->user();
         $item->loadMissing('order.user');
         $order = $item->order;
-        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+        if (! $order) {
+            return response()->json(['message' => 'Item has no order'], 404);
+        }
 
         $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
         $isOwner = $order->user_id === $caller?->id;
-        if (!$isStaff && !$isOwner) {
+        if (! $isStaff && ! $isOwner) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
         if (in_array((int) $order->status, [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED], true)) {
@@ -1338,15 +1381,15 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             // Shipping is set from the order's first variant — same convention
             // as createOrder/importCsv. Keep current shipping_cost if no
             // variant exists (shouldn't happen but safe).
-            $hasLabel = !empty($order->shipping_label);
+            $hasLabel = ! empty($order->shipping_label);
             $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
             $shippingCost = $firstVariantId
                 ? $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty)
                 : (float) $order->shipping_cost;
             $order->update([
-                'print_cost'    => $totalPrint,
+                'print_cost' => $totalPrint,
                 'shipping_cost' => $shippingCost,
-                'total_cost'    => $totalPrint + $shippingCost,
+                'total_cost' => $totalPrint + $shippingCost,
             ]);
 
             return response()->json([
@@ -1372,10 +1415,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $caller = $request->user();
         $item->loadMissing('order');
         $order = $item->order;
-        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+        if (! $order) {
+            return response()->json(['message' => 'Item has no order'], 404);
+        }
 
         $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
-        if (!$isStaff && $order->user_id !== $caller?->id) {
+        if (! $isStaff && $order->user_id !== $caller?->id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
         if ((int) $order->status === Order::STATUS_CANCELLED) {
@@ -1389,8 +1434,8 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $item->update(['order_type_label' => ($label === '' ? null : $label)]);
 
         return response()->json([
-            'message'          => 'Item type updated',
-            'item_id'          => $item->id,
+            'message' => 'Item type updated',
+            'item_id' => $item->id,
             'order_type_label' => $item->order_type_label,
         ]);
     }
@@ -1407,10 +1452,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $caller = $request->user();
         $item->loadMissing('order.user', 'metas');
         $order = $item->order;
-        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+        if (! $order) {
+            return response()->json(['message' => 'Item has no order'], 404);
+        }
 
         $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
-        if (!$isStaff && $order->user_id !== $caller?->id) {
+        if (! $isStaff && $order->user_id !== $caller?->id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
         $request->validate(['product_variant_id' => 'required|integer|exists:product_variants,id']);
@@ -1428,13 +1475,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $totalQty = 0;
         $totalPrint = 0;
         foreach ($order->items as $it) {
-            $itQty   = max(1, (int) ($it->quantity ?? 1));
-            $itAcc   = (float) $it->accessoryPrices->sum('price');
+            $itQty = max(1, (int) ($it->quantity ?? 1));
+            $itAcc = (float) $it->accessoryPrices->sum('price');
             $itPrice = $it->id === $item->id ? $newItemPrice : (float) $it->price;
             $totalPrint += ($itPrice + $itAcc) * $itQty;
-            $totalQty   += $itQty;
+            $totalQty += $itQty;
         }
-        $hasLabel = !empty($order->shipping_label);
+        $hasLabel = ! empty($order->shipping_label);
         // First variant drives shipping; if THIS item is first, use the new one.
         $firstItem = $order->items->first();
         $firstVariantId = ($firstItem && $firstItem->id === $item->id)
@@ -1445,12 +1492,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             : (float) $order->shipping_cost;
 
         return response()->json([
-            'item_price'    => round((float) $newItemPrice, 2),
-            'old_item_price'=> round((float) $item->price, 2),
-            'print_cost'    => round((float) $totalPrint, 2),
+            'item_price' => round((float) $newItemPrice, 2),
+            'old_item_price' => round((float) $item->price, 2),
+            'print_cost' => round((float) $totalPrint, 2),
             'shipping_cost' => round((float) $shipping, 2),
-            'total_cost'    => round((float) $totalPrint + $shipping, 2),
-            'old_total_cost'=> round((float) $order->total_cost, 2),
+            'total_cost' => round((float) $totalPrint + $shipping, 2),
+            'old_total_cost' => round((float) $order->total_cost, 2),
         ]);
     }
 
@@ -1468,11 +1515,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $caller = $request->user();
         $item->loadMissing('order.user', 'metas');
         $order = $item->order;
-        if (!$order) return response()->json(['message' => 'Item has no order'], 404);
+        if (! $order) {
+            return response()->json(['message' => 'Item has no order'], 404);
+        }
 
         $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
         $isOwner = $order->user_id === $caller?->id;
-        if (!$isStaff && !$isOwner) {
+        if (! $isStaff && ! $isOwner) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
         if ((int) $order->status === Order::STATUS_CANCELLED) {
@@ -1495,8 +1544,8 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $newPrice = $this->computeItemPrice($item->metas, $newVariantId, $ownerTierId);
             $item->update([
                 'product_variant_id' => $newVariantId,
-                'order_type_label'   => $this->productOrderType($newVariantId),
-                'price'              => $newPrice,
+                'order_type_label' => $this->productOrderType($newVariantId),
+                'price' => $newPrice,
             ]);
 
             // Recompute order totals from every item (mirrors updateItemAccessories).
@@ -1509,21 +1558,21 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $totalPrint += ((float) $it->price + $itAcc) * $itQty;
                 $totalQty += $itQty;
             }
-            $hasLabel = !empty($order->shipping_label);
+            $hasLabel = ! empty($order->shipping_label);
             $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
             $shippingCost = $firstVariantId
                 ? $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty)
                 : (float) $order->shipping_cost;
             $order->update([
-                'print_cost'    => $totalPrint,
+                'print_cost' => $totalPrint,
                 'shipping_cost' => $shippingCost,
-                'total_cost'    => $totalPrint + $shippingCost,
+                'total_cost' => $totalPrint + $shippingCost,
             ]);
 
             return response()->json([
                 'message' => 'Variant updated; order totals recomputed',
                 'item_id' => $item->id,
-                'order'   => $order->fresh()->load([
+                'order' => $order->fresh()->load([
                     'items.metas', 'items.productVariant.product', 'items.material',
                     'items.accessoryPrice.accessory', 'items.accessoryPrice.tier',
                     'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address',
@@ -1552,7 +1601,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $user = $request->user();
         $isStaff = $user && $user->role && in_array($user->role->slug, ['admin', 'support']);
-        if (!$isStaff) {
+        if (! $isStaff) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -1562,7 +1611,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         foreach ($request->rows as $row) {
             $rid = trim($row['ref_id']);
             $code = strtoupper(trim((string) ($row['accessory_code'] ?? '')));
-            if ($rid === '') continue;
+            if ($rid === '') {
+                continue;
+            }
             $grouped[$rid][] = $code;
         }
 
@@ -1575,15 +1626,18 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             ->groupBy('ref_id');
 
         $results = [];
-        $updated = 0; $skipped = 0; $errors = 0;
+        $updated = 0;
+        $skipped = 0;
+        $errors = 0;
 
         foreach ($grouped as $refId => $codes) {
             $orderList = $orders->get($refId);
-            if (!$orderList || $orderList->isEmpty()) {
+            if (! $orderList || $orderList->isEmpty()) {
                 foreach ($codes as $i => $code) {
                     $results[] = ['ref_id' => $refId, 'index' => $i, 'status' => 'no_order', 'message' => "No order with ref_id {$refId}"];
                     $errors++;
                 }
+
                 continue;
             }
             // Multiple orders share a ref_id when sellers re-upload. Take the
@@ -1599,22 +1653,25 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     $rowResult += ['status' => 'skipped', 'message' => 'No accessory_code in row'];
                     $skipped++;
                     $results[] = $rowResult;
+
                     continue;
                 }
 
                 $item = $items->get($i);
-                if (!$item) {
+                if (! $item) {
                     $rowResult += ['status' => 'no_item', 'message' => "Order has only {$items->count()} item(s); row {$i} skipped"];
                     $errors++;
                     $results[] = $rowResult;
+
                     continue;
                 }
 
                 $productId = $item->productVariant?->product_id;
-                if (!$productId || !$tierId) {
+                if (! $productId || ! $tierId) {
                     $rowResult += ['status' => 'no_accessory', 'message' => 'Item missing product or seller tier'];
                     $errors++;
                     $results[] = $rowResult;
+
                     continue;
                 }
 
@@ -1622,10 +1679,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     ->where('tier_id', $tierId)
                     ->where('accessory_code', $code)
                     ->first();
-                if (!$accessory) {
+                if (! $accessory) {
                     $rowResult += ['status' => 'no_accessory', 'message' => "No accessory '{$code}' for product {$productId} / tier {$tierId}"];
                     $errors++;
                     $results[] = $rowResult;
+
                     continue;
                 }
 
@@ -1633,6 +1691,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     $rowResult += ['status' => 'no_change', 'message' => "Already {$code}"];
                     $skipped++;
                     $results[] = $rowResult;
+
                     continue;
                 }
 
@@ -1662,11 +1721,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function reconvert(Request $request, Order $order)
     {
         $user = $request->user();
-        if (!$user) abort(401);
+        if (! $user) {
+            abort(401);
+        }
 
         $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
         $isOwner = $order->user_id === $user->id;
-        if (!$isStaff && !$isOwner) {
+        if (! $isStaff && ! $isOwner) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -1691,20 +1752,22 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function reconvertLabel(Request $request, Order $order)
     {
         $user = $request->user();
-        if (!$user) abort(401);
+        if (! $user) {
+            abort(401);
+        }
 
         $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
-        if (!$isStaff) {
+        if (! $isStaff) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
         // Stamp orders compose their convert_label from the address instead
         // of a carrier label, so they're a valid reconvert target too.
         $isStamp = $order->ship_type === Order::SHIP_STAMP;
-        if (empty($order->shipping_label) && !$isStamp) {
+        if (empty($order->shipping_label) && ! $isStamp) {
             return response()->json(['message' => 'Order has no shipping_label (and isn\'t a stamp order) to reconvert'], 422);
         }
-        if ($isStamp && !$order->loadMissing('address')->address) {
+        if ($isStamp && ! $order->loadMissing('address')->address) {
             return response()->json(['message' => 'Stamp order has no address to render the convert_label from'], 422);
         }
 
@@ -1734,7 +1797,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $user = $request->user();
         $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support']);
-        if (!$isStaff) {
+        if (! $isStaff) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -1773,7 +1836,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $user = $request->user();
         if ($user && $user->hasRole('seller')
-            && !in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
+            && ! in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
             return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
         }
         // A shipped order is final for sellers — they can't cancel/un-ship it.
@@ -1807,7 +1870,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         $user = $request->user();
         if ($user && $user->hasRole('seller')
-            && !in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
+            && ! in_array((int) $request->status, [Order::STATUS_ONHOLD, Order::STATUS_CANCELLED], true)) {
             return response()->json(['message' => 'Sellers can only set status to onhold or cancelled'], 403);
         }
 
@@ -1851,7 +1914,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         return response()->json([
             'message' => $skippedShipped > 0
-                ? "Đã cập nhật " . count($orderIds) . " đơn; bỏ qua {$skippedShipped} đơn đã shipped (seller không được huỷ)."
+                ? 'Đã cập nhật '.count($orderIds)." đơn; bỏ qua {$skippedShipped} đơn đã shipped (seller không được huỷ)."
                 : 'Bulk status updated',
             'count' => count($orderIds),
             'skipped_shipped' => $skippedShipped,
@@ -1865,7 +1928,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="Pay order from wallet",
      *     description="Trừ (total_cost - paid_cost) khỏi ví seller. Idempotent: đơn đã paid trả 400.",
      *     security={{"bearerAuth":{}}},
+     *
      *     @OA\Parameter(name="order", in="path", required=true, @OA\Schema(type="integer"), example=123),
+     *
      *     @OA\Response(response=200, description="Paid"),
      *     @OA\Response(response=400, description="Already paid or insufficient wallet")
      * )
@@ -1925,8 +1990,8 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             ? $user->id
             : ((int) ($request->user_id ?? $user->id));
 
-        $payer = $targetUserId === $user->id ? $user : \App\Models\User::find($targetUserId);
-        if (!$payer) {
+        $payer = $targetUserId === $user->id ? $user : User::find($targetUserId);
+        if (! $payer) {
             return response()->json(['message' => 'User not found'], 404);
         }
 
@@ -1935,7 +2000,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             ->get(['id', 'total_cost', 'paid_cost']);
 
         $count = $unpaid->count();
-        $totalUnpaid = (float) $unpaid->sum(fn($o) => max(0, $o->total_cost - $o->paid_cost));
+        $totalUnpaid = (float) $unpaid->sum(fn ($o) => max(0, $o->total_cost - $o->paid_cost));
         $wallet = (float) $payer->wallet;
         $short = max(0, $totalUnpaid - $wallet);
 
@@ -1960,7 +2025,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function autoPayRun(Request $request)
     {
         $user = $request->user();
-        if (!$user || !$user->auto_pay) {
+        if (! $user || ! $user->auto_pay) {
             return response()->json(['message' => 'Auto-pay is off', 'count' => 0], 200);
         }
 
@@ -1983,13 +2048,19 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $order = $q->orderBy('created_at', 'asc')
                 ->orderBy('id', 'asc')
                 ->first();
-            if (!$order) break;
+            if (! $order) {
+                break;
+            }
 
             $remaining = round((float) $order->total_cost - (float) $order->paid_cost, 2);
-            if ($remaining <= 0) break;
+            if ($remaining <= 0) {
+                break;
+            }
 
             $user->refresh();
-            if (round((float) $user->wallet, 2) < $remaining) break;
+            if (round((float) $user->wallet, 2) < $remaining) {
+                break;
+            }
 
             DB::transaction(function () use ($user, $order, $remaining) {
                 $balanceBefore = (float) $user->wallet;
@@ -2002,15 +2073,15 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $order->update($updates);
 
                 WalletTransaction::create([
-                    'user_id'         => $user->id,
-                    'order_id'        => $order->id,
+                    'user_id' => $user->id,
+                    'order_id' => $order->id,
                     'order_system_id' => $order->system_id,
-                    'type'            => 'paid',
-                    'status'          => WalletTransaction::STATUS_APPROVED,
-                    'amount'          => -$remaining,
-                    'balance_before'  => $balanceBefore,
-                    'balance_after'   => $user->fresh()->wallet,
-                    'note'            => "Auto-paid order #{$order->system_id}",
+                    'type' => 'paid',
+                    'status' => WalletTransaction::STATUS_APPROVED,
+                    'amount' => -$remaining,
+                    'balance_before' => $balanceBefore,
+                    'balance_after' => $user->fresh()->wallet,
+                    'note' => "Auto-paid order #{$order->system_id}",
                 ]);
             });
 
@@ -2020,20 +2091,20 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         }
 
         if ($count > 0) {
-            app(\App\Services\TelegramService::class)->notifyTopup(implode("\n", [
+            app(TelegramService::class)->notifyTopup(implode("\n", [
                 '🤖 <b>Auto-pay ran</b>',
                 sprintf('User: %s (#%s)', e($user->name), $user->id),
                 sprintf('Paid: <b>%s order(s)</b> · $%s', $count, number_format($totalAmount, 2)),
                 sprintf('Wallet now: $%s', number_format((float) $user->fresh()->wallet, 2)),
-                'Orders: ' . implode(', ', $systemIds),
+                'Orders: '.implode(', ', $systemIds),
             ]));
         }
 
         return response()->json([
-            'count'      => $count,
-            'amount'     => round($totalAmount, 2),
+            'count' => $count,
+            'amount' => round($totalAmount, 2),
             'system_ids' => $systemIds,
-            'wallet'     => (float) $user->fresh()->wallet,
+            'wallet' => (float) $user->fresh()->wallet,
         ]);
     }
 
@@ -2046,7 +2117,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function autoPayStatus(Request $request)
     {
         $user = $request->user();
-        if (!($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
+        if (! ($user && ($user->hasRole('admin') || $user->hasRole('support')))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -2061,19 +2132,20 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $first = (clone $unpaid)->first(['id', 'system_id', 'total_cost', 'paid_cost', 'created_at']);
                 $totalOwed = (float) (clone $unpaid)
                     ->get(['total_cost', 'paid_cost'])
-                    ->sum(fn($o) => max(0, $o->total_cost - $o->paid_cost));
+                    ->sum(fn ($o) => max(0, $o->total_cost - $o->paid_cost));
+
                 return [
-                    'id'                   => $u->id,
-                    'name'                 => $u->name,
-                    'email'                => $u->email,
-                    'wallet'               => (float) $u->wallet,
+                    'id' => $u->id,
+                    'name' => $u->name,
+                    'email' => $u->email,
+                    'wallet' => (float) $u->wallet,
                     'auto_pay_delay_hours' => (int) $u->auto_pay_delay_hours,
-                    'unpaid'               => $count,
-                    'owed'                 => round($totalOwed, 2),
-                    'oldest'               => $first ? [
-                        'id'         => $first->id,
-                        'system_id'  => $first->system_id,
-                        'remaining'  => round((float) $first->total_cost - (float) $first->paid_cost, 2),
+                    'unpaid' => $count,
+                    'owed' => round($totalOwed, 2),
+                    'oldest' => $first ? [
+                        'id' => $first->id,
+                        'system_id' => $first->system_id,
+                        'remaining' => round((float) $first->total_cost - (float) $first->paid_cost, 2),
                         'created_at' => $first->created_at,
                     ] : null,
                 ];
@@ -2090,14 +2162,14 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             ->keyBy('id');
         $recent = $recent->map(function ($t) use ($userMap) {
             return [
-                'id'              => $t->id,
-                'user_id'         => $t->user_id,
-                'user_name'       => $userMap[$t->user_id]->name ?? null,
-                'order_id'        => $t->order_id,
+                'id' => $t->id,
+                'user_id' => $t->user_id,
+                'user_name' => $userMap[$t->user_id]->name ?? null,
+                'order_id' => $t->order_id,
                 'order_system_id' => $t->order_system_id,
-                'amount'          => (float) $t->amount,
-                'balance_after'   => (float) $t->balance_after,
-                'created_at'      => $t->created_at,
+                'amount' => (float) $t->amount,
+                'balance_after' => (float) $t->balance_after,
+                'created_at' => $t->created_at,
             ];
         });
 
@@ -2112,7 +2184,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function autoPayRunFor(Request $request, User $user)
     {
         $caller = $request->user();
-        if (!($caller && ($caller->hasRole('admin') || $caller->hasRole('support')))) {
+        if (! ($caller && ($caller->hasRole('admin') || $caller->hasRole('support')))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
@@ -2126,13 +2198,19 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 ->orderBy('created_at', 'asc')
                 ->orderBy('id', 'asc')
                 ->first();
-            if (!$order) break;
+            if (! $order) {
+                break;
+            }
 
             $remaining = round((float) $order->total_cost - (float) $order->paid_cost, 2);
-            if ($remaining <= 0) break;
+            if ($remaining <= 0) {
+                break;
+            }
 
             $user->refresh();
-            if (round((float) $user->wallet, 2) < $remaining) break;
+            if (round((float) $user->wallet, 2) < $remaining) {
+                break;
+            }
 
             DB::transaction(function () use ($user, $order, $remaining) {
                 $balanceBefore = (float) $user->wallet;
@@ -2144,15 +2222,15 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $order->update($updates);
 
                 WalletTransaction::create([
-                    'user_id'         => $user->id,
-                    'order_id'        => $order->id,
+                    'user_id' => $user->id,
+                    'order_id' => $order->id,
                     'order_system_id' => $order->system_id,
-                    'type'            => 'paid',
-                    'status'          => WalletTransaction::STATUS_APPROVED,
-                    'amount'          => -$remaining,
-                    'balance_before'  => $balanceBefore,
-                    'balance_after'   => $user->fresh()->wallet,
-                    'note'            => "Auto-paid order #{$order->system_id}",
+                    'type' => 'paid',
+                    'status' => WalletTransaction::STATUS_APPROVED,
+                    'amount' => -$remaining,
+                    'balance_before' => $balanceBefore,
+                    'balance_after' => $user->fresh()->wallet,
+                    'note' => "Auto-paid order #{$order->system_id}",
                 ]);
             });
 
@@ -2162,10 +2240,10 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         }
 
         return response()->json([
-            'count'      => $count,
-            'amount'     => round($totalAmount, 2),
+            'count' => $count,
+            'amount' => round($totalAmount, 2),
             'system_ids' => $systemIds,
-            'wallet'     => (float) $user->fresh()->wallet,
+            'wallet' => (float) $user->fresh()->wallet,
         ]);
     }
 
@@ -2182,13 +2260,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             ->whereColumn('paid_cost', '<', 'total_cost')
             ->get();
 
-        $totalToPay = round((float) $orders->sum(fn($o) => max(0, (float) $o->total_cost - (float) $o->paid_cost)), 2);
+        $totalToPay = round((float) $orders->sum(fn ($o) => max(0, (float) $o->total_cost - (float) $o->paid_cost)), 2);
 
         if ($orders->isEmpty() || $totalToPay <= 0) {
             return response()->json(['message' => 'No unpaid orders to pay', 'count' => 0], 400);
         }
 
-        $payer = $targetUserId === $user->id ? $user : \App\Models\User::findOrFail($targetUserId);
+        $payer = $targetUserId === $user->id ? $user : User::findOrFail($targetUserId);
         if (round((float) $payer->wallet, 2) < $totalToPay) {
             return response()->json([
                 'message' => 'Insufficient wallet balance',
@@ -2202,7 +2280,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $paidCount = 0;
             foreach ($orders as $order) {
                 $amountToPay = $order->total_cost - $order->paid_cost;
-                if ($amountToPay <= 0) continue;
+                if ($amountToPay <= 0) {
+                    continue;
+                }
 
                 $balanceBefore = (float) $payer->wallet;
                 $payer->decrement('wallet', $amountToPay);
@@ -2242,13 +2322,17 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="Bulk pay orders from wallet",
      *     description="Pay nhiều đơn cùng lúc từ ví owner. Atomic — nếu owner thiếu ví, abort toàn batch không trừ ai.",
      *     security={{"bearerAuth":{}}},
+     *
      *     @OA\RequestBody(
      *         required=true,
+     *
      *         @OA\JsonContent(
      *             required={"order_ids"},
+     *
      *             @OA\Property(property="order_ids", type="array", @OA\Items(type="integer"), example={123,124,125})
      *         )
      *     ),
+     *
      *     @OA\Response(response=200, description="Paid"),
      *     @OA\Response(response=400, description="Insufficient wallet or all paid")
      * )
@@ -2272,14 +2356,14 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         // wallet, so the same caller (e.g. admin) can pay across multiple
         // sellers in one request without ever touching the admin's wallet.
         $unpaidByOwner = $orders
-            ->filter(fn($o) => $o->paid_cost < $o->total_cost)
+            ->filter(fn ($o) => $o->paid_cost < $o->total_cost)
             ->groupBy('user_id');
 
         if ($unpaidByOwner->isEmpty()) {
             return response()->json(['message' => 'All orders already paid'], 400);
         }
 
-        $owners = \App\Models\User::whereIn('id', $unpaidByOwner->keys())->get()->keyBy('id');
+        $owners = User::whereIn('id', $unpaidByOwner->keys())->get()->keyBy('id');
 
         // Pre-flight: every owner must have enough wallet for THEIR slice. If
         // any single owner is short, abort the whole batch (otherwise we'd
@@ -2287,10 +2371,10 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $totalsByOwner = [];
         foreach ($unpaidByOwner as $ownerId => $ownerOrders) {
             $owner = $owners[$ownerId] ?? null;
-            if (!$owner) {
+            if (! $owner) {
                 return response()->json(['message' => "Order owner #{$ownerId} not found"], 400);
             }
-            $ownerTotal = round((float) $ownerOrders->sum(fn($o) => max(0, (float) $o->total_cost - (float) $o->paid_cost)), 2);
+            $ownerTotal = round((float) $ownerOrders->sum(fn ($o) => max(0, (float) $o->total_cost - (float) $o->paid_cost)), 2);
             if (round((float) $owner->wallet, 2) < $ownerTotal) {
                 return response()->json([
                     'message' => "Insufficient wallet balance for {$owner->name}",
@@ -2311,7 +2395,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $owner = $owners[$ownerId];
                 foreach ($ownerOrders as $order) {
                     $amountToPay = $order->total_cost - $order->paid_cost;
-                    if ($amountToPay <= 0) continue;
+                    if ($amountToPay <= 0) {
+                        continue;
+                    }
 
                     $balanceBefore = (float) $owner->wallet;
                     $owner->decrement('wallet', $amountToPay);
@@ -2354,18 +2440,23 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="Import orders from CSV",
      *     description="Upload CSV để tạo nhiều đơn 1 lần. Download template tại GET /orders/export-csv-template. Hỗ trợ multi-accessory qua cột accessory_code (comma/pipe separated).",
      *     security={{"bearerAuth":{}}},
+     *
      *     @OA\RequestBody(
      *         required=true,
+     *
      *         @OA\MediaType(
      *             mediaType="multipart/form-data",
+     *
      *             @OA\Schema(
      *                 required={"file"},
+     *
      *                 @OA\Property(property="file",   type="string", format="binary", description="CSV file"),
      *                 @OA\Property(property="force",  type="boolean", default=false, description="Bỏ qua check 409 duplicate ref_id"),
      *                 @OA\Property(property="rename", type="boolean", default=false, description="Auto thêm suffix _r_1 nếu trùng")
      *             )
      *         )
      *     ),
+     *
      *     @OA\Response(response=200, description="Import result"),
      *     @OA\Response(response=409, description="Duplicate ref_id detected")
      * )
@@ -2374,7 +2465,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     {
         $request->validate([
             'file' => 'required|file|mimes:csv,txt',
-            'source' => 'nullable|string|in:' . implode(',', Order::SOURCES),
+            'source' => 'nullable|string|in:'.implode(',', Order::SOURCES),
         ]);
 
         $file = $request->file('file');
@@ -2397,18 +2488,22 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         if ($refIdIdx !== false) {
             $csvRefIds = [];
             foreach ($rows as $row) {
-                if (!is_array($row) || count($row) <= $refIdIdx) continue;
+                if (! is_array($row) || count($row) <= $refIdIdx) {
+                    continue;
+                }
                 $r = trim((string) ($row[$refIdIdx] ?? ''));
-                if ($r !== '') $csvRefIds[] = $r;
+                if ($r !== '') {
+                    $csvRefIds[] = $r;
+                }
             }
-            if (!empty($csvRefIds)) {
+            if (! empty($csvRefIds)) {
                 $dbDup = Order::where('user_id', $user->id)
                     ->whereIn('ref_id', array_values(array_unique($csvRefIds)))
                     ->pluck('ref_id')
                     ->unique()
                     ->values()
                     ->all();
-                if (!empty($dbDup) && !$force) {
+                if (! empty($dbDup) && ! $force) {
                     // Force string serialization. PHP auto-casts numeric strings to
                     // int when they become array keys, and json_encode then emits
                     // them unquoted — which loses precision in JavaScript for
@@ -2433,6 +2528,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $lineNum = $index + 2;
                 if (count($row) !== count($header)) {
                     $errors[] = "Line {$lineNum}: column count mismatch";
+
                     continue;
                 }
 
@@ -2440,29 +2536,32 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
                 // Resolve variant: prefer sku, fallback to product_variant_id
                 $variantId = null;
-                if (!empty($data['sku'])) {
+                if (! empty($data['sku'])) {
                     $variant = ProductVariant::where('sku', $data['sku'])->first();
-                    if (!$variant) {
+                    if (! $variant) {
                         $errors[] = "Line {$lineNum}: sku '{$data['sku']}' not found";
+
                         continue;
                     }
                     $variantId = $variant->id;
-                } elseif (!empty($data['product_variant_id'])) {
-                    $variantId = (int)$data['product_variant_id'];
+                } elseif (! empty($data['product_variant_id'])) {
+                    $variantId = (int) $data['product_variant_id'];
                 } else {
                     $errors[] = "Line {$lineNum}: missing sku (or product_variant_id)";
+
                     continue;
                 }
 
-                $quantity = max(1, (int)($data['quantity'] ?? 1));
+                $quantity = max(1, (int) ($data['quantity'] ?? 1));
                 // ship_by_stamp column: 1/true/yes/x → stamp order (address-only).
                 $byStamp = in_array(strtolower(trim((string) ($data['ship_by_stamp'] ?? ''))), ['1', 'true', 'yes', 'x', 'stamp'], true);
-                $hasLabel = !$byStamp && !empty($data['shipping_label']);
-                $hasAddress = !empty($data['first_name']) && !empty($data['address_1']) && !empty($data['city']) && !empty($data['zipcode']) && !empty($data['country']);
+                $hasLabel = ! $byStamp && ! empty($data['shipping_label']);
+                $hasAddress = ! empty($data['first_name']) && ! empty($data['address_1']) && ! empty($data['city']) && ! empty($data['zipcode']) && ! empty($data['country']);
 
-                $rawRef = !empty($data['ref_id']) ? trim($data['ref_id']) : null;
+                $rawRef = ! empty($data['ref_id']) ? trim($data['ref_id']) : null;
                 if ($rawRef === null) {
                     $errors[] = "Line {$lineNum}: ref_id is required";
+
                     continue;
                 }
                 $existingOrder = isset($batchOrders[$rawRef]) ? $batchOrders[$rawRef] : null;
@@ -2470,8 +2569,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 // Address/shipping is only required for the FIRST row in a group.
                 // Follow-up rows attach to the same order regardless of their
                 // address/label cells.
-                if (!$existingOrder && !$hasLabel && !$hasAddress) {
+                if (! $existingOrder && ! $hasLabel && ! $hasAddress) {
                     $errors[] = "Line {$lineNum}: must provide either shipping_label or full address (first_name, address_1, city, zipcode, country)";
+
                     continue;
                 }
 
@@ -2488,7 +2588,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                         $accPrice = AccessoryPrice::where('accessory_code', $code)
                             ->where('tier_id', $user->tier_id)
                             ->first();
-                        if (!$accPrice) {
+                        if (! $accPrice) {
                             $errors[] = "Line {$lineNum}: accessory_code '{$code}' not found for your tier (row skipped)";
                             $resolvedAccPrices = null;
                             break;
@@ -2499,7 +2599,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     $ids = array_values(array_filter(array_map('intval', preg_split('/[\s,;|]+/', $idRaw))));
                     foreach ($ids as $id) {
                         $accPrice = AccessoryPrice::find($id);
-                        if (!$accPrice || $accPrice->tier_id !== $user->tier_id) {
+                        if (! $accPrice || $accPrice->tier_id !== $user->tier_id) {
                             $errors[] = "Line {$lineNum}: accessory_item_id {$id} not valid for your tier (row skipped)";
                             $resolvedAccPrices = null;
                             break;
@@ -2507,7 +2607,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                         $resolvedAccPrices->push($accPrice);
                     }
                 }
-                if ($resolvedAccPrices === null) continue; // any invalid → skip row entirely
+                if ($resolvedAccPrices === null) {
+                    continue;
+                } // any invalid → skip row entirely
                 $accessoryItemId = $resolvedAccPrices->isNotEmpty() ? $resolvedAccPrices->first()->id : null;
                 $accessoryUnitPrice = (float) $resolvedAccPrices->sum('price');
 
@@ -2535,7 +2637,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     ]);
                     $order->update(['system_id' => $this->buildSystemIdForOrder($order->id, $variantId)]);
 
-                    if (!$hasLabel && $hasAddress) {
+                    if (! $hasLabel && $hasAddress) {
                         Address::create([
                             'order_id' => $order->id,
                             'first_name' => $data['first_name'],
@@ -2560,8 +2662,8 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 // include 2nd_fee for 2-sided designs (same rule as store()).
                 $metasIn = [];
                 foreach (['front', 'back', 'left', 'right', 'neck', 'special'] as $metaKey) {
-                    $col = 'meta_' . $metaKey;
-                    if (!empty($data[$col])) {
+                    $col = 'meta_'.$metaKey;
+                    if (! empty($data[$col])) {
                         $metasIn[] = ['key' => $metaKey, 'value' => $data[$col]];
                     }
                 }
@@ -2582,7 +2684,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     'mockup_front' => $data['mockup_front'] ?? null,
                     'mockup_back' => $data['mockup_back'] ?? null,
                     'sku_label' => $data['sku_label'] ?? null,
-                    'order_type' => (int)($data['order_type'] ?? 0),
+                    'order_type' => (int) ($data['order_type'] ?? 0),
                     'order_type_label' => $this->productOrderType((int) $variantId),
                     'price' => $price,
                     'quantity' => $quantity,
@@ -2601,7 +2703,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
                 // Recompute order totals across ALL items now in the order so a
                 // grouped order's total reflects every appended row.
-                $orderHasLabel = !empty($order->shipping_label);
+                $orderHasLabel = ! empty($order->shipping_label);
                 $items = $order->items()->with('accessoryPrices')->get();
                 $totalQty = 0;
                 $totalPrint = 0;
@@ -2649,10 +2751,10 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         try {
             $count = (int) ($response->getData()->created_count ?? 0);
             if ($count > 0) {
-                app(\App\Services\TelegramService::class)->notifyOrdersImported($request->user(), $count);
+                app(TelegramService::class)->notifyOrdersImported($request->user(), $count);
             }
         } catch (\Throwable $e) {
-            \Log::warning('[telegram] notifyOrdersImported: ' . $e->getMessage());
+            \Log::warning('[telegram] notifyOrdersImported: '.$e->getMessage());
         }
 
         return $response;
@@ -2675,6 +2777,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="Invoice aggregation data",
      *     description="JSON payload cho invoice PDF. **Cùng bộ filter** như GET /orders (kể cả product filters).",
      *     security={{"bearerAuth":{}}},
+     *
      *     @OA\Parameter(name="status",             in="query", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="date_from",          in="query", @OA\Schema(type="string", format="date")),
      *     @OA\Parameter(name="date_to",            in="query", @OA\Schema(type="string", format="date")),
@@ -2691,6 +2794,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     @OA\Parameter(name="material_id",        in="query", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="accessory_id",       in="query", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="order_ids",          in="query", @OA\Schema(type="string")),
+     *
      *     @OA\Response(response=200, description="Invoice JSON"),
      *     @OA\Response(response=404, description="No orders matched")
      * )
@@ -2723,27 +2827,29 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         foreach ($orders as $order) {
             foreach ($order->items as $item) {
                 $variant = $item->productVariant;
-                if (!$variant) continue;
+                if (! $variant) {
+                    continue;
+                }
                 $product = $variant->product;
                 $material = trim((string) ($variant->paper_type ?? ''));
-                $key = ($product?->id ?? 0) . '|' . $material;
-                if (!isset($buckets[$key])) {
+                $key = ($product?->id ?? 0).'|'.$material;
+                if (! isset($buckets[$key])) {
                     $buckets[$key] = [
-                        'product_id'    => $product?->id,
-                        'sku'           => $variant->sku,
-                        'product_name'  => trim(($product?->name ?? 'Item') . ' - Print on Demand'),
+                        'product_id' => $product?->id,
+                        'sku' => $variant->sku,
+                        'product_name' => trim(($product?->name ?? 'Item').' - Print on Demand'),
                         // No `brand` column yet — fall back to product.style
                         // (currently free-form) so admin can set it via the
                         // product edit page without a migration.
-                        'brand'         => trim((string) ($product?->style ?? '')),
-                        'materials'     => $material,
-                        'total_items'   => 0,
-                        'subtotal'      => 0.0,
+                        'brand' => trim((string) ($product?->style ?? '')),
+                        'materials' => $material,
+                        'total_items' => 0,
+                        'subtotal' => 0.0,
                     ];
                 }
                 $qty = max(1, (int) $item->quantity);
                 $buckets[$key]['total_items'] += $qty;
-                $buckets[$key]['subtotal']    += (float) $item->price * $qty;
+                $buckets[$key]['subtotal'] += (float) $item->price * $qty;
             }
         }
 
@@ -2753,59 +2859,59 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         foreach ($buckets as $row) {
             $unit = $row['total_items'] > 0 ? $row['subtotal'] / $row['total_items'] : 0;
             $lineItems[] = [
-                'item'         => $i++,
-                'sku'          => $row['sku'],
+                'item' => $i++,
+                'sku' => $row['sku'],
                 'product_name' => $row['product_name'],
-                'brand'        => $row['brand'],
-                'materials'    => $row['materials'],
-                'total_items'  => $row['total_items'],
-                'print_cost'   => round($unit, 2),
-                'subtotal'     => round($row['subtotal'], 2),
+                'brand' => $row['brand'],
+                'materials' => $row['materials'],
+                'total_items' => $row['total_items'],
+                'print_cost' => round($unit, 2),
+                'subtotal' => round($row['subtotal'], 2),
             ];
         }
 
-        $printTotal    = round($orders->sum('print_cost'), 2);
+        $printTotal = round($orders->sum('print_cost'), 2);
         $shippingTotal = round($orders->sum('shipping_cost'), 2);
-        $grandTotal    = round($printTotal + $shippingTotal, 2);
+        $grandTotal = round($printTotal + $shippingTotal, 2);
 
         $customer = $orders->first()->user;
         // Invoice # — simple, stable per generation. {customerInitials}{YYMMDDHHmm}
         $initials = strtoupper(substr(preg_replace('/[^A-Za-z]/', '', $customer->name ?? 'INV'), 0, 2)) ?: 'INV';
-        $invoiceNumber = $initials . now()->format('ymdHi');
+        $invoiceNumber = $initials.now()->format('ymdHi');
 
         $dates = $orders->pluck('created_at');
         $dateFrom = $dates->min()?->format('M j Y');
-        $dateTo   = $dates->max()?->format('M j Y');
+        $dateTo = $dates->max()?->format('M j Y');
         $dateLabel = ($dateFrom === $dateTo) ? $dateFrom : "{$dateFrom} – {$dateTo}";
 
         return response()->json([
             'invoice_number' => $invoiceNumber,
-            'date_label'     => $dateLabel,
-            'date_from'      => $dates->min()?->toDateString(),
-            'date_to'        => $dates->max()?->toDateString(),
-            'customer'       => [
-                'id'    => $customer?->id,
-                'name'  => $customer?->name,
+            'date_label' => $dateLabel,
+            'date_from' => $dates->min()?->toDateString(),
+            'date_to' => $dates->max()?->toDateString(),
+            'customer' => [
+                'id' => $customer?->id,
+                'name' => $customer?->name,
                 'email' => $customer?->email,
             ],
             'line_items' => $lineItems,
             'totals' => [
-                'print_cost'    => $printTotal,
+                'print_cost' => $printTotal,
                 'shipping_cost' => $shippingTotal,
-                'total'         => $grandTotal,
+                'total' => $grandTotal,
             ],
             'order_count' => $orders->count(),
-            'order_ids'   => $orders->pluck('id')->all(),
+            'order_ids' => $orders->pluck('id')->all(),
             // Payment info — the renderer picks pingpong or vnpay depending
             // on which button the admin clicked. Always include both so the
             // app doesn't need a second round-trip when switching variants.
             'payment_settings' => [
-                'pingpong' => \App\Models\AppSetting::getJson('invoice_pingpong', []),
+                'pingpong' => AppSetting::getJson('invoice_pingpong', []),
                 // Inject the USD→VND exchange rate so the VNPay invoice can print
                 // the converted VND amount next to the USD total.
-                'vnpay'    => array_merge(
-                    \App\Models\AppSetting::getJson('invoice_vnpay', []),
-                    ['vnd_per_usd' => (float) (\App\Models\AppSetting::getJson('wallet_exchange_rate', [])['vnd_per_usd'] ?? config('services.vnpay.rate'))]
+                'vnpay' => array_merge(
+                    AppSetting::getJson('invoice_vnpay', []),
+                    ['vnd_per_usd' => (float) (AppSetting::getJson('wallet_exchange_rate', [])['vnd_per_usd'] ?? config('services.vnpay.rate'))]
                 ),
             ],
         ]);
@@ -2889,6 +2995,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="Export orders to CSV",
      *     description="Streamed CSV với **cùng filter** như GET /orders (kể cả product filters). Hoặc truyền order_ids để export riêng các đơn đã chọn.",
      *     security={{"bearerAuth":{}}},
+     *
      *     @OA\Parameter(name="status",             in="query", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="ship_type",          in="query", @OA\Schema(type="string", enum={"tiktok_ship","seller_ship"})),
      *     @OA\Parameter(name="ref_id",             in="query", @OA\Schema(type="string")),
@@ -2912,6 +3019,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     @OA\Parameter(name="material_id",        in="query", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="accessory_id",       in="query", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="order_ids",          in="query", description="Comma-separated", @OA\Schema(type="string"), example="123,124,125"),
+     *
      *     @OA\Response(response=200, description="CSV file", @OA\MediaType(mediaType="text/csv"))
      * )
      */
@@ -2924,7 +3032,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         }
 
         // Mirror /orders index filters so export reflects what admin is seeing.
-        if ($request->has('user_id') && !$request->user()->hasRole('seller')) {
+        if ($request->has('user_id') && ! $request->user()->hasRole('seller')) {
             $query->where('user_id', $request->user_id);
         }
         $this->applyOrderListFilters($query, $request);
@@ -2938,11 +3046,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             fputcsv($file, ['system_id', 'ref_id', 'status', 'ship_type', 'tracking_id', 'total_quantity', 'print_cost', 'shipping_cost', 'total_cost', 'paid_cost', 'first_name', 'last_name', 'address_1', 'city', 'state', 'zipcode', 'country', 'created_at']);
 
             $totalOrders = 0;
-            $totalItems  = 0;
+            $totalItems = 0;
             $totalAmount = 0.0;
             foreach ($orders as $order) {
                 $addr = $order->address;
-                $totalQty = $order->items->sum(fn($i) => max(1, (int) ($i->quantity ?? 1)));
+                $totalQty = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
                 fputcsv($file, [
                     $order->system_id,
                     $order->ref_id,
@@ -2964,7 +3072,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     $order->created_at->toDateTimeString(),
                 ]);
                 $totalOrders++;
-                $totalItems  += $totalQty;
+                $totalItems += $totalQty;
                 $totalAmount += (float) $order->total_cost;
             }
 
@@ -2978,7 +3086,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         return response()->stream($callback, 200, [
             'Content-Type' => 'text/csv',
-            'Content-Disposition' => 'attachment; filename="orders_export_' . date('Y-m-d') . '.csv"',
+            'Content-Disposition' => 'attachment; filename="orders_export_'.date('Y-m-d').'.csv"',
         ]);
     }
 
@@ -2991,14 +3099,15 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     {
         $user = $request->user();
         $isStaff = $user->hasRole('admin') || $user->hasRole('support');
-        if (!$isStaff && $order->user_id !== $user->id) {
+        if (! $isStaff && $order->user_id !== $user->id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $result = app(\App\Services\ShippoService::class)->buyLabelForOrder($order->load('address'));
-        if (!($result['ok'] ?? false)) {
+        $result = app(ShippoService::class)->buyLabelForOrder($order->load('address'));
+        if (! ($result['ok'] ?? false)) {
             return response()->json($result, 422);
         }
+
         return response()->json(array_merge($result, [
             'order' => $order->fresh()->only(['id', 'system_id', 'shipping_label', 'tracking_id']),
         ]));
@@ -3013,7 +3122,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function pendingLabels(Request $request)
     {
         $q = Order::where('ship_type', Order::SHIP_SELLER)
-            ->where(function ($w) { $w->whereNull('shipping_label')->orWhere('shipping_label', ''); })
+            ->where(function ($w) {
+                $w->whereNull('shipping_label')->orWhere('shipping_label', '');
+            })
             ->whereHas('address')
             ->with('user:id,name,auto_buy_label');
 
@@ -3024,7 +3135,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $q->whereHas('user', fn ($u) => $u->where('auto_buy_label', true));
         }
 
-        $limit  = min(500, max(1, (int) $request->get('limit', 200)));
+        $limit = min(500, max(1, (int) $request->get('limit', 200)));
         $orders = $q->orderBy('id', 'asc')->limit($limit)->get(['id', 'system_id', 'user_id', 'ship_type']);
 
         return response()->json(['data' => $orders]);
@@ -3042,6 +3153,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="List products + variants (X-API-KEY)",
      *     description="Catalog product với tier-scoped prices của caller. Dùng để biết product_variant_id trước khi POST /fulfill.",
      *     security={{"apiKeyAuth":{}}},
+     *
      *     @OA\Response(response=200, description="OK"),
      *     @OA\Response(response=401, description="Invalid X-API-KEY")
      * )
@@ -3049,10 +3161,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function productsByApiKey(Request $request)
     {
         $user = $request->get('api_user');
-        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+        if (! $user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
         $tierId = $user->tier_id;
 
-        $products = \App\Models\Product::with([
+        $products = Product::with([
             'variants' => fn ($q) => $q->where('status', 1),
             'variants.prices' => fn ($q) => $q->where('tier_id', $tierId),
         ])->where('status', 1)->get();
@@ -3083,16 +3197,19 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="List accessories (X-API-KEY)",
      *     description="Accessory + tier-scoped prices. Dùng để biết accessory_ids[] trước khi POST /fulfill.",
      *     security={{"apiKeyAuth":{}}},
+     *
      *     @OA\Response(response=200, description="OK")
      * )
      */
     public function accessoriesByApiKey(Request $request)
     {
         $user = $request->get('api_user');
-        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+        if (! $user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
         $tierId = $user->tier_id;
 
-        $rows = \App\Models\AccessoryPrice::with('accessory:id,name')
+        $rows = AccessoryPrice::with('accessory:id,name')
             ->where('tier_id', $tierId)
             ->get(['id', 'accessory_id', 'tier_id', 'style', 'accessory_code', 'price']);
 
@@ -3114,6 +3231,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="List orders (X-API-KEY)",
      *     description="Liệt kê đơn của caller. Filter giống GET /orders (kể cả product filters).",
      *     security={{"apiKeyAuth":{}}},
+     *
      *     @OA\Parameter(name="status",             in="query", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="ship_type",          in="query", @OA\Schema(type="string", enum={"tiktok_ship","seller_ship"})),
      *     @OA\Parameter(name="ref_id",             in="query", @OA\Schema(type="string")),
@@ -3135,13 +3253,16 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     @OA\Parameter(name="material_id",        in="query", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="accessory_id",       in="query", @OA\Schema(type="integer")),
      *     @OA\Parameter(name="per_page",           in="query", @OA\Schema(type="integer", default=50)),
+     *
      *     @OA\Response(response=200, description="Paginated list")
      * )
      */
     public function indexByApiKey(Request $request)
     {
         $user = $request->get('api_user');
-        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+        if (! $user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
 
         $query = Order::with(['items.metas', 'items.productVariant.product', 'items.material', 'items.accessoryPrice', 'address'])
             ->where('user_id', $user->id);
@@ -3149,6 +3270,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $this->applyOrderListFilters($query, $request);
 
         $perPage = min(200, max(1, (int) $request->get('per_page', 50)));
+
         return response()->json($query->orderBy('id', 'desc')->paginate($perPage));
     }
 
@@ -3164,7 +3286,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="Get order (X-API-KEY)",
      *     description="Numeric → order.id. String → order.ref_id.",
      *     security={{"apiKeyAuth":{}}},
+     *
      *     @OA\Parameter(name="idOrRef", in="path", required=true, @OA\Schema(type="string"), example="SHOP-987"),
+     *
      *     @OA\Response(response=200, description="OK"),
      *     @OA\Response(response=404, description="Not found")
      * )
@@ -3172,7 +3296,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function showByApiKey(Request $request, string $idOrRef)
     {
         $user = $request->get('api_user');
-        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+        if (! $user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
 
         $order = Order::with([
             'items.metas',
@@ -3180,13 +3306,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             'items.accessoryPrice.accessory',
             'address',
         ])
-        ->where('user_id', $user->id)
-        ->where(function ($q) use ($idOrRef) {
-            $q->where('system_id', $idOrRef)->orWhere('ref_id', $idOrRef);
-        })
-        ->first();
+            ->where('user_id', $user->id)
+            ->where(function ($q) use ($idOrRef) {
+                $q->where('system_id', $idOrRef)->orWhere('ref_id', $idOrRef);
+            })
+            ->first();
 
-        if (!$order) {
+        if (! $order) {
             return response()->json(['message' => 'Order not found'], 404);
         }
 
@@ -3200,16 +3326,21 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *     summary="Create order (X-API-KEY)",
      *     description="Tạo đơn từ external system. Auth bằng header X-API-KEY (lấy từ Profile page hoặc GET /me/api-key). Body payload identical với POST /orders.",
      *     security={{"apiKeyAuth":{}}},
+     *
      *     @OA\RequestBody(
      *         required=true,
+     *
      *         @OA\JsonContent(
      *             required={"ref_id","items"},
+     *
      *             @OA\Property(property="ref_id", type="string", example="SHOP-987"),
      *             @OA\Property(property="shipping_label", type="string", example="https://drive.google.com/file/d/ABC/view"),
      *             @OA\Property(property="address", type="object", description="Required nếu KHÔNG có shipping_label"),
      *             @OA\Property(
      *                 property="items", type="array",
+     *
      *                 @OA\Items(
+     *
      *                     @OA\Property(property="product_variant_id", type="integer", example=42),
      *                     @OA\Property(property="accessory_ids", type="array", @OA\Items(type="integer"), example={18}),
      *                     @OA\Property(property="quantity", type="integer", default=1, example=1)
@@ -3217,6 +3348,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      *             )
      *         )
      *     ),
+     *
      *     @OA\Response(response=201, description="Order created"),
      *     @OA\Response(response=401, description="Invalid or missing X-API-KEY"),
      *     @OA\Response(response=409, description="Duplicate ref_id")
@@ -3226,12 +3358,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     {
         $user = $request->get('api_user');
         $byStamp = $request->boolean('ship_by_stamp');
-        $hasLabel = !$byStamp && !empty($request->shipping_label);
+        $hasLabel = ! $byStamp && ! empty($request->shipping_label);
 
         $request->validate([
             'ref_id' => 'nullable|string',
             'note' => 'nullable|string|max:5000',
-            'source' => 'nullable|string|in:' . implode(',', Order::SOURCES),
+            'source' => 'nullable|string|in:'.implode(',', Order::SOURCES),
             'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_variant_id' => 'required|exists:product_variants,id',
@@ -3267,7 +3399,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $stampQty = collect($request->items)->sum(fn ($i) => max(1, (int) ($i['quantity'] ?? 1)));
             if ($stampQty > $stampMax) {
                 return response()->json([
-                    'message' => 'Ship by stamp tối đa ' . $stampMax . ' items. Đơn này ' . $stampQty . ' items — dùng label thường.',
+                    'message' => 'Ship by stamp tối đa '.$stampMax.' items. Đơn này '.$stampQty.' items — dùng label thường.',
                 ], 422);
             }
         }
@@ -3304,7 +3436,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $refVariantId = null;
             foreach ($request->items as $itemData) {
                 $price = $this->computeItemPrice($itemData['metas'] ?? null, $itemData['product_variant_id'], $userTierId);
-                $quantity = max(1, (int)($itemData['quantity'] ?? 1));
+                $quantity = max(1, (int) ($itemData['quantity'] ?? 1));
 
                 $item = OrderItem::create([
                     'order_id' => $order->id,
@@ -3323,9 +3455,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $accessoryUnitPrice = $this->syncItemAccessories($item, $accessoryIds, $userTierId);
                 $printCost += ($price + $accessoryUnitPrice) * $quantity;
                 $totalQty += $quantity;
-                if ($refVariantId === null) $refVariantId = $itemData['product_variant_id'];
+                if ($refVariantId === null) {
+                    $refVariantId = $itemData['product_variant_id'];
+                }
 
-                if (!empty($itemData['metas'])) {
+                if (! empty($itemData['metas'])) {
                     foreach ($itemData['metas'] as $meta) {
                         OrderItemMeta::create([
                             'order_item_id' => $item->id,
@@ -3336,7 +3470,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 }
             }
 
-            if (!$hasLabel && $request->address) {
+            if (! $hasLabel && $request->address) {
                 Address::create(array_merge($request->address, ['order_id' => $order->id]));
             }
 
@@ -3373,12 +3507,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $used = $this->resendQuotaUsed($user);
 
         return response()->json([
-            'free_quota'             => (int) $freeQuota,
-            'used'                   => $used,
-            'free_remaining'         => max(0, $freeQuota - $used),
+            'free_quota' => (int) $freeQuota,
+            'used' => $used,
+            'free_remaining' => max(0, $freeQuota - $used),
             'after_free_support_pct' => (float) ($cfg['quota']['after_free_support_pct'] ?? 50),
-            'methods'                => $cfg['methods'],
-            'reasons'                => $cfg['reasons'],
+            'methods' => $cfg['methods'],
+            'reasons' => $cfg['reasons'],
         ]);
     }
 
@@ -3391,10 +3525,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         }
         $cfg = Order::resendConfig();
         $data = $request->validate([
-            'method' => 'required|in:' . implode(',', array_column($cfg['methods'], 'key')),
-            'reason' => 'required|in:' . implode(',', array_column($cfg['reasons'], 'key')),
+            'method' => 'required|in:'.implode(',', array_column($cfg['methods'], 'key')),
+            'reason' => 'required|in:'.implode(',', array_column($cfg['reasons'], 'key')),
         ]);
         $order->load('items.metas', 'items.accessoryPrices', 'items.accessoryPrice');
+
         return response()->json($this->computeResendPricing($order, $data['method'], $data['reason'], $order->user));
     }
 
@@ -3415,22 +3550,22 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $methodKeys = array_column($cfg['methods'], 'key');
         $reasonKeys = array_column($cfg['reasons'], 'key');
         $data = $request->validate([
-            'method'             => 'required|in:' . implode(',', $methodKeys),
-            'reason'             => 'required|in:' . implode(',', $reasonKeys),
-            'note'               => 'nullable|string',
+            'method' => 'required|in:'.implode(',', $methodKeys),
+            'reason' => 'required|in:'.implode(',', $reasonKeys),
+            'note' => 'nullable|string',
             // Optional shipping address override (resend often goes to a
             // corrected address). Falls back to the original order's address.
-            'address'            => 'nullable|array',
+            'address' => 'nullable|array',
             'address.first_name' => 'nullable|string',
-            'address.last_name'  => 'nullable|string',
-            'address.address_1'  => 'nullable|string',
-            'address.address_2'  => 'nullable|string',
-            'address.city'       => 'nullable|string',
-            'address.state'      => 'nullable|string',
-            'address.zipcode'    => 'nullable|string',
-            'address.country'    => 'nullable|string',
-            'address.phone'      => 'nullable|string',
-            'address.email'      => 'nullable|string',
+            'address.last_name' => 'nullable|string',
+            'address.address_1' => 'nullable|string',
+            'address.address_2' => 'nullable|string',
+            'address.city' => 'nullable|string',
+            'address.state' => 'nullable|string',
+            'address.zipcode' => 'nullable|string',
+            'address.country' => 'nullable|string',
+            'address.phone' => 'nullable|string',
+            'address.email' => 'nullable|string',
         ]);
 
         $order->load(['items.metas', 'items.accessoryPrices', 'items.accessoryPrice', 'address']);
@@ -3442,49 +3577,53 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $response = DB::transaction(function () use ($order, $owner, $data, $pricing, $addressOverride) {
             $firstVariantId = (int) ($order->items->first()->product_variant_id ?? 0) ?: null;
             $resend = Order::create([
-                'user_id'            => $owner->id,
-                'source'             => $order->source,   // a resend stays in its channel
+                'user_id' => $owner->id,
+                'source' => $order->source,   // a resend stays in its channel
                 'resend_of_order_id' => $order->id,
-                'resend_method'      => $data['method'],
-                'resend_reason'      => $data['reason'],
-                'base_support'       => $pricing['support'],
-                'system_id'          => $this->generateSystemId(),
-                'ref_id'             => $order->ref_id,
-                'note'               => $data['note'] ?? ('Resend of ' . $order->system_id),
-                'status'             => Order::STATUS_NEW_ORDER,
-                'ship_type'          => $pricing['ship_type'],
-                'shipping_label'     => null,
-                'print_cost'         => $pricing['base'],
-                'shipping_cost'      => $pricing['shipping'],
-                'total_cost'         => $pricing['total'],
+                'resend_method' => $data['method'],
+                'resend_reason' => $data['reason'],
+                'base_support' => $pricing['support'],
+                'system_id' => $this->generateSystemId(),
+                'ref_id' => $order->ref_id,
+                'note' => $data['note'] ?? ('Resend of '.$order->system_id),
+                'status' => Order::STATUS_NEW_ORDER,
+                'ship_type' => $pricing['ship_type'],
+                'shipping_label' => null,
+                'print_cost' => $pricing['base'],
+                'shipping_cost' => $pricing['shipping'],
+                'total_cost' => $pricing['total'],
             ]);
             $resend->update(['system_id' => $this->buildSystemIdForOrder($resend->id, $firstVariantId)]);
 
             foreach ($order->items as $src) {
                 $item = OrderItem::create([
-                    'order_id'           => $resend->id,
+                    'order_id' => $resend->id,
                     'product_variant_id' => $src->product_variant_id,
-                    'material_id'        => $src->material_id,
-                    'mockup_front'       => $src->mockup_front,
-                    'mockup_back'        => $src->mockup_back,
-                    'sku_label'          => $src->sku_label,
-                    'order_type'         => $src->order_type,
-                    'order_type_label'   => $src->order_type_label ?? $this->productOrderType((int) $src->product_variant_id),
-                    'price'              => $src->price,
-                    'quantity'           => $src->quantity,
+                    'material_id' => $src->material_id,
+                    'mockup_front' => $src->mockup_front,
+                    'mockup_back' => $src->mockup_back,
+                    'sku_label' => $src->sku_label,
+                    'order_type' => $src->order_type,
+                    'order_type_label' => $src->order_type_label ?? $this->productOrderType((int) $src->product_variant_id),
+                    'price' => $src->price,
+                    'quantity' => $src->quantity,
                 ]);
                 foreach ($src->metas as $m) {
                     // Copy SOURCE designs only — _qr is rebuilt by the convert cron.
-                    if (preg_match('/_qr(_\d+)?$/', $m->key)) continue;
+                    if (preg_match('/_qr(_\d+)?$/', $m->key)) {
+                        continue;
+                    }
                     OrderItemMeta::create(['order_item_id' => $item->id, 'key' => $m->key, 'value' => $m->value]);
                 }
                 $accIds = $src->accessoryPrices->pluck('id')->all();
-                if (!empty($accIds)) $item->accessoryPrices()->sync($accIds);
+                if (! empty($accIds)) {
+                    $item->accessoryPrices()->sync($accIds);
+                }
             }
 
             // Address: use the override when provided, else copy the original's.
             $addrData = array_filter($addressOverride ?? [], fn ($v) => $v !== null && $v !== '');
-            if (!empty($addrData)) {
+            if (! empty($addrData)) {
                 Address::create(array_merge(
                     $order->address ? $order->address->only(['first_name', 'last_name', 'address_1', 'address_2', 'city', 'state', 'zipcode', 'country', 'phone', 'email']) : [],
                     $addrData,
@@ -3498,7 +3637,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
             return response()->json([
                 'message' => 'Resend order created',
-                'order'   => $resend->fresh()->load(['items.metas', 'items.productVariant', 'address', 'resendOf:id,system_id']),
+                'order' => $resend->fresh()->load(['items.metas', 'items.productVariant', 'address', 'resendOf:id,system_id']),
                 'pricing' => $pricing,
             ], 201);
         });
@@ -3516,9 +3655,12 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     {
         $quotaReasons = collect(Order::resendConfig()['reasons'])
             ->where('base_support', 'quota')->pluck('key')->all();
-        if (empty($quotaReasons)) return 0;
+        if (empty($quotaReasons)) {
+            return 0;
+        }
 
         $vnNow = now('Asia/Ho_Chi_Minh');
+
         return Order::where('user_id', $user->id)
             ->whereIn('resend_reason', $quotaReasons)
             ->whereRaw("DATE_FORMAT(DATE_ADD(created_at, INTERVAL 7 HOUR), '%Y-%m') = ?", [$vnNow->format('Y-m')])
@@ -3540,7 +3682,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $tierId = $owner->tier_id;
 
         // Aggregate the three fee components across all items.
-        $baseCost = 0.0; $faceFee = 0.0; $accFee = 0.0;
+        $baseCost = 0.0;
+        $faceFee = 0.0;
+        $accFee = 0.0;
         foreach ($order->items as $it) {
             $qty = max(1, (int) $it->quantity);
             $baseCost += $this->getVariantPriceByKey($it->product_variant_id, $tierId, 'base_cost') * $qty;
@@ -3565,7 +3709,7 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         // Per-seller override of the support % for this reason (if any) wins.
         $override = $owner->resend_support_override[$reasonKey] ?? null;
         $supportPct = is_array($override) ? $override : ($reason['support'] ?? []);  // per-component % (0–100)
-        $quotaBased = !empty($reason['quota_based']);
+        $quotaBased = ! empty($reason['quota_based']);
 
         // Past the monthly free quota, scale every component's support down.
         $afterFactor = 1.0;
@@ -3590,13 +3734,13 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $supAmt = round($c['amount'] * $pct / 100, 2);
             $support += $supAmt;
             $comps[] = [
-                'key'            => $c['key'],
-                'label'          => $c['label'],
-                'amount'         => round($c['amount'], 2),
-                'support_pct'    => round($pct, 0),
+                'key' => $c['key'],
+                'label' => $c['label'],
+                'amount' => round($c['amount'], 2),
+                'support_pct' => round($pct, 0),
                 'support_amount' => $supAmt,
-                'charged'        => round($c['amount'] - $supAmt, 2),
-                'supported'      => $supAmt > 0,
+                'charged' => round($c['amount'] - $supAmt, 2),
+                'supported' => $supAmt > 0,
             ];
         }
 
@@ -3604,21 +3748,26 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         $support = round($support, 2);
 
         return [
-            'ship_type'  => $method['ship_type'] ?? Order::SHIP_SELLER,
-            'shipping'   => round($shipping, 2),
-            'base'       => round($baseCost + $faceFee + $accFee, 2),
-            'support'    => $support,
+            'ship_type' => $method['ship_type'] ?? Order::SHIP_SELLER,
+            'shipping' => round($shipping, 2),
+            'base' => round($baseCost + $faceFee + $accFee, 2),
+            'support' => $support,
             'components' => $comps,
-            'total'      => round($subtotal - $support, 2),
+            'total' => round($subtotal - $support, 2),
         ];
     }
 
     private function resolveMaterialId(?int $providedMaterialId, $variantId): ?int
     {
-        if (!empty($providedMaterialId)) return (int) $providedMaterialId;
-        if (empty($variantId)) return null;
-        return \App\Models\Material::where('is_default', true)
-            ->whereIn('product_id', \App\Models\ProductVariant::where('id', $variantId)->select('product_id'))
+        if (! empty($providedMaterialId)) {
+            return (int) $providedMaterialId;
+        }
+        if (empty($variantId)) {
+            return null;
+        }
+
+        return Material::where('is_default', true)
+            ->whereIn('product_id', ProductVariant::where('id', $variantId)->select('product_id'))
             ->orderBy('id')
             ->value('id');
     }
@@ -3635,15 +3784,19 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      * later. Cached per request to avoid repeat lookups in bulk creates.
      */
     private array $orderTypeCache = [];
+
     private function productOrderType(?int $variantId): ?string
     {
-        if (!$variantId) return null;
+        if (! $variantId) {
+            return null;
+        }
         if (array_key_exists($variantId, $this->orderTypeCache)) {
             return $this->orderTypeCache[$variantId];
         }
-        $label = \App\Models\ProductVariant::where('id', $variantId)
+        $label = ProductVariant::where('id', $variantId)
             ->with('product:id,order_type')
             ->first()?->product?->order_type;
+
         return $this->orderTypeCache[$variantId] = $label;
     }
 
@@ -3684,8 +3837,9 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     private function generateSystemId(): string
     {
         do {
-            $sid = 'BS-' . strtoupper(Str::random(8));
+            $sid = 'BS-'.strtoupper(Str::random(8));
         } while (Order::where('system_id', $sid)->exists());
+
         return $sid;
     }
 
@@ -3703,18 +3857,20 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $variant = ProductVariant::with('product:id,line_id')->find($firstVariantId);
             $lineId = $variant?->product?->line_id;
             if ($lineId) {
-                $base = $lineId . $orderId;
+                $base = $lineId.$orderId;
                 $sid = $base;
                 $suffix = 1;
                 while (Order::where('system_id', $sid)->where('id', '!=', $orderId)->exists()) {
-                    $sid = $base . '-' . $suffix;
+                    $sid = $base.'-'.$suffix;
                     if (++$suffix > 50) {
                         return $this->generateSystemId();
                     }
                 }
+
                 return $sid;
             }
         }
+
         return $this->generateSystemId();
     }
 
@@ -3726,12 +3882,15 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
      */
     private function computeOrderShipping(?int $refVariantId, ?int $tierId, bool $hasLabel, int $totalQty): float
     {
-        if (!$refVariantId) return 0;
+        if (! $refVariantId) {
+            return 0;
+        }
         if ($hasLabel) {
             return $this->getVariantPriceByKey($refVariantId, $tierId, 'label_fee');
         }
         $base = $this->getVariantPriceByKey($refVariantId, $tierId, 'shipping_cost');
         $addition = $this->getVariantPriceByKey($refVariantId, $tierId, 'addition_fee');
+
         return $base + max(0, $totalQty - 1) * $addition;
     }
 
@@ -3742,11 +3901,14 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
         if ($tierId) {
             $price = (clone $query)->where('tier_id', $tierId)->first();
-            if ($price) return (float)$price->price;
+            if ($price) {
+                return (float) $price->price;
+            }
         }
 
         $price = $query->first();
-        return $price ? (float)$price->price : 0;
+
+        return $price ? (float) $price->price : 0;
     }
 
     private function getVariantCosts(int $variantId, ?int $tierId): array
@@ -3759,12 +3921,14 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
             if ($tierId) {
                 $price = (clone $query)->where('tier_id', $tierId)->first();
-                if (!$price) $price = $query->first();
+                if (! $price) {
+                    $price = $query->first();
+                }
             } else {
                 $price = $query->first();
             }
 
-            $costs[$key] = $price ? (float)$price->price : 0;
+            $costs[$key] = $price ? (float) $price->price : 0;
         }
 
         return $costs;
@@ -3791,19 +3955,19 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
             $totalQty += max(1, (int) ($it->quantity ?? 1));
         }
 
-        $hasLabel       = !empty($order->shipping_label);
+        $hasLabel = ! empty($order->shipping_label);
         $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
-        $newShipping    = $firstVariantId
+        $newShipping = $firstVariantId
             ? round((float) $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty), 2)
             : round((float) $order->shipping_cost, 2);
 
-        $print    = round((float) $order->print_cost, 2);
+        $print = round((float) $order->print_cost, 2);
         $newTotal = round($print + $newShipping, 2);
 
         return [
-            'print_cost'    => $print,
+            'print_cost' => $print,
             'shipping_cost' => $newShipping,
-            'total_cost'    => $newTotal,
+            'total_cost' => $newTotal,
         ];
     }
 
@@ -3822,27 +3986,27 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function recalcShippingPreview(Request $request)
     {
         $caller = $request->user();
-        if (!($caller?->role && in_array($caller->role->slug, ['admin', 'support'], true))) {
+        if (! ($caller?->role && in_array($caller->role->slug, ['admin', 'support'], true))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
         $request->validate([
-            'order_ids'   => 'required|array|min:1',
+            'order_ids' => 'required|array|min:1',
             'order_ids.*' => 'integer|exists:orders,id',
         ]);
 
         $orders = Order::with(['items', 'user'])->whereIn('id', $request->order_ids)->get();
 
-        $rows        = [];
+        $rows = [];
         $totalRefund = 0.0;
         foreach ($orders as $order) {
-            $new      = $this->recomputeOrderShipping($order);
-            $oldShip  = round((float) $order->shipping_cost, 2);
+            $new = $this->recomputeOrderShipping($order);
+            $oldShip = round((float) $order->shipping_cost, 2);
             $oldTotal = round((float) $order->total_cost, 2);
-            $newShip  = $new['shipping_cost'];
+            $newShip = $new['shipping_cost'];
             $newTotal = $new['total_cost'];
-            $paid     = round((float) $order->paid_cost, 2);
-            $refund   = max(0, round($paid - $newTotal, 2));
+            $paid = round((float) $order->paid_cost, 2);
+            $refund = max(0, round($paid - $newTotal, 2));
 
             // Only surface orders whose shipping/total actually changed.
             if (abs($newShip - $oldShip) < 0.005 && abs($newTotal - $oldTotal) < 0.005) {
@@ -3851,28 +4015,28 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
 
             $totalRefund += $refund;
             $rows[] = [
-                'id'            => $order->id,
-                'system_id'     => $order->system_id,
-                'ref_id'        => $order->ref_id,
-                'user_id'       => $order->user_id,
-                'user_name'     => $order->user?->name,
-                'status'        => (int) $order->status,
-                'old_shipping'  => $oldShip,
-                'new_shipping'  => $newShip,
+                'id' => $order->id,
+                'system_id' => $order->system_id,
+                'ref_id' => $order->ref_id,
+                'user_id' => $order->user_id,
+                'user_name' => $order->user?->name,
+                'status' => (int) $order->status,
+                'old_shipping' => $oldShip,
+                'new_shipping' => $newShip,
                 'diff_shipping' => round($newShip - $oldShip, 2),
-                'old_total'     => $oldTotal,
-                'new_total'     => $newTotal,
-                'paid_cost'     => $paid,
-                'is_paid'       => $paid > 0.005,
-                'refund'        => $refund,
+                'old_total' => $oldTotal,
+                'new_total' => $newTotal,
+                'paid_cost' => $paid,
+                'is_paid' => $paid > 0.005,
+                'refund' => $refund,
             ];
         }
 
         return response()->json([
-            'requested'    => count($request->order_ids),
-            'changed'      => count($rows),
+            'requested' => count($request->order_ids),
+            'changed' => count($rows),
             'total_refund' => round($totalRefund, 2),
-            'orders'       => $rows,
+            'orders' => $rows,
         ]);
     }
 
@@ -3893,46 +4057,46 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
     public function recalcShippingApply(Request $request)
     {
         $caller = $request->user();
-        if (!($caller?->role && in_array($caller->role->slug, ['admin', 'support'], true))) {
+        if (! ($caller?->role && in_array($caller->role->slug, ['admin', 'support'], true))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
         $request->validate([
-            'order_ids'   => 'required|array|min:1',
+            'order_ids' => 'required|array|min:1',
             'order_ids.*' => 'integer|exists:orders,id',
         ]);
 
         $orders = Order::with(['items', 'user'])->whereIn('id', $request->order_ids)->get();
 
         $result = DB::transaction(function () use ($orders) {
-            $updated      = 0;
-            $refunded     = 0;
-            $totalRefund  = 0.0;
-            $walletCache  = []; // user_id => locked User (running balance across the batch)
-            $details      = [];
+            $updated = 0;
+            $refunded = 0;
+            $totalRefund = 0.0;
+            $walletCache = []; // user_id => locked User (running balance across the batch)
+            $details = [];
 
             foreach ($orders as $order) {
-                $new      = $this->recomputeOrderShipping($order);
-                $newShip  = $new['shipping_cost'];
+                $new = $this->recomputeOrderShipping($order);
+                $newShip = $new['shipping_cost'];
                 $newTotal = $new['total_cost'];
-                $oldShip  = round((float) $order->shipping_cost, 2);
+                $oldShip = round((float) $order->shipping_cost, 2);
                 $oldTotal = round((float) $order->total_cost, 2);
-                $paid     = round((float) $order->paid_cost, 2);
+                $paid = round((float) $order->paid_cost, 2);
 
                 // Nothing drifted → leave the order untouched.
                 if (abs($newShip - $oldShip) < 0.005 && abs($newTotal - $oldTotal) < 0.005) {
                     continue;
                 }
 
-                $refund  = max(0, round($paid - $newTotal, 2));
+                $refund = max(0, round($paid - $newTotal, 2));
                 $updates = [
                     'shipping_cost' => $newShip,
-                    'total_cost'    => $newTotal,
+                    'total_cost' => $newTotal,
                 ];
 
                 if ($refund > 0 && $order->user) {
                     $owner = $walletCache[$order->user_id]
-                        ??= \App\Models\User::lockForUpdate()->find($order->user_id);
+                        ??= User::lockForUpdate()->find($order->user_id);
                     $balanceBefore = (float) $owner->wallet;
                     $owner->increment('wallet', $refund);
                     $owner->refresh();
@@ -3940,16 +4104,16 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                     $updates['paid_cost'] = $newTotal;
 
                     WalletTransaction::create([
-                        'user_id'         => $owner->id,
-                        'order_id'        => $order->id,
+                        'user_id' => $owner->id,
+                        'order_id' => $order->id,
                         'order_system_id' => $order->system_id,
-                        'type'            => 'refund',
-                        'status'          => WalletTransaction::STATUS_APPROVED,
-                        'amount'          => $refund,
-                        'balance_before'  => $balanceBefore,
-                        'balance_after'   => (float) $owner->wallet,
-                        'refunded_at'     => now(),
-                        'note'            => "Refund chênh lệch shipping đơn #{$order->system_id} ({$oldShip} → {$newShip})",
+                        'type' => 'refund',
+                        'status' => WalletTransaction::STATUS_APPROVED,
+                        'amount' => $refund,
+                        'balance_before' => $balanceBefore,
+                        'balance_after' => (float) $owner->wallet,
+                        'refunded_at' => now(),
+                        'note' => "Refund chênh lệch shipping đơn #{$order->system_id} ({$oldShip} → {$newShip})",
                     ]);
 
                     $refunded++;
@@ -3960,11 +4124,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
                 $updated++;
 
                 $details[] = [
-                    'id'           => $order->id,
-                    'system_id'    => $order->system_id,
+                    'id' => $order->id,
+                    'system_id' => $order->system_id,
                     'new_shipping' => $newShip,
-                    'new_total'    => $newTotal,
-                    'refund'       => $refund,
+                    'new_total' => $newTotal,
+                    'refund' => $refund,
                 ];
             }
 
@@ -3974,11 +4138,11 @@ Mảng `metas` chứa các artwork URLs theo từng mặt in. Mỗi entry là `{
         [$updated, $refunded, $totalRefund, $details] = $result;
 
         return response()->json([
-            'message'        => "Đã tính lại {$updated} đơn, refund {$refunded} đơn tổng \$" . number_format($totalRefund, 2),
-            'updated_count'  => $updated,
+            'message' => "Đã tính lại {$updated} đơn, refund {$refunded} đơn tổng \$".number_format($totalRefund, 2),
+            'updated_count' => $updated,
             'refunded_count' => $refunded,
-            'total_refund'   => round($totalRefund, 2),
-            'details'        => $details,
+            'total_refund' => round($totalRefund, 2),
+            'details' => $details,
         ]);
     }
 }

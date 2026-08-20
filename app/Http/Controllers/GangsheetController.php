@@ -2,16 +2,15 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppSetting;
 use App\Models\Gangsheet;
-use App\Models\GangsheetLabel;
 use App\Models\Order;
 use App\Models\PartnerAccessoryPrice;
 use App\Models\PartnerVariantPrice;
-use App\Models\OrderItem;
-use App\Models\OrderItemMeta;
+use App\Models\User;
+use App\Services\GangsheetService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 
 class GangsheetController extends Controller
 {
@@ -24,7 +23,7 @@ class GangsheetController extends Controller
         // Channel scope. Gangs written before the column existed default to
         // 'normal', so the normal screen keeps listing everything it used to.
         if (strtolower(trim((string) $request->input('source'))) !== 'all') {
-            $query->where('source', \App\Models\Order::normalizeSource($request->input('source')));
+            $query->where('source', Order::normalizeSource($request->input('source')));
         }
 
         if ($request->filled('date_from')) {
@@ -40,8 +39,8 @@ class GangsheetController extends Controller
                 array_map('trim', preg_split('/[\s,;]+/', (string) $request->line_id))
             )));
 
-            if (!empty($terms)) {
-                $likes = array_map(fn ($t) => '%' . $t . '%', $terms);
+            if (! empty($terms)) {
+                $likes = array_map(fn ($t) => '%'.$t.'%', $terms);
 
                 // Each term is matched as a "Line ID" OR an order "System ID".
                 // system_id is "<line_id><order_id>" (e.g. PS_C + 3071 =
@@ -49,18 +48,18 @@ class GangsheetController extends Controller
                 // Collect the order ids matching any term (by system_id or by
                 // product line_id) so we can find the gangs that contain them.
                 $orderIds = Order::where(function ($oq) use ($likes) {
-                        foreach ($likes as $lk) {
-                            $oq->orWhere('system_id', 'like', $lk)
-                               ->orWhereHas('items.productVariant.product', fn ($q) => $q->where('line_id', 'like', $lk));
-                        }
-                    })
+                    foreach ($likes as $lk) {
+                        $oq->orWhere('system_id', 'like', $lk)
+                            ->orWhereHas('items.productVariant.product', fn ($q) => $q->where('line_id', 'like', $lk));
+                    }
+                })
                     ->orderByDesc('id')->limit(2000)->pluck('id')->all();
 
                 $query->where(function ($q) use ($likes, $orderIds) {
                     foreach ($likes as $lk) {
                         $q->orWhere('line_id', 'like', $lk)
-                          ->orWhere('first_system_id', 'like', $lk)
-                          ->orWhere('last_system_id', 'like', $lk);
+                            ->orWhere('first_system_id', 'like', $lk)
+                            ->orWhere('last_system_id', 'like', $lk);
                     }
                     // JSON_CONTAINS is portable (MySQL 5.7+ / MariaDB 10.2+).
                     // One membership test per matched id; the order set is capped
@@ -107,10 +106,12 @@ class GangsheetController extends Controller
             $others = [];
             foreach (($g->order_ids ?? []) as $oid) {
                 foreach ($orderToGangs[(int) $oid] ?? [] as $gid) {
-                    if ($gid !== $g->id) $others[$gid] = true;
+                    if ($gid !== $g->id) {
+                        $others[$gid] = true;
+                    }
                 }
             }
-            $g->is_duplicate = !empty($others);
+            $g->is_duplicate = ! empty($others);
             $g->duplicate_gang_ids = array_values(array_map('intval', array_keys($others)));
         });
 
@@ -153,7 +154,7 @@ class GangsheetController extends Controller
     public function partnerUsers()
     {
         return response()->json(
-            \App\Models\User::whereHas('role', fn ($q) => $q->where('slug', 'partner'))
+            User::whereHas('role', fn ($q) => $q->where('slug', 'partner'))
                 ->select('id', 'name', 'email')
                 ->orderBy('name')
                 ->get()
@@ -186,7 +187,7 @@ class GangsheetController extends Controller
     public function setPartners(Request $request, Gangsheet $gangsheet)
     {
         $request->validate([
-            'user_ids'   => 'present|array',
+            'user_ids' => 'present|array',
             'user_ids.*' => 'integer|exists:users,id',
         ]);
 
@@ -194,23 +195,45 @@ class GangsheetController extends Controller
         $gangsheet->partners()->sync($userIds);
 
         $assigned = 0;
+        $cleared = 0;
         $skippedLocked = 0;
-        if (count($userIds) === 1) {
-            $orderIds = $gangsheet->order_ids ?? [];
-            if (!empty($orderIds)) {
+        $orderIds = $gangsheet->order_ids ?? [];
+
+        if (! empty($orderIds)) {
+            if (count($userIds) === 1) {
                 $skippedLocked = Order::whereIn('id', $orderIds)
                     ->whereNotNull('partner_locked_at')
                     ->count();
                 $assigned = Order::whereIn('id', $orderIds)
                     ->whereNull('partner_locked_at')
                     ->update(['partner_id' => $userIds[0]]);
+            } elseif (count($userIds) === 0) {
+                // Taking the gang away from everyone has to take the orders
+                // back too. Clearing only the pivot would leave partner_id
+                // stamped, so the partner would keep earning on orders they no
+                // longer have — and would still see them, since the read paths
+                // union partner_id with the pivot.
+                //
+                // partner_revenue goes with it: an amount owed to nobody is a
+                // number nobody owns. Locked orders are settled, so they keep
+                // both their partner and their amount.
+                $base = Order::whereIn('id', $orderIds)->whereNotNull('partner_id');
+                $skippedLocked = (clone $base)->whereNotNull('partner_locked_at')->count();
+                $cleared = (clone $base)->whereNull('partner_locked_at')
+                    ->update(['partner_id' => null, 'partner_revenue' => null]);
             }
         }
 
         return response()->json([
-            'message'               => 'Partners updated',
-            'partner_ids'           => $gangsheet->partners()->pluck('users.id'),
-            'orders_assigned'       => $assigned,
+            'message' => count($userIds) === 0
+                ? ($cleared > 0
+                    ? "Đã gỡ partner khỏi gang · trả lại {$cleared} đơn (xoá luôn số tiền đã tính)"
+                        .($skippedLocked ? " · giữ nguyên {$skippedLocked} đơn đã chốt" : '')
+                    : 'Đã gỡ partner khỏi gang')
+                : 'Partners updated',
+            'partner_ids' => $gangsheet->partners()->pluck('users.id'),
+            'orders_assigned' => $assigned,
+            'orders_cleared' => $cleared,
             'orders_skipped_locked' => $skippedLocked,
         ]);
     }
@@ -227,19 +250,19 @@ class GangsheetController extends Controller
     public function setPartnerRevenue(Request $request, Gangsheet $gangsheet)
     {
         $data = $request->validate([
-            'user_id'           => 'required|integer|exists:users,id',
-            'items'             => 'present|array',
-            'items.*.order_id'  => 'required|integer',
-            'items.*.revenue'   => 'nullable|numeric|min:0',
-            'auto_price'        => 'sometimes|boolean',
+            'user_id' => 'required|integer|exists:users,id',
+            'items' => 'present|array',
+            'items.*.order_id' => 'required|integer',
+            'items.*.revenue' => 'nullable|numeric|min:0',
+            'auto_price' => 'sometimes|boolean',
         ]);
 
         $autoPrice = $data['auto_price'] ?? true;
 
-        $partner = \App\Models\User::whereKey($data['user_id'])
+        $partner = User::whereKey($data['user_id'])
             ->whereHas('role', fn ($q) => $q->where('slug', 'partner'))
             ->first();
-        if (!$partner) {
+        if (! $partner) {
             return response()->json(['message' => 'User is not a partner'], 422);
         }
 
@@ -254,15 +277,16 @@ class GangsheetController extends Controller
 
             foreach ($data['items'] as $item) {
                 $oid = (int) $item['order_id'];
-                if (!isset($gangOrderIds[$oid])) {
+                if (! isset($gangOrderIds[$oid])) {
                     continue;
                 }
                 $order = Order::find($oid);
-                if (!$order) {
+                if (! $order) {
                     continue;
                 }
                 if ($order->partner_locked_at !== null) {
                     $skippedLocked[] = $order->system_id;
+
                     continue;
                 }
 
@@ -279,7 +303,7 @@ class GangsheetController extends Controller
                 }
 
                 $order->update([
-                    'partner_id'      => $partner->id,
+                    'partner_id' => $partner->id,
                     'partner_revenue' => $revenue,
                 ]);
                 $updated++;
@@ -287,10 +311,10 @@ class GangsheetController extends Controller
         });
 
         return response()->json([
-            'message'        => "Đã gán doanh thu cho {$updated} đơn"
-                . (count($skippedLocked) ? ' · bỏ qua ' . count($skippedLocked) . ' đơn đã khoá' : '')
-                . (count($autoCalcDetails) ? ' · tự tính ' . count($autoCalcDetails) . ' đơn từ bảng giá partner' : ''),
-            'updated'        => $updated,
+            'message' => "Đã gán doanh thu cho {$updated} đơn"
+                .(count($skippedLocked) ? ' · bỏ qua '.count($skippedLocked).' đơn đã khoá' : '')
+                .(count($autoCalcDetails) ? ' · tự tính '.count($autoCalcDetails).' đơn từ bảng giá partner' : ''),
+            'updated' => $updated,
             'skipped_locked' => $skippedLocked,
             'auto_calculated' => $autoCalcDetails,
         ]);
@@ -409,11 +433,11 @@ class GangsheetController extends Controller
 
         return response()->json([
             'gangsheet' => $gangsheet,
-            'orders'    => $orders,
+            'orders' => $orders,
             // Ids in order_ids whose order has since been deleted. Rebuilding
             // without them would silently produce a smaller sheet, so the
             // caller is told rather than left to compare counts.
-            'missing'   => array_values(array_diff(
+            'missing' => array_values(array_diff(
                 array_map('intval', $orderIds),
                 $orders->pluck('id')->map(fn ($i) => (int) $i)->all()
             )),
@@ -435,11 +459,11 @@ class GangsheetController extends Controller
     public function replaceFiles(Request $request, Gangsheet $gangsheet)
     {
         $data = $request->validate([
-            'filename'   => 'required|string',
-            'file_url'   => 'required|url',
-            'pdf_urls'   => 'nullable|array',
+            'filename' => 'required|string',
+            'file_url' => 'required|url',
+            'pdf_urls' => 'nullable|array',
             'pdf_urls.*' => 'url',
-            'png_urls'   => 'nullable|array',
+            'png_urls' => 'nullable|array',
             'png_urls.*' => 'url',
         ]);
 
@@ -451,7 +475,7 @@ class GangsheetController extends Controller
         ]);
 
         return response()->json([
-            'message'   => 'Đã thay file cho ' . $data['filename'],
+            'message' => 'Đã thay file cho '.$data['filename'],
             'gangsheet' => $gangsheet->fresh()->load('creator:id,name', 'partners:id,name'),
         ]);
     }
@@ -495,9 +519,9 @@ class GangsheetController extends Controller
         }
         // Per-user assign rules (shared with group assign): compose pending only
         // shows orders allowed by each user's status rule, when configured.
-        $rules = (array) \App\Models\AppSetting::getJson('gangsheet_assign_rules', []);
-        if (!empty($rules)) {
-            \App\Http\Controllers\GangsheetGroupController::applyAssignRules($query, $rules);
+        $rules = (array) AppSetting::getJson('gangsheet_assign_rules', []);
+        if (! empty($rules)) {
+            GangsheetGroupController::applyAssignRules($query, $rules);
         }
 
         return response()->json($query->paginate($request->get('per_page', 100)));
@@ -549,6 +573,7 @@ class GangsheetController extends Controller
     public function storageCredentials(Request $request)
     {
         $cfg = config('filesystems.disks.b2');
+
         return response()->json([
             'access_key_id' => $cfg['key'] ?? null,
             'secret_access_key' => $cfg['secret'] ?? null,
@@ -556,7 +581,7 @@ class GangsheetController extends Controller
             'endpoint' => $cfg['endpoint'] ?? null,
             'bucket' => $cfg['bucket'] ?? null,
             'public_url_base' => rtrim($cfg['url'] ?? '', '/'),
-            'folder' => 'gangsheet/' . now()->format('Y-m-d'),
+            'folder' => 'gangsheet/'.now()->format('Y-m-d'),
         ]);
     }
 
@@ -576,7 +601,7 @@ class GangsheetController extends Controller
             'pdf_urls' => 'nullable|array',
             'pdf_urls.*' => 'url',
             'line_id' => 'nullable|string|max:16',
-            'source' => 'nullable|string|in:' . implode(',', \App\Models\Order::SOURCES),
+            'source' => 'nullable|string|in:'.implode(',', Order::SOURCES),
             'page_format' => 'nullable|string|max:16',
             'first_system_id' => 'nullable|string',
             'last_system_id' => 'nullable|string',
@@ -587,28 +612,29 @@ class GangsheetController extends Controller
         ]);
 
         $orderIds = $this->decodeIds($request->input('order_ids'));
-        $metaIds  = $this->decodeIds($request->input('meta_ids'));
+        $metaIds = $this->decodeIds($request->input('meta_ids'));
 
         try {
-            $gangsheet = app(\App\Services\GangsheetService::class)->record([
-                'filename'        => $request->filename,
-                'file_url'        => $request->file_url,
-                'png_urls'        => $request->input('png_urls'),
-                'pdf_urls'        => $request->input('pdf_urls'),
-                'line_id'         => $request->line_id,
-                'source'          => \App\Models\Order::normalizeSource($request->input('source')),
-                'page_format'     => $request->page_format,
+            $gangsheet = app(GangsheetService::class)->record([
+                'filename' => $request->filename,
+                'file_url' => $request->file_url,
+                'png_urls' => $request->input('png_urls'),
+                'pdf_urls' => $request->input('pdf_urls'),
+                'line_id' => $request->line_id,
+                'source' => Order::normalizeSource($request->input('source')),
+                'page_format' => $request->page_format,
                 'first_system_id' => $request->first_system_id,
-                'last_system_id'  => $request->last_system_id,
-                'orders_count'    => (int) $request->orders_count,
-                'metas_count'     => (int) $request->metas_count,
-                'order_ids'       => $orderIds,
-                'meta_ids'        => $metaIds,
+                'last_system_id' => $request->last_system_id,
+                'orders_count' => (int) $request->orders_count,
+                'metas_count' => (int) $request->metas_count,
+                'order_ids' => $orderIds,
+                'meta_ids' => $metaIds,
             ], $request->user()?->id);
         } catch (\Throwable $e) {
-            \Log::error('[gangsheet] DB save failed: ' . $e->getMessage(), ['filename' => $request->filename]);
+            \Log::error('[gangsheet] DB save failed: '.$e->getMessage(), ['filename' => $request->filename]);
+
             return response()->json([
-                'message' => 'Failed to record gang sheet in database: ' . $e->getMessage(),
+                'message' => 'Failed to record gang sheet in database: '.$e->getMessage(),
             ], 500);
         }
 
@@ -635,7 +661,7 @@ class GangsheetController extends Controller
         // force=true is the "xuất lại" path: the caller rebuilt the pages on
         // purpose (e.g. after the card-skin sheets became transparent) and
         // wants the record to point at the new files.
-        if (!empty($gangsheet->png_urls) && !$request->boolean('force')) {
+        if (! empty($gangsheet->png_urls) && ! $request->boolean('force')) {
             return response()->json([
                 'message' => 'Gangsheet already has PNG exports',
                 'gangsheet' => $gangsheet,
@@ -656,6 +682,7 @@ class GangsheetController extends Controller
     {
         // Soft-delete: keep the orders/metas marked production=true.
         $gangsheet->delete();
+
         return response()->json(['message' => 'Gangsheet deleted']);
     }
 
@@ -686,9 +713,13 @@ class GangsheetController extends Controller
         }
         if (is_string($input)) {
             $decoded = json_decode($input, true);
-            if (is_array($decoded)) return array_values(array_unique(array_map('intval', $decoded)));
+            if (is_array($decoded)) {
+                return array_values(array_unique(array_map('intval', $decoded)));
+            }
+
             return array_values(array_unique(array_map('intval', explode(',', $input))));
         }
+
         return [];
     }
 }
