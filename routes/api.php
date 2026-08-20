@@ -272,6 +272,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheets/lookup-orders', [GangsheetController::class, 'lookupOrders']);
         // Partner assignment (admin assigns gangs to partner users).
         Route::get('/gangsheets/partner-users', [GangsheetController::class, 'partnerUsers']);
+
+        // Partner rate cards: what a partner is paid, per card rather than per
+        // partner, so workshops on the same terms share one.
+        Route::get('/partner-price-lists', [\App\Http\Controllers\PartnerPriceListController::class, 'index']);
+        Route::post('/partner-price-lists', [\App\Http\Controllers\PartnerPriceListController::class, 'store']);
+        Route::get('/partner-price-lists/{list}', [\App\Http\Controllers\PartnerPriceListController::class, 'show']);
+        Route::put('/partner-price-lists/{list}', [\App\Http\Controllers\PartnerPriceListController::class, 'update']);
+        Route::delete('/partner-price-lists/{list}', [\App\Http\Controllers\PartnerPriceListController::class, 'destroy']);
+        Route::put('/partner-price-lists/{list}/prices', [\App\Http\Controllers\PartnerPriceListController::class, 'savePrices']);
+        Route::put('/partner-price-lists/{list}/partners', [\App\Http\Controllers\PartnerPriceListController::class, 'setPartners']);
         Route::put('/gangsheets/{gangsheet}/partners', [GangsheetController::class, 'setPartners']);
         Route::put('/gangsheets/{gangsheet}/partner-revenue', [GangsheetController::class, 'setPartnerRevenue']);
         Route::get('/gangsheets', [GangsheetController::class, 'index']);

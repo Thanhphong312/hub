@@ -5,9 +5,10 @@ namespace App\Http\Controllers;
 use App\Models\Gangsheet;
 use App\Models\GangsheetLabel;
 use App\Models\Order;
+use App\Models\PartnerAccessoryPrice;
+use App\Models\PartnerVariantPrice;
 use App\Models\OrderItem;
 use App\Models\OrderItemMeta;
-use App\Models\ProductVariantPrice;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -270,8 +271,8 @@ class GangsheetController extends Controller
                     : null;
 
                 // Auto-calculate from partner prices when revenue not provided.
-                if ($revenue === null && $autoPrice && $partner->tier_id) {
-                    $revenue = $this->calcPartnerRevenue($order, $partner->tier_id);
+                if ($revenue === null && $autoPrice && $partner->partner_price_list_id) {
+                    $revenue = $this->calcPartnerRevenue($order, $partner->partner_price_list_id);
                     if ($revenue !== null) {
                         $autoCalcDetails[] = ['order_id' => $oid, 'revenue' => $revenue];
                     }
@@ -305,7 +306,18 @@ class GangsheetController extends Controller
      *
      * Returns null if no partner_price is set for any item.
      */
-    private function calcPartnerRevenue(Order $order, int $tierId): ?float
+    /**
+     * What this order is worth to a partner, from their rate card.
+     *
+     * Sums only the keys the card actually prices: a key with no row is not
+     * paid, which is how "the partner earns the print fees but not shipping"
+     * is expressed. There is no separate list of enabled keys to fall out of
+     * step with the prices themselves.
+     *
+     * Returns null when the card prices nothing on this order, so the caller
+     * can tell "no rate configured" apart from a genuine zero.
+     */
+    private function calcPartnerRevenue(Order $order, int $listId): ?float
     {
         $order->loadMissing(['items.accessoryPrices']);
 
@@ -314,13 +326,21 @@ class GangsheetController extends Controller
             return null;
         }
 
-        // Build map: variantId => sum of partner_price across all keys for this tier
-        $variantPrices = ProductVariantPrice::where('tier_id', $tierId)
+        // variantId => sum of the priced keys on this card
+        $variantPrices = PartnerVariantPrice::where('partner_price_list_id', $listId)
             ->whereIn('product_variant_id', $variantIds)
-            ->whereNotNull('partner_price')
             ->get()
             ->groupBy('product_variant_id')
-            ->map(fn ($rows) => $rows->sum('partner_price'));
+            ->map(fn ($rows) => $rows->sum('price'));
+
+        $accessoryPriceIds = $order->items
+            ->flatMap(fn ($i) => $i->accessoryPrices->pluck('id'))
+            ->unique()->values()->all();
+        $accessoryPrices = empty($accessoryPriceIds)
+            ? collect()
+            : PartnerAccessoryPrice::where('partner_price_list_id', $listId)
+                ->whereIn('accessory_price_id', $accessoryPriceIds)
+                ->pluck('price', 'accessory_price_id');
 
         $total = 0;
         $hasPrice = false;
@@ -329,16 +349,14 @@ class GangsheetController extends Controller
             $qty = max(1, (int) $item->quantity);
             $itemPartner = 0;
 
-            // Variant partner price (sum of 5 keys)
             if ($item->product_variant_id && $variantPrices->has($item->product_variant_id)) {
                 $itemPartner += (float) $variantPrices[$item->product_variant_id];
                 $hasPrice = true;
             }
 
-            // Accessory partner prices
             foreach ($item->accessoryPrices as $ap) {
-                if ($ap->partner_price !== null) {
-                    $itemPartner += (float) $ap->partner_price;
+                if ($accessoryPrices->has($ap->id)) {
+                    $itemPartner += (float) $accessoryPrices[$ap->id];
                     $hasPrice = true;
                 }
             }

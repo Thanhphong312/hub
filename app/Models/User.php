@@ -18,6 +18,7 @@ class User extends Authenticatable
         'password',
         'role_id',
         'tier_id',
+        'partner_price_list_id',
         'wallet',
         'api_key',
         'status',
@@ -58,6 +59,12 @@ class User extends Authenticatable
     public function role()
     {
         return $this->belongsTo(Role::class);
+    }
+
+    /** Rate card this partner is paid by (partners only, nullable). */
+    public function partnerPriceList()
+    {
+        return $this->belongsTo(PartnerPriceList::class, 'partner_price_list_id');
     }
 
     public function tier()
