@@ -5,13 +5,13 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * One payment made to a partner. See the migration for why the settled orders
- * hang off this row rather than a running balance.
+ * One payment made to a partner. A plain amount — what is still owed is total
+ * earned minus total paid, so no per-order link is needed.
  */
 class PartnerPayout extends Model
 {
     protected $fillable = [
-        'user_id', 'amount', 'balance_after', 'orders_count',
+        'user_id', 'amount', 'balance_after',
         'method', 'transaction_id', 'period_from', 'period_to',
         'note', 'created_by',
     ];
@@ -44,11 +44,5 @@ class PartnerPayout extends Model
     public function creator()
     {
         return $this->belongsTo(User::class, 'created_by');
-    }
-
-    /** Orders this payout settled. */
-    public function orders()
-    {
-        return $this->hasMany(Order::class, 'partner_payout_id');
     }
 }

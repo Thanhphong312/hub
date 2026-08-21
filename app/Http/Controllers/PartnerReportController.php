@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\PartnerAccessoryPrice;
+use App\Models\PartnerPayout;
 use App\Models\PartnerVariantPrice;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -61,6 +62,9 @@ class PartnerReportController extends Controller
                 $shipped = Order::where('partner_id', $p->id)
                     ->where('status', Order::STATUS_SHIPPED);
 
+                $earned = round((float) (clone $shipped)->sum('partner_revenue'), 2);
+                $paidOut = round((float) PartnerPayout::where('user_id', $p->id)->sum('amount'), 2);
+
                 $inWindow = (clone $shipped)
                     ->whereNotNull('completed_time')
                     ->whereBetween('completed_time', [$startUtc, $endUtc])
@@ -87,7 +91,7 @@ class PartnerReportController extends Controller
                     'shipped_window' => $inWindow->count(),
                     // Shipped but with no completed_time, so absent from `daily`.
                     'undated' => (clone $shipped)->whereNull('completed_time')->count(),
-                    'revenue_total' => round((float) (clone $shipped)->sum('partner_revenue'), 2),
+                    'revenue_total' => $earned,
                     // Split by whether the seller has settled the order, using
                     // the hub's own definition of unpaid (paid_cost <
                     // total_cost). Money owed on orders nobody has paid for yet
@@ -101,17 +105,11 @@ class PartnerReportController extends Controller
                         ->whereColumn('paid_cost', '>=', 'total_cost')->count(),
                     'orders_unpaid' => (clone $shipped)
                         ->whereColumn('paid_cost', '<', 'total_cost')->count(),
-                    // What we still owe this partner: earned on shipped orders
-                    // that no payout has settled. Derived from the orders, not
-                    // a stored balance, so it cannot drift from them.
-                    'owed' => round((float) (clone $shipped)
-                        ->whereNotNull('partner_revenue')
-                        ->whereNull('partner_payout_id')->sum('partner_revenue'), 2),
-                    'owed_orders' => (clone $shipped)
-                        ->whereNotNull('partner_revenue')
-                        ->whereNull('partner_payout_id')->count(),
-                    'paid_out' => round((float) (clone $shipped)
-                        ->whereNotNull('partner_payout_id')->sum('partner_revenue'), 2),
+                    // What we have handed over, and what is left. Both summed
+                    // from their own rows rather than kept as a balance, so
+                    // neither can drift from what it came from.
+                    'paid_out' => $paidOut,
+                    'owed' => round($earned - $paidOut, 2),
                     'revenue_locked' => round((float) (clone $shipped)->whereNotNull('partner_locked_at')->sum('partner_revenue'), 2),
                     // Shipped work carrying no amount yet — the backlog the
                     // "tính tiền" button exists to clear.

@@ -282,9 +282,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // money coming in from sellers.
         Route::get('/partner-payouts', [\App\Http\Controllers\PartnerPayoutController::class, 'index']);
         Route::post('/partner-payouts', [\App\Http\Controllers\PartnerPayoutController::class, 'store']);
-        Route::get('/partner-payouts/{payout}', [\App\Http\Controllers\PartnerPayoutController::class, 'show']);
+        Route::get('/partner-payouts/summary/{partner}', [\App\Http\Controllers\PartnerPayoutController::class, 'summary']);
         Route::delete('/partner-payouts/{payout}', [\App\Http\Controllers\PartnerPayoutController::class, 'destroy']);
-        Route::get('/partner-payouts/outstanding/{partner}', [\App\Http\Controllers\PartnerPayoutController::class, 'outstanding']);
 
         // Partner rate cards: what a partner is paid, per card rather than per
         // partner, so workshops on the same terms share one.
