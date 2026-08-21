@@ -101,6 +101,17 @@ class PartnerReportController extends Controller
                         ->whereColumn('paid_cost', '>=', 'total_cost')->count(),
                     'orders_unpaid' => (clone $shipped)
                         ->whereColumn('paid_cost', '<', 'total_cost')->count(),
+                    // What we still owe this partner: earned on shipped orders
+                    // that no payout has settled. Derived from the orders, not
+                    // a stored balance, so it cannot drift from them.
+                    'owed' => round((float) (clone $shipped)
+                        ->whereNotNull('partner_revenue')
+                        ->whereNull('partner_payout_id')->sum('partner_revenue'), 2),
+                    'owed_orders' => (clone $shipped)
+                        ->whereNotNull('partner_revenue')
+                        ->whereNull('partner_payout_id')->count(),
+                    'paid_out' => round((float) (clone $shipped)
+                        ->whereNotNull('partner_payout_id')->sum('partner_revenue'), 2),
                     'revenue_locked' => round((float) (clone $shipped)->whereNotNull('partner_locked_at')->sum('partner_revenue'), 2),
                     // Shipped work carrying no amount yet — the backlog the
                     // "tính tiền" button exists to clear.

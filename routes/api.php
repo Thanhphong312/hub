@@ -278,6 +278,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/partner-report/{partner}/orders', [\App\Http\Controllers\PartnerReportController::class, 'orders']);
         Route::post('/partner-report/{partner}/apply-revenue', [\App\Http\Controllers\PartnerReportController::class, 'applyRevenue']);
 
+        // Paying partners out. The mirror of the wallet routes, which handle
+        // money coming in from sellers.
+        Route::get('/partner-payouts', [\App\Http\Controllers\PartnerPayoutController::class, 'index']);
+        Route::post('/partner-payouts', [\App\Http\Controllers\PartnerPayoutController::class, 'store']);
+        Route::get('/partner-payouts/{payout}', [\App\Http\Controllers\PartnerPayoutController::class, 'show']);
+        Route::delete('/partner-payouts/{payout}', [\App\Http\Controllers\PartnerPayoutController::class, 'destroy']);
+        Route::get('/partner-payouts/outstanding/{partner}', [\App\Http\Controllers\PartnerPayoutController::class, 'outstanding']);
+
         // Partner rate cards: what a partner is paid, per card rather than per
         // partner, so workshops on the same terms share one.
         Route::get('/partner-price-lists', [\App\Http\Controllers\PartnerPriceListController::class, 'index']);
