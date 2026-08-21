@@ -100,9 +100,24 @@ class PartnerPayoutController extends Controller
         ], 201);
     }
 
-    /** Undo a payout — the amount goes back onto what is owed. */
-    public function destroy(PartnerPayout $payout)
+    /**
+     * Undo a payout — the amount goes back onto what is owed.
+     *
+     * A payout the partner has confirmed receiving is a receipt both sides
+     * agreed on; deleting it would erase their acknowledgement along with the
+     * row. Still possible with ?force=1, so a genuine mistake can be fixed, but
+     * never as a side effect of a normal cancel.
+     */
+    public function destroy(Request $request, PartnerPayout $payout)
     {
+        if ($payout->confirmed_at && ! $request->boolean('force')) {
+            return response()->json([
+                'message' => 'Partner đã xác nhận nhận được khoản này ('
+                    .$payout->confirmed_at->format('d/m/Y H:i').'). Huỷ sẽ xoá luôn xác nhận đó.',
+                'needs_force' => true,
+            ], 409);
+        }
+
         $partner = $payout->partner;
         $amount = (float) $payout->amount;
         $payout->delete();

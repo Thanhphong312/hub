@@ -135,7 +135,36 @@ class PartnerController extends Controller
             'payouts' => PartnerPayout::where('user_id', $user->id)
                 ->orderByDesc('id')
                 ->limit(100)
-                ->get(['id', 'amount', 'balance_after', 'method', 'transaction_id', 'period_from', 'period_to', 'note', 'created_at']),
+                ->get(['id', 'amount', 'balance_after', 'method', 'transaction_id', 'period_from', 'period_to', 'note', 'created_at', 'confirmed_at', 'confirmed_note']),
+        ]);
+    }
+
+    /**
+     * Partner acknowledges the money arrived.
+     *
+     * Scoped to their own payouts, and refused once already confirmed — a
+     * second confirmation would only move the timestamp, which is the one part
+     * of the record that has to stay put.
+     */
+    public function confirmPayout(Request $request, PartnerPayout $payout)
+    {
+        abort_unless($payout->user_id === $request->user()->id, 403, 'Không phải giao dịch của bạn');
+
+        if ($payout->confirmed_at) {
+            return response()->json([
+                'message' => 'Đã xác nhận trước đó lúc '.$payout->confirmed_at->format('d/m/Y H:i'),
+            ], 409);
+        }
+
+        $data = $request->validate(['note' => 'nullable|string|max:500']);
+        $payout->update([
+            'confirmed_at' => now(),
+            'confirmed_note' => $data['note'] ?? null,
+        ]);
+
+        return response()->json([
+            'message' => 'Đã xác nhận nhận được $'.number_format($payout->amount, 2),
+            'payout' => $payout->fresh(),
         ]);
     }
 

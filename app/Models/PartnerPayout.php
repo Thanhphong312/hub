@@ -13,7 +13,7 @@ class PartnerPayout extends Model
     protected $fillable = [
         'user_id', 'amount', 'balance_after',
         'method', 'transaction_id', 'period_from', 'period_to',
-        'note', 'created_by',
+        'note', 'created_by', 'confirmed_at', 'confirmed_note',
     ];
 
     protected function casts(): array
@@ -23,6 +23,7 @@ class PartnerPayout extends Model
             'balance_after' => 'decimal:2',
             'period_from' => 'date',
             'period_to' => 'date',
+            'confirmed_at' => 'datetime',
         ];
     }
 
