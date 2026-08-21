@@ -342,6 +342,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Admin allowed too for testing/support.
     Route::middleware(CheckRole::class . ':partner,admin')->prefix('partner')->group(function () {
         Route::get('/dashboard', [PartnerController::class, 'dashboard']);
+        Route::get('/payouts', [PartnerController::class, 'payouts']);
         Route::get('/gangsheets', [PartnerController::class, 'gangsheets']);
         Route::post('/gangsheets/{gangsheet}/printed', [PartnerController::class, 'markPrinted']);
         Route::get('/gangsheets/{gangsheet}', [PartnerController::class, 'show']);

@@ -6,6 +6,7 @@ use App\Http\Controllers\Concerns\FiltersOrderList;
 use App\Models\Gangsheet;
 use App\Models\Order;
 use App\Models\OrderItemMeta;
+use App\Models\PartnerPayout;
 use App\Models\Ticket;
 use App\Services\GangsheetService;
 use Illuminate\Http\Request;
@@ -100,6 +101,41 @@ class PartnerController extends Controller
             'revenue_unpaid' => round((float) ($revenue->unpaid ?? 0), 2),
             'orders_paid' => (int) ($revenue->paid_cnt ?? 0),
             'orders_unpaid' => (int) ($revenue->unpaid_cnt ?? 0),
+        ]);
+    }
+
+    /**
+     * The partner's own payout history and where they stand.
+     *
+     * Same figures the admin side computes, scoped to the caller — a partner
+     * has an obvious interest in seeing what they were paid, and having to ask
+     * for a screenshot of someone else's screen is not a record.
+     */
+    public function payouts(Request $request)
+    {
+        $user = $request->user();
+
+        $earned = round((float) Order::where('partner_id', $user->id)
+            ->where('status', Order::STATUS_SHIPPED)
+            ->sum('partner_revenue'), 2);
+        $paid = round((float) PartnerPayout::where('user_id', $user->id)->sum('amount'), 2);
+
+        return response()->json([
+            'earned' => $earned,
+            'paid' => $paid,
+            'owed' => round($earned - $paid, 2),
+            'orders' => Order::where('partner_id', $user->id)
+                ->where('status', Order::STATUS_SHIPPED)
+                ->whereNotNull('partner_revenue')
+                ->count(),
+            'unpriced' => Order::where('partner_id', $user->id)
+                ->where('status', Order::STATUS_SHIPPED)
+                ->whereNull('partner_revenue')
+                ->count(),
+            'payouts' => PartnerPayout::where('user_id', $user->id)
+                ->orderByDesc('id')
+                ->limit(100)
+                ->get(['id', 'amount', 'balance_after', 'method', 'transaction_id', 'period_from', 'period_to', 'note', 'created_at']),
         ]);
     }
 
