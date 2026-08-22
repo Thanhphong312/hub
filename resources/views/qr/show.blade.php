@@ -257,14 +257,21 @@
             <div class="flex justify-between border-t border-neutral-100 pt-1.5"><span class="text-neutral-500">Total</span><span class="font-semibold text-neutral-800">${{ $order->total_cost }}</span></div>
             <div class="flex justify-between"><span class="text-neutral-500">Paid</span><span class="font-medium {{ $order->paid_cost >= $order->total_cost ? 'text-green-600' : 'text-red-500' }}">${{ $order->paid_cost }}</span></div>
             @endunless
-            <div class="flex justify-between text-xs text-neutral-500 pt-1.5 border-t border-neutral-100"><span>Created</span><span>{{ $order->created_at->toDateTimeString() }}</span></div>
+            @php
+                // Stored UTC, shown in the workshop's own timezone — a UTC
+                // stamp here reads hours off from the day the work happened.
+                // Labelled, because the same page is read from two countries.
+                $tz = config('app.display_timezone');
+                $tzLabel = $order->created_at->copy()->setTimezone($tz)->format('T');
+            @endphp
+            <div class="flex justify-between text-xs text-neutral-500 pt-1.5 border-t border-neutral-100"><span>Created</span><span>{{ $order->created_at->copy()->setTimezone($tz)->toDateTimeString() }} <span class="text-neutral-400">{{ $tzLabel }}</span></span></div>
             {{-- Absent until an admin hands the order to a partner. Shown to
                  everyone: it is who prints the job, not a commercial figure. --}}
             @if ($order->partner)
                 <div class="flex justify-between text-xs text-neutral-500"><span>Partner</span><span class="text-purple-700 font-medium">{{ $order->partner->name }}</span></div>
             @endif
             @if ($order->completed_time)
-                <div class="flex justify-between text-xs text-neutral-500"><span>Completed</span><span>{{ $order->completed_time->toDateTimeString() }}</span></div>
+                <div class="flex justify-between text-xs text-neutral-500"><span>Completed</span><span>{{ $order->completed_time->copy()->setTimezone($tz)->toDateTimeString() }} <span class="text-neutral-400">{{ $tzLabel }}</span></span></div>
                 {{-- Null for orders shipped before completed_by existed. --}}
                 @if ($order->completedBy)
                     <div class="flex justify-between text-xs text-neutral-500"><span>Completed by</span><span>{{ $order->completedBy->name }}</span></div>

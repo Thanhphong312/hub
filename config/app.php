@@ -69,6 +69,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Display Timezone
+    |--------------------------------------------------------------------------
+    |
+    | Timestamps are STORED in UTC (see 'timezone' above) and rendered to
+    | humans in this one. The workshop and its customers are on US Central, so
+    | a UTC timestamp on screen reads hours off from the day people worked.
+    |
+    | Server-rendered pages (the /qr sheet) use this. The desktop apps format
+    | with the viewer's own clock instead, which is a different convention on
+    | purpose — those are read by staff in Vietnam.
+    |
+    */
+
+    'display_timezone' => env('APP_DISPLAY_TIMEZONE', 'America/Chicago'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Locale Configuration
     |--------------------------------------------------------------------------
     |
