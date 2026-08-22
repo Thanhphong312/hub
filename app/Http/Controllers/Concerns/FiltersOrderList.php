@@ -40,20 +40,29 @@ trait FiltersOrderList
             $query->where('ship_type', $request->ship_type);
         }
 
+        // Which partner is doing the printing. `none` is a first-class value,
+        // not the absence of the filter — "chưa chia partner" is a question
+        // people ask, and an empty param already means "no filter".
+        if ($request->filled('partner_id')) {
+            $request->partner_id === 'none'
+                ? $query->whereNull('partner_id')
+                : $query->where('partner_id', (int) $request->partner_id);
+        }
+
         if ($request->filled('ref_id')) {
-            $query->where('ref_id', 'like', '%' . $request->ref_id . '%');
+            $query->where('ref_id', 'like', '%'.$request->ref_id.'%');
         }
 
         if ($request->filled('ref_ids')) {
             $list = preg_split('/[\s,]+/', (string) $request->ref_ids, -1, PREG_SPLIT_NO_EMPTY);
             $list = array_values(array_unique(array_map('trim', $list)));
-            if (!empty($list)) {
+            if (! empty($list)) {
                 $query->whereIn('ref_id', $list);
             }
         }
 
         if ($request->has('system_id')) {
-            $query->where('system_id', 'like', '%' . $request->system_id . '%');
+            $query->where('system_id', 'like', '%'.$request->system_id.'%');
         }
 
         // Paste-a-list lookup, same shape as ref_ids above: split on whitespace
@@ -62,13 +71,13 @@ trait FiltersOrderList
         if ($request->filled('system_ids')) {
             $list = preg_split('/[\s,]+/', (string) $request->system_ids, -1, PREG_SPLIT_NO_EMPTY);
             $list = array_values(array_unique(array_map('trim', $list)));
-            if (!empty($list)) {
+            if (! empty($list)) {
                 $query->whereIn('system_id', $list);
             }
         }
 
         if ($request->has('tracking_id')) {
-            $query->where('tracking_id', 'like', '%' . $request->tracking_id . '%');
+            $query->where('tracking_id', 'like', '%'.$request->tracking_id.'%');
         }
 
         if ($request->filled('tracking_status')) {
@@ -116,23 +125,20 @@ trait FiltersOrderList
             $productIds[] = (int) $request->product_id;
         }
         $productIds = array_values(array_unique(array_filter($productIds)));
-        if (!empty($productIds)) {
+        if (! empty($productIds)) {
             $query->whereHas('items.productVariant', fn ($q) => $q->whereIn('product_id', $productIds));
         }
 
         if ($request->filled('product_variant_id')) {
-            $query->whereHas('items', fn ($q) =>
-                $q->where('product_variant_id', (int) $request->product_variant_id));
+            $query->whereHas('items', fn ($q) => $q->where('product_variant_id', (int) $request->product_variant_id));
         }
 
         if ($request->filled('line_id')) {
-            $query->whereHas('items.productVariant.product', fn ($q) =>
-                $q->where('line_id', $request->line_id));
+            $query->whereHas('items.productVariant.product', fn ($q) => $q->where('line_id', $request->line_id));
         }
 
         if ($request->filled('sku')) {
-            $query->whereHas('items.productVariant', fn ($q) =>
-                $q->where('sku', $request->sku));
+            $query->whereHas('items.productVariant', fn ($q) => $q->where('sku', $request->sku));
         }
 
         foreach (['color', 'size', 'paper_type'] as $field) {
@@ -143,8 +149,7 @@ trait FiltersOrderList
         }
 
         if ($request->filled('material_id')) {
-            $query->whereHas('items', fn ($q) =>
-                $q->where('material_id', (int) $request->material_id));
+            $query->whereHas('items', fn ($q) => $q->where('material_id', (int) $request->material_id));
         }
 
         if ($request->filled('accessory_id')) {
@@ -152,7 +157,7 @@ trait FiltersOrderList
             $query->whereHas('items', function ($q) use ($accessoryId) {
                 $q->where(function ($w) use ($accessoryId) {
                     $w->whereHas('accessoryPrice', fn ($ap) => $ap->where('accessory_id', $accessoryId))
-                      ->orWhereHas('accessoryPrices', fn ($ap) => $ap->where('accessory_id', $accessoryId));
+                        ->orWhereHas('accessoryPrices', fn ($ap) => $ap->where('accessory_id', $accessoryId));
                 });
             });
         }
@@ -162,7 +167,7 @@ trait FiltersOrderList
             $query->whereHas('items', function ($q) use ($code) {
                 $q->where(function ($w) use ($code) {
                     $w->whereHas('accessoryPrice', fn ($ap) => $ap->where('accessory_code', $code))
-                      ->orWhereHas('accessoryPrices', fn ($ap) => $ap->where('accessory_code', $code));
+                        ->orWhereHas('accessoryPrices', fn ($ap) => $ap->where('accessory_code', $code));
                 });
             });
         }
@@ -171,13 +176,14 @@ trait FiltersOrderList
     /** @return int[] */
     protected function parseIdList(Request $request, string $key): array
     {
-        if (!$request->filled($key)) {
+        if (! $request->filled($key)) {
             return [];
         }
         $raw = $request->input($key);
         $parts = is_array($raw)
             ? $raw
             : preg_split('/[\s,]+/', (string) $raw, -1, PREG_SPLIT_NO_EMPTY);
+
         return array_values(array_unique(array_filter(array_map('intval', $parts))));
     }
 }
