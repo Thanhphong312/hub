@@ -159,6 +159,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/order-items/{item}/variant-preview', [OrderController::class, 'variantPreview']);
     Route::put('/order-items/{item}/variant', [OrderController::class, 'updateItemVariant']);
     Route::put('/order-items/{item}/order-type', [OrderController::class, 'updateItemOrderType']);
+    // Admin only — quantity drives print_cost, the addition_fee inside
+    // shipping, and the partner's share, on an order that may already be paid.
+    Route::put('/order-items/{item}/quantity', [OrderController::class, 'updateItemQuantity'])
+        ->middleware(CheckRole::class.':admin');
 
     // Server-side proxy for fetching convert_label image bytes — bypasses
     // browser CORS when Electron renderer needs to embed labels into a

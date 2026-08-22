@@ -346,6 +346,7 @@ class OrderController extends Controller
      *     description="Tạo 1 đơn mới. Phải gửi 1 trong 2: `shipping_label` URL HOẶC `address` đầy đủ. Items hỗ trợ multi-accessory qua `accessory_ids[]`.
 
      *     security={{"bearerAuth":{}}},
+     *
      *     @OA\RequestBody(
      *         required=true,
      *
@@ -1573,6 +1574,95 @@ class OrderController extends Controller
                 'message' => 'Variant updated; order totals recomputed',
                 'item_id' => $item->id,
                 'order' => $order->fresh()->load([
+                    'items.metas', 'items.productVariant.product', 'items.material',
+                    'items.accessoryPrice.accessory', 'items.accessoryPrice.tier',
+                    'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address',
+                ]),
+            ]);
+        });
+    }
+
+    /**
+     * Change how many of an item the order is for.
+     *
+     * Quantity is not just a number on the line: it drives print_cost, the
+     * per-extra-item addition_fee inside shipping, and what the partner is paid
+     * — so every one of those is recomputed here rather than left for someone
+     * to remember. The item's own unit `price` is untouched; it is per-unit.
+     *
+     * Admin-only (route middleware): this moves money on an order that may
+     * already be paid.
+     */
+    public function updateItemQuantity(Request $request, OrderItem $item)
+    {
+        $item->loadMissing('order.user');
+        $order = $item->order;
+        if (! $order) {
+            return response()->json(['message' => 'Item has no order'], 404);
+        }
+        if ((int) $order->status === Order::STATUS_CANCELLED) {
+            return response()->json(['message' => 'Đơn đã huỷ — không sửa được số lượng'], 422);
+        }
+
+        $request->validate(['quantity' => 'required|integer|min:1|max:999']);
+
+        $newQty = (int) $request->quantity;
+        $oldQty = max(1, (int) ($item->quantity ?? 1));
+        if ($newQty === $oldQty) {
+            return response()->json(['message' => 'Số lượng không đổi', 'order' => $order], 200);
+        }
+
+        return DB::transaction(function () use ($item, $order, $newQty, $oldQty) {
+            $item->update(['quantity' => $newQty]);
+
+            // Same recomputation as updateItemVariant / updateItemAccessories.
+            $order->load('items.accessoryPrices', 'user');
+            $totalQty = 0;
+            $totalPrint = 0;
+            foreach ($order->items as $it) {
+                $itQty = max(1, (int) ($it->quantity ?? 1));
+                $itAcc = (float) $it->accessoryPrices->sum('price');
+                $totalPrint += ((float) $it->price + $itAcc) * $itQty;
+                $totalQty += $itQty;
+            }
+            $hasLabel = ! empty($order->shipping_label);
+            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+            $shippingCost = $firstVariantId
+                ? $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty)
+                : (float) $order->shipping_cost;
+
+            $updates = [
+                'print_cost' => $totalPrint,
+                'shipping_cost' => $shippingCost,
+                'total_cost' => $totalPrint + $shippingCost,
+            ];
+
+            // The partner's share was priced for the old quantity, so it no
+            // longer describes this order. Cleared so Tính tiền recomputes it —
+            // except once locked, where the amount was already settled.
+            $revenueCleared = false;
+            if ($order->partner_revenue !== null && $order->partner_locked_at === null) {
+                $updates['partner_revenue'] = null;
+                $revenueCleared = true;
+            }
+
+            $order->update($updates);
+            $fresh = $order->fresh();
+
+            // Raising the quantity on a paid order leaves a shortfall; lowering
+            // it leaves the seller in credit. Neither is settled here — moving
+            // wallet money without being asked is worse than reporting it — but
+            // silence would let the gap go unnoticed.
+            $delta = round((float) $fresh->total_cost - (float) $fresh->paid_cost, 2);
+
+            return response()->json([
+                'message' => "Đã đổi số lượng {$oldQty} → {$newQty}"
+                    .($revenueCleared ? ' · đã xoá tiền partner (tính lại ở Partner → Tính tiền)' : '')
+                    .($delta > 0.005 ? ' · seller còn thiếu $'.number_format($delta, 2) : '')
+                    .($delta < -0.005 ? ' · seller đã trả dư $'.number_format(-$delta, 2) : ''),
+                'item_id' => $item->id,
+                'balance_delta' => $delta,
+                'order' => $fresh->load([
                     'items.metas', 'items.productVariant.product', 'items.material',
                     'items.accessoryPrice.accessory', 'items.accessoryPrice.tier',
                     'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address',
