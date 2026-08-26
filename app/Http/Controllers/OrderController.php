@@ -645,6 +645,7 @@ class OrderController extends Controller
     public function update(Request $request, Order $order)
     {
         $request->validate([
+            'ref_id' => 'nullable|string|max:255',
             'note' => 'nullable|string|max:5000',
             'shipping_label' => 'nullable|string',
             'tracking_id' => 'nullable|string',
@@ -685,7 +686,7 @@ class OrderController extends Controller
             return response()->json(['message' => 'Đơn đã shipped — seller không thể huỷ/đổi trạng thái. Liên hệ admin.'], 403);
         }
 
-        $data = $request->only('shipping_label', 'tracking_id', 'shipping_cost', 'print_cost', 'status', 'proof_image');
+        $data = $request->only('ref_id', 'shipping_label', 'tracking_id', 'shipping_cost', 'print_cost', 'status', 'proof_image');
         if ($request->has('note')) {
             $data['note'] = $request->input('note');
         }
