@@ -96,6 +96,10 @@ class OrderController extends Controller
             'tickets as open_tickets_count' => fn ($q) => $q->visibleTo($user)
                 ->whereIn('status', [Ticket::STATUS_OPEN, Ticket::STATUS_NEW_MESSAGE]),
         ]);
+        $query->with(['tickets' => fn ($q) => $q->visibleTo($user)
+            ->select('id', 'order_id', 'subject', 'status')
+            ->latest()
+        ]);
 
         // Seller chỉ thấy đơn của mình
         if ($request->user()->hasRole('seller')) {
