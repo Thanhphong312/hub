@@ -651,7 +651,7 @@ class OrderController extends Controller
             'tracking_id' => 'nullable|string',
             'shipping_cost' => 'nullable|numeric|min:0',
             'print_cost' => 'nullable|numeric|min:0',
-            'status' => 'nullable|integer|in:0,1,2,3,4,5,6,7',
+            'status' => 'nullable|integer|in:0,1,2,3,4,5,6,7,8',
             // Proof photo of the stamp stuck on the envelope — uploaded by the
             // fulfiller and shown to the seller (stamp has no tracking).
             'proof_image' => 'nullable|url|max:1024',
@@ -1923,7 +1923,7 @@ class OrderController extends Controller
 
     public function updateStatus(Request $request, Order $order)
     {
-        $request->validate(['status' => 'required|integer|in:0,1,2,3,4,5,6,7']);
+        $request->validate(['status' => 'required|integer|in:0,1,2,3,4,5,6,7,8']);
 
         $user = $request->user();
         if ($user && $user->hasRole('seller')
@@ -1956,7 +1956,7 @@ class OrderController extends Controller
         $request->validate([
             'order_ids' => 'required|array|min:1',
             'order_ids.*' => 'exists:orders,id',
-            'status' => 'required|integer|in:0,1,2,3,4,5,6,7',
+            'status' => 'required|integer|in:0,1,2,3,4,5,6,7,8',
         ]);
 
         $user = $request->user();

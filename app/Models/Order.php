@@ -105,6 +105,7 @@ class Order extends Model
     const STATUS_ONHOLD = 5;
     const STATUS_SHIPPED = 6;
     const STATUS_CANCELLED = 7;
+    const STATUS_RESEND = 8;
 
     const STATUS_MAP = [
         0 => 'new_order',
@@ -115,6 +116,7 @@ class Order extends Model
         5 => 'onhold',
         6 => 'shipped',
         7 => 'cancelled',
+        8 => 'resend',
     ];
 
     // ------------------------------------------------------------------
