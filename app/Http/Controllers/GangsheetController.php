@@ -497,8 +497,15 @@ class GangsheetController extends Controller
             'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
             'partner:id,name',
         ])
-            ->where('production', false)
-            ->whereNull('gangsheet_group_id')   // not already pulled into an automation group
+            ->where(function ($q) {
+                // Resend orders bypass production/group locks — they must be
+                // re-ganged even if the original order was already produced.
+                $q->where('resend_of_order_id', '!=', null)
+                  ->orWhere(function ($q2) {
+                      $q2->where('production', false)
+                         ->whereNull('gangsheet_group_id');
+                  });
+            })
             ->where('status', '!=', Order::STATUS_SHIPPED)
             ->whereHas('items.metas', fn ($q) => $q->where('key', 'regexp', self::QR_KEY_REGEX)->where('production', false))
             ->orderBy('id', 'asc');
