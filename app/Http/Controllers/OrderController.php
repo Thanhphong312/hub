@@ -3681,7 +3681,7 @@ class OrderController extends Controller
                 'system_id' => $this->generateSystemId(),
                 'ref_id' => $order->ref_id,
                 'note' => $data['note'] ?? ('Resend of '.$order->system_id),
-                'status' => Order::STATUS_NEW_ORDER,
+                'status' => Order::STATUS_RESEND,
                 'ship_type' => $pricing['ship_type'],
                 'shipping_label' => null,
                 'print_cost' => $pricing['base'],
