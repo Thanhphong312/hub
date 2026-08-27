@@ -483,7 +483,7 @@ class GangsheetGroupController extends Controller
             'assign_rules'           => 'sometimes|array',
             'assign_rules.*.user_id' => 'required|integer|exists:users,id',
             'assign_rules.*.statuses'   => 'array',
-            'assign_rules.*.statuses.*' => 'integer|min:0|max:7',
+            'assign_rules.*.statuses.*' => 'integer|min:0|max:8',
             'marks'                => 'sometimes|array',
             'marks.gap'            => 'nullable|integer|min:0|max:1000',
             'marks.arm'            => 'nullable|integer|min:0|max:1000',
