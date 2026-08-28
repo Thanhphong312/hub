@@ -165,6 +165,9 @@ class TrackingChecker
             : null;
 
         $status = $delivered ? 'delivered' : $mapped;
+        if (!$delivered && $mapped === 'exception') {
+            $status = 'in_transit';
+        }
         if (!$delivered && $count >= 3 && in_array($mapped, ['accepted', 'pre_shipment', 'unknown'], true)) {
             $status = 'in_transit';
         }

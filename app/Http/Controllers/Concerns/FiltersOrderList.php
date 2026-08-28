@@ -89,6 +89,18 @@ trait FiltersOrderList
             }
         }
 
+        if ($request->filled('exclude_tracking_status')) {
+            $ex = $request->exclude_tracking_status;
+            if ($ex === 'none') {
+                $query->whereHas('tracking');
+            } else {
+                $query->where(fn ($q) => $q
+                    ->whereDoesntHave('tracking')
+                    ->orWhereHas('tracking', fn ($q2) => $q2->where('status', '!=', $ex))
+                );
+            }
+        }
+
         if ($request->has('date_from')) {
             $query->whereDate('created_at', '>=', $request->date_from);
         }
