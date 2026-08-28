@@ -36,6 +36,10 @@ trait FiltersOrderList
             $query->where('status', $request->status);
         }
 
+        if ($request->filled('exclude_status')) {
+            $query->where('status', '!=', (int) $request->exclude_status);
+        }
+
         if ($request->has('ship_type')) {
             $query->where('ship_type', $request->ship_type);
         }
