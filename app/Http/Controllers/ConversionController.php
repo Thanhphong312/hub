@@ -203,7 +203,7 @@ class ConversionController extends Controller
         // summary stamped on the carrier label) and saves the URL to
         // `orders.convert_label` — the original `shipping_label` is kept
         // intact so the carrier source is never lost.
-        $labelStatuses = [Order::STATUS_NEW_ORDER, Order::STATUS_PROCESSING];
+        $labelStatuses = [Order::STATUS_NEW_ORDER, Order::STATUS_PROCESSING, Order::STATUS_ONHOLD];
         $labelQuery = Order::query()
             // Đơn FPT không đi đường convert label: chúng có nhãn SKU riêng cho
             // từng item, không dùng overlay trên label hãng.
@@ -544,9 +544,9 @@ class ConversionController extends Controller
         // otherwise the auto job composes a label for a producing order then
         // gets rejected here with a 422.
         $force = $isStaff && $request->boolean('force');
-        $allowed = [Order::STATUS_NEW_ORDER, Order::STATUS_PROCESSING];
+        $allowed = [Order::STATUS_NEW_ORDER, Order::STATUS_PROCESSING, Order::STATUS_ONHOLD];
         if (!$force && !in_array($order->status, $allowed, true)) {
-            return response()->json(['message' => 'Order is not in new_order/producing status'], 422);
+            return response()->json(['message' => 'Order is not in new_order/producing/onhold status'], 422);
         }
 
         $request->validate([
