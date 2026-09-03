@@ -6,11 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 
 class PartnerAccessoryPrice extends Model
 {
-    protected $fillable = ['partner_price_list_id', 'accessory_price_id', 'price'];
+    protected $fillable = ['partner_price_list_id', 'accessory_price_id', 'price', 'price_private'];
 
     protected function casts(): array
     {
-        return ['price' => 'decimal:2'];
+        return ['price' => 'decimal:2', 'price_private' => 'decimal:2'];
     }
 
     public function list()

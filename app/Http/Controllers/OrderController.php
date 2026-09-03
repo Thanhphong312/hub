@@ -1925,6 +1925,63 @@ class OrderController extends Controller
         ]);
     }
 
+    /**
+     * Bulk-update shipping_label (and optionally clear convert_label) by ref_id.
+     * Body: rows[]{ref_id, shipping_label}. Staff can update any order;
+     * sellers only their own. Returns updated[] and not_found[].
+     */
+    public function importShippingLabels(Request $request)
+    {
+        $request->validate([
+            'rows'                    => 'required|array|min:1',
+            'rows.*.ref_id'           => 'required|string',
+            'rows.*.shipping_label'   => 'nullable|string',
+        ]);
+
+        $user    = $request->user();
+        $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support'], true);
+
+        $updated  = [];
+        $notFound = [];
+
+        foreach ($request->rows as $row) {
+            $refId = trim($row['ref_id'] ?? '');
+            if ($refId === '') {
+                continue;
+            }
+            $label = isset($row['shipping_label']) ? trim($row['shipping_label']) : null;
+
+            $query = Order::where('ref_id', $refId);
+            if (! $isStaff) {
+                $query->where('user_id', $user->id);
+            }
+
+            $order = $query->first();
+            if (! $order) {
+                $notFound[] = $refId;
+                continue;
+            }
+
+            $order->update([
+                'shipping_label' => $label ?: null,
+                'convert_label'  => null,   // clear so converter cron rebuilds it
+            ]);
+
+            $updated[] = [
+                'id'        => $order->id,
+                'system_id' => $order->system_id,
+                'ref_id'    => $refId,
+            ];
+        }
+
+        return response()->json([
+            'updated'       => $updated,
+            'not_found'     => $notFound,
+            'updated_count' => count($updated),
+            'not_found_count' => count($notFound),
+        ]);
+    }
+
     public function updateStatus(Request $request, Order $order)
     {
         $request->validate(['status' => 'required|integer|in:0,1,2,3,4,5,6,7,8']);

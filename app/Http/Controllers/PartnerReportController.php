@@ -147,6 +147,14 @@ class PartnerReportController extends Controller
                 Carbon::parse($request->date_to, $tz)->endOfDay()->utc());
         }
 
+        if ($request->filled('product_id')) {
+            $query->whereHas('items.productVariant', fn ($q) => $q->where('product_id', (int) $request->product_id));
+        }
+
+        if ($request->filled('system_id')) {
+            $query->where('system_id', 'like', '%'.$request->system_id.'%');
+        }
+
         $orders = $query->orderBy('completed_time')->get();
         $listId = $partner->partner_price_list_id;
 
@@ -302,7 +310,10 @@ class PartnerReportController extends Controller
             'items.productVariant.product:id,name,line_id',
             'items.accessoryPrices.accessory:id,name',
             'items.metas',
+            'user.tier',
         ]);
+
+        $isPrivate = $order->user?->tier?->name === 'Private';
 
         $empty = ['total' => null, 'items' => [], 'order' => []];
 
@@ -311,19 +322,24 @@ class PartnerReportController extends Controller
             return $empty;
         }
 
-        // (variant, key) -> rate. Missing means the card does not pay that key.
+        // (variant, key) -> rate. Pick price_private when seller is on Private tier
+        // and the card has a private rate; fall back to public price otherwise.
         $rates = PartnerVariantPrice::where('partner_price_list_id', $listId)
             ->whereIn('product_variant_id', $variantIds)
             ->get()
             ->groupBy('product_variant_id')
-            ->map(fn ($rows) => $rows->pluck('price', 'key')->map(fn ($p) => (float) $p));
+            ->map(fn ($rows) => $rows->keyBy('key')->map(fn ($r) => (float) (
+                $isPrivate && $r->price_private !== null ? $r->price_private : $r->price
+            )));
         $rate = fn (?int $vid, string $key) => $vid ? ($rates[$vid][$key] ?? null) : null;
 
         $accIds = $order->items->flatMap(fn ($i) => $i->accessoryPrices->pluck('id'))
             ->unique()->values()->all();
         $accRates = empty($accIds) ? collect() : PartnerAccessoryPrice::where('partner_price_list_id', $listId)
             ->whereIn('accessory_price_id', $accIds)
-            ->pluck('price', 'accessory_price_id');
+            ->get()
+            ->keyBy('accessory_price_id')
+            ->map(fn ($r) => (float) ($isPrivate && $r->price_private !== null ? $r->price_private : $r->price));
 
         $hasPrice = false;
         $total = 0.0;

@@ -96,8 +96,13 @@ class PartnerPriceListController extends Controller
                             'tier'  => $r->tier?->name,
                             'price' => (float) $r->price,
                         ])->values(),
-                        'partner_price' => isset($mine[$variantId . '|' . $key])
+                        'partner_price'         => isset($mine[$variantId . '|' . $key])
                             ? (float) $mine[$variantId . '|' . $key]->price
+                            : null,
+                        'partner_price_private' => isset($mine[$variantId . '|' . $key])
+                            ? ($mine[$variantId . '|' . $key]->price_private !== null
+                                ? (float) $mine[$variantId . '|' . $key]->price_private
+                                : null)
                             : null,
                     ])->values(),
                 ];
@@ -112,7 +117,9 @@ class PartnerPriceListController extends Controller
                 'accessory_code'     => $ap->accessory_code,
                 'tier'               => $ap->tier?->name,
                 'seller_price'       => (float) $ap->price,
-                'partner_price'      => isset($myAcc[$ap->id]) ? (float) $myAcc[$ap->id]->price : null,
+                'partner_price'         => isset($myAcc[$ap->id]) ? (float) $myAcc[$ap->id]->price : null,
+                'partner_price_private' => isset($myAcc[$ap->id]) && $myAcc[$ap->id]->price_private !== null
+                    ? (float) $myAcc[$ap->id]->price_private : null,
             ])->values();
 
         return response()->json([
@@ -130,13 +137,15 @@ class PartnerPriceListController extends Controller
     public function savePrices(Request $request, PartnerPriceList $list)
     {
         $data = $request->validate([
-            'variants'                      => 'sometimes|array',
-            'variants.*.product_variant_id' => 'required|integer|exists:product_variants,id',
-            'variants.*.key'                => 'required|string|max:64',
-            'variants.*.price'              => 'nullable|numeric|min:0',
-            'accessories'                      => 'sometimes|array',
-            'accessories.*.accessory_price_id' => 'required|integer|exists:accessory_prices,id',
-            'accessories.*.price'              => 'nullable|numeric|min:0',
+            'variants'                              => 'sometimes|array',
+            'variants.*.product_variant_id'         => 'required|integer|exists:product_variants,id',
+            'variants.*.key'                        => 'required|string|max:64',
+            'variants.*.price'                      => 'nullable|numeric|min:0',
+            'variants.*.price_private'              => 'nullable|numeric|min:0',
+            'accessories'                           => 'sometimes|array',
+            'accessories.*.accessory_price_id'      => 'required|integer|exists:accessory_prices,id',
+            'accessories.*.price'                   => 'nullable|numeric|min:0',
+            'accessories.*.price_private'           => 'nullable|numeric|min:0',
         ]);
 
         DB::transaction(function () use ($data, $list) {
@@ -146,10 +155,19 @@ class PartnerPriceListController extends Controller
                     'product_variant_id'    => $row['product_variant_id'],
                     'key'                   => $row['key'],
                 ];
-                if (($row['price'] ?? null) === null || $row['price'] === '') {
+                $publicPrice   = ($row['price'] ?? null) === null || $row['price'] === '' ? null : $row['price'];
+                $privatePrice  = ($row['price_private'] ?? null) === null || $row['price_private'] === '' ? null : $row['price_private'];
+                if ($publicPrice === null && $privatePrice === null) {
                     PartnerVariantPrice::where($where)->delete();
                 } else {
-                    PartnerVariantPrice::updateOrCreate($where, ['price' => $row['price']]);
+                    PartnerVariantPrice::updateOrCreate($where, array_filter([
+                        'price'         => $publicPrice,
+                        'price_private' => $privatePrice,
+                    ], fn ($v) => $v !== null));
+                    // Explicitly allow setting price_private to null (clear it)
+                    if ($publicPrice !== null && $privatePrice === null) {
+                        PartnerVariantPrice::where($where)->update(['price_private' => null]);
+                    }
                 }
             }
             foreach ($data['accessories'] ?? [] as $row) {
@@ -157,10 +175,18 @@ class PartnerPriceListController extends Controller
                     'partner_price_list_id' => $list->id,
                     'accessory_price_id'    => $row['accessory_price_id'],
                 ];
-                if (($row['price'] ?? null) === null || $row['price'] === '') {
+                $publicPrice  = ($row['price'] ?? null) === null || $row['price'] === '' ? null : $row['price'];
+                $privatePrice = ($row['price_private'] ?? null) === null || $row['price_private'] === '' ? null : $row['price_private'];
+                if ($publicPrice === null && $privatePrice === null) {
                     PartnerAccessoryPrice::where($where)->delete();
                 } else {
-                    PartnerAccessoryPrice::updateOrCreate($where, ['price' => $row['price']]);
+                    PartnerAccessoryPrice::updateOrCreate($where, array_filter([
+                        'price'         => $publicPrice,
+                        'price_private' => $privatePrice,
+                    ], fn ($v) => $v !== null));
+                    if ($publicPrice !== null && $privatePrice === null) {
+                        PartnerAccessoryPrice::where($where)->update(['price_private' => null]);
+                    }
                 }
             }
         });

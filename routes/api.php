@@ -93,6 +93,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders/invoice-data', [OrderController::class, 'invoiceData']);
     Route::post('/orders/import-csv', [OrderController::class, 'importCsv']);
     Route::post('/orders/import-envelopes', [OrderController::class, 'importEnvelopes']);
+    Route::post('/orders/import-shipping-labels', [OrderController::class, 'importShippingLabels']);
     Route::post('/orders/bulk-status', [OrderController::class, 'bulkUpdateStatus']);
     Route::post('/orders/bulk-pay', [OrderController::class, 'bulkPay']);
     Route::get('/orders/unpaid-summary', [OrderController::class, 'unpaidSummary']);
