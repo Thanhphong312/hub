@@ -1936,10 +1936,12 @@ class OrderController extends Controller
             'rows'                    => 'required|array|min:1',
             'rows.*.ref_id'           => 'required|string',
             'rows.*.shipping_label'   => 'nullable|string',
+            'keep_convert_label'      => 'boolean',
         ]);
 
         $user    = $request->user();
         $isStaff = $user->role && in_array($user->role->slug, ['admin', 'support'], true);
+        $keepConvert = $request->boolean('keep_convert_label');
 
         $updated  = [];
         $notFound = [];
@@ -1962,10 +1964,11 @@ class OrderController extends Controller
                 continue;
             }
 
-            $order->update([
-                'shipping_label' => $label ?: null,
-                'convert_label'  => null,   // clear so converter cron rebuilds it
-            ]);
+            $updates = ['shipping_label' => $label ?: null];
+            if (! $keepConvert) {
+                $updates['convert_label'] = null;   // clear so converter cron rebuilds it
+            }
+            $order->update($updates);
 
             $updated[] = [
                 'id'        => $order->id,
