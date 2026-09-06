@@ -127,6 +127,52 @@ class TrackingController extends Controller
     }
 
     /**
+     * Test whether the current ShipEngine API key is accepted by the API.
+     * Calls GET /v1/carriers — lightweight, no side effects, returns 401 for bad keys.
+     */
+    public function testShipengineKey()
+    {
+        $svc = app(\App\Services\ShipEngine\ShipEngineTrackingService::class);
+        if (! $svc->hasKey()) {
+            return response()->json(['ok' => false, 'message' => 'Chưa có API key nào được cấu hình.']);
+        }
+
+        $cfg = \App\Models\AppSetting::getJson('shipengine', []);
+        $cfg = is_array($cfg) ? $cfg : [];
+        $apiKey = (string) (($cfg['api_key'] ?? '') ?: config('shipengine.api_key', ''));
+
+        try {
+            $res = \Illuminate\Support\Facades\Http::withHeaders([
+                'API-Key'      => $apiKey,
+                'Content-Type' => 'application/json',
+            ])->timeout(10)->get('https://api.shipengine.com/v1/carriers');
+
+            if ($res->status() === 401) {
+                return response()->json(['ok' => false, 'message' => 'Key không hợp lệ hoặc hết hạn (401 Unauthorized).']);
+            }
+            if (! $res->successful()) {
+                return response()->json(['ok' => false, 'message' => 'ShipEngine trả về lỗi ' . $res->status() . ': ' . ($res->json('message') ?? $res->body())]);
+            }
+
+            $carriers = collect($res->json('carriers', []))->map(fn ($c) => [
+                'carrier_id'   => $c['carrier_id']   ?? null,
+                'carrier_code' => $c['carrier_code']  ?? null,
+                'friendly_name'=> $c['friendly_name'] ?? null,
+                'balance'      => $c['balance']       ?? null,
+            ])->values()->all();
+
+            return response()->json([
+                'ok'       => true,
+                'message'  => 'Key hợp lệ — ' . count($carriers) . ' carrier(s) khả dụng.',
+                'carriers' => $carriers,
+                'from_app' => !empty($cfg['api_key']),
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json(['ok' => false, 'message' => 'Lỗi kết nối: ' . $e->getMessage()]);
+        }
+    }
+
+    /**
      * Save the ShipEngine API key (and optional carrier) from the desktop app.
      * The raw key is never returned by GET; an empty api_key clears the override
      * so it falls back to the server .env.
