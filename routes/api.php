@@ -231,6 +231,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/check', [TrackingController::class, 'checkSelected']);
         Route::get('/shipengine-key', [TrackingController::class, 'shipengineKey']);
         Route::get('/shipengine-key/test', [TrackingController::class, 'testShipengineKey']);
+        Route::get('/test-check', [TrackingController::class, 'testTrackingCheck']);
         Route::put('/shipengine-key', [TrackingController::class, 'updateShipengineKey']);
     });
 

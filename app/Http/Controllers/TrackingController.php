@@ -127,6 +127,42 @@ class TrackingController extends Controller
     }
 
     /**
+     * End-to-end check: pick 1 real tracking_id from DB, call ShipEngine,
+     * return the raw result so the operator can confirm tracking still works.
+     */
+    public function testTrackingCheck(TrackingChecker $checker)
+    {
+        if (! $checker->hasKey()) {
+            return response()->json(['ok' => false, 'message' => 'Chưa có ShipEngine API key.']);
+        }
+
+        // Pick the most recently shipped order that has a tracking_id.
+        $order = Order::whereNotNull('tracking_id')
+            ->where('tracking_id', '!=', '')
+            ->orderByDesc('id')
+            ->first(['id', 'system_id', 'tracking_id']);
+
+        if (! $order) {
+            return response()->json(['ok' => false, 'message' => 'Không có đơn nào có tracking_id để test.']);
+        }
+
+        $svc = app(\App\Services\ShipEngine\ShipEngineTrackingService::class);
+        $result = $svc->getTrackingInfo($order->tracking_id);
+
+        return response()->json([
+            'ok'             => $result['success'] ?? false,
+            'system_id'      => $order->system_id,
+            'tracking_id'    => $order->tracking_id,
+            'status'         => $result['status'] ?? null,
+            'status_description' => $result['status_description'] ?? null,
+            'error'          => $result['error'] ?? null,
+            'message'        => ($result['success'] ?? false)
+                ? "OK — {$order->system_id} ({$order->tracking_id}): " . ($result['status_description'] ?? $result['status'] ?? '?')
+                : "Lỗi: " . ($result['error'] ?? 'unknown'),
+        ]);
+    }
+
+    /**
      * Test whether the current ShipEngine API key is accepted by the API.
      * Calls GET /v1/carriers — lightweight, no side effects, returns 401 for bad keys.
      */
