@@ -3080,18 +3080,31 @@ class OrderController extends Controller
             'mockup_front', 'mockup_back',
             'accessory_code',
             'shipping_label',
+            'first_name', 'last_name', 'address_1', 'address_2', 'city', 'state', 'zipcode', 'country',
             'meta_front', 'meta_back', 'meta_left', 'meta_right', 'meta_neck', 'meta_special',
         ];
 
         $callback = function () use ($headers) {
             $file = fopen('php://output', 'w');
             fputcsv($file, $headers);
+            // Example 1: TikTok Label order — has shipping_label, no address needed.
             fputcsv($file, [
-                'CUSTOMER-REF-001',
+                'LABEL-REF-001',
                 'SKU-RED-S', '1',
                 'https://drive.google.com/file/d/FRONT_ID/view', 'https://drive.google.com/file/d/BACK_ID/view',
                 '',
                 'https://drive.google.com/file/d/LABEL_ID/view',
+                '', '', '', '', '', '', '', '',
+                'https://drive.google.com/file/d/META_FRONT_ID/view', '', '', '', '', '',
+            ]);
+            // Example 2: Seller Ship order — no shipping_label, address required.
+            fputcsv($file, [
+                'SELLER-REF-002',
+                'SKU-BLUE-M', '1',
+                'https://drive.google.com/file/d/FRONT_ID/view', '',
+                '',
+                '',
+                'John', 'Doe', '123 Main St', 'Apt 4', 'Austin', 'TX', '78701', 'US',
                 'https://drive.google.com/file/d/META_FRONT_ID/view', '', '', '', '', '',
             ]);
             fclose($file);
