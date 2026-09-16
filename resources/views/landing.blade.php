@@ -420,6 +420,10 @@
             BullStart is free during early access and rolling out to the general public. Drop us a
             note and we'll send your onboarding link within one business day.
         </p>
+        <a href="mailto:thanhp0312@gmail.com" class="inline-flex items-center gap-2 px-6 py-3.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-bold text-sm shadow-soft-lg transition">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            thanhp0312@gmail.com
+        </a>
         <p class="text-neutral-500 text-xs mt-6">Team BullStart · United States</p>
     </div>
 </section>
@@ -448,7 +452,7 @@
             <h4 class="text-xs font-bold uppercase tracking-widest text-neutral-500 mb-3">Company</h4>
             <ul class="space-y-1.5 text-neutral-600">
                 <li><a href="#contact" class="hover:text-neutral-900">Contact</a></li>
-                <li><a href="mailto:@gmail.com" class="hover:text-neutral-900">Email us</a></li>
+                <li><a href="mailto:thanhp0312@gmail.com" class="hover:text-neutral-900">Email us</a></li>
                 <li><a href="{{ route('login') }}" class="hover:text-neutral-900">Sign in</a></li>
             </ul>
         </div>
