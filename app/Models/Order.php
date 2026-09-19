@@ -30,6 +30,10 @@ class Order extends Model
     const STAMP_BASE_ITEMS   = 2;      // items covered by the base fee
     const STAMP_MAX_ITEMS    = 4;      // limit before forcing a normal label
 
+    // Flat shipping fee for an order where NO item carries a product (every
+    // item is addon-only). Admin can override via app_settings.addon_only_shipping.
+    const ADDON_ONLY_SHIPPING_FEE = 0.30;
+
     public static function stampConfig(): array
     {
         $c = AppSetting::getJson('stamp_config', []);
@@ -52,6 +56,19 @@ class Order extends Model
         $qty = max(1, $totalQty);
         $extra = max(0, $qty - $c['base_items']);
         return round($c['fee'] + $extra * $c['fee'] + $c['handling_fee'], 2);
+    }
+
+    /**
+     * Shipping fee for an order whose items are all addon-only (no product
+     * chosen on any item — see importCsv/store in OrderController). Flat,
+     * quantity-independent. Admin can override via Settings → app_settings
+     * key "addon_only_shipping" ({"fee": 0.30}).
+     */
+    public static function addonOnlyShippingFee(): float
+    {
+        $c = AppSetting::getJson('addon_only_shipping', []);
+
+        return round((float) ($c['fee'] ?? self::ADDON_ONLY_SHIPPING_FEE), 2);
     }
 
     // convert_label is admin/support-only — hidden by default, controllers call

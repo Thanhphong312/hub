@@ -430,7 +430,10 @@ class OrderController extends Controller
             'source' => 'nullable|string|in:'.implode(',', Order::SOURCES),
             'ship_by_stamp' => 'nullable|boolean',
             'items' => 'required|array|min:1',
-            'items.*.product_variant_id' => 'required|exists:product_variants,id',
+            // Nullable: an item may be addon-only (no product) as long as it
+            // carries at least one accessory — enforced right after validate(),
+            // since the validator can't easily cross-check sibling fields here.
+            'items.*.product_variant_id' => 'nullable|exists:product_variants,id',
             'items.*.material_id' => 'nullable|exists:materials,id',
             // FPT orders carry an uploaded SKU-label URL per item.
             'items.*.sku_label' => 'nullable|string',
@@ -457,6 +460,18 @@ class OrderController extends Controller
             'address.zipcode' => $hasLabel ? 'nullable|string' : 'required|string',
             'address.country' => $hasLabel ? 'nullable|string' : 'required|string',
         ]);
+
+        // An item with no product must still carry something to charge for —
+        // at least one accessory. An item with neither is just empty.
+        foreach ($request->items as $idx => $itemData) {
+            $hasProduct = ! empty($itemData['product_variant_id']);
+            $hasAccessory = ! empty($this->collectAccessoryIds($itemData));
+            if (! $hasProduct && ! $hasAccessory) {
+                return response()->json([
+                    'message' => 'Item #'.($idx + 1).': cần chọn product hoặc ít nhất 1 addon (item không có product phải có addon).',
+                ], 422);
+            }
+        }
 
         // Stamp orders are capped at the configured max — above that the seller
         // must use a normal label. Sum quantities up front so we reject before
@@ -514,7 +529,7 @@ class OrderController extends Controller
         }
 
         return DB::transaction(function () use ($request, $hasLabel, $byStamp, $finalRefId, $imgService, $imgResult) {
-            $firstVariantId = (int) ($request->items[0]['product_variant_id'] ?? 0) ?: null;
+            $firstVariantId = $this->firstVariantIdOf($request->items);
             $order = Order::create([
                 'user_id' => $request->user()->id,
                 'source' => Order::normalizeSource($request->input('source')),
@@ -531,21 +546,22 @@ class OrderController extends Controller
             $userTierId = $request->user()->tier_id;
             $printCost = 0;
             $totalQty = 0;
-            $refVariantId = null;
+            $refVariantId = $firstVariantId;
             foreach ($request->items as $itemData) {
-                $price = $this->computeItemPrice($itemData['metas'] ?? null, $itemData['product_variant_id'], $userTierId);
+                $variantId = ! empty($itemData['product_variant_id']) ? (int) $itemData['product_variant_id'] : null;
+                $price = $this->computeItemPrice($itemData['metas'] ?? null, $variantId, $userTierId);
                 $quantity = max(1, (int) ($itemData['quantity'] ?? 1));
 
                 $item = OrderItem::create([
                     'order_id' => $order->id,
-                    'product_variant_id' => $itemData['product_variant_id'],
-                    'material_id' => $this->resolveMaterialId($itemData['material_id'] ?? null, $itemData['product_variant_id']),
+                    'product_variant_id' => $variantId,
+                    'material_id' => $this->resolveMaterialId($itemData['material_id'] ?? null, $variantId),
                     'accessory_item_id' => null, // set by syncItemAccessories below
                     'mockup_front' => $itemData['mockup_front'] ?? null,
                     'mockup_back' => $itemData['mockup_back'] ?? null,
                     'sku_label' => $itemData['sku_label'] ?? null,
                     'order_type' => $itemData['order_type'] ?? 0,
-                    'order_type_label' => $this->productOrderType((int) $itemData['product_variant_id']),
+                    'order_type_label' => $this->productOrderType($variantId),
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
@@ -553,9 +569,6 @@ class OrderController extends Controller
                 $accessoryUnitPrice = $this->syncItemAccessories($item, $accessoryIds, $userTierId);
                 $printCost += ($price + $accessoryUnitPrice) * $quantity;
                 $totalQty += $quantity;
-                if ($refVariantId === null) {
-                    $refVariantId = $itemData['product_variant_id'];
-                }
 
                 if (! empty($itemData['metas'])) {
                     foreach ($itemData['metas'] as $meta) {
@@ -619,19 +632,17 @@ class OrderController extends Controller
 
         $order->loadMissing('items');
         $totalQty = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
-        $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+        $firstVariantId = $this->firstVariantIdOf($order->items);
         $tierId = $order->user?->tier_id;
         $shipType = $request->ship_type;
 
         if ($shipType === Order::SHIP_STAMP) {
             $shipping = Order::stampShippingCost($totalQty);
         } elseif ($shipType === Order::SHIP_SELLER) {
-            $shipping = $firstVariantId
-                ? $this->computeOrderShipping($firstVariantId, $tierId, false, $totalQty)
-                : 0;
+            $shipping = $this->computeOrderShipping($firstVariantId, $tierId, false, $totalQty);
         } else { // tiktok_ship: label_fee when a label is present, else 0.
             $hasLabel = ! empty($order->shipping_label);
-            $shipping = ($firstVariantId && $hasLabel)
+            $shipping = $hasLabel
                 ? $this->computeOrderShipping($firstVariantId, $tierId, true, $totalQty)
                 : 0;
         }
@@ -710,7 +721,7 @@ class OrderController extends Controller
 
             $order->loadMissing('items');
             $totalQty = $order->items->sum(fn ($i) => max(1, (int) ($i->quantity ?? 1)));
-            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+            $firstVariantId = $this->firstVariantIdOf($order->items);
             $tierId = $order->user?->tier_id;
 
             if ($request->ship_type === Order::SHIP_STAMP) {
@@ -720,15 +731,13 @@ class OrderController extends Controller
             } elseif ($request->ship_type === Order::SHIP_SELLER) {
                 // seller_ship: base + addition × (qty-1). Clear label/tracking
                 // since the seller will buy + attach their own.
-                $data['shipping_cost'] = $firstVariantId
-                    ? $this->computeOrderShipping($firstVariantId, $tierId, false, $totalQty)
-                    : 0;
+                $data['shipping_cost'] = $this->computeOrderShipping($firstVariantId, $tierId, false, $totalQty);
                 $data['shipping_label'] = null;
                 $data['tracking_id'] = null;
             } elseif (! $request->has('shipping_cost')) {
                 // tiktok_ship: charge label_fee if a label is set, else 0.
                 $hasLabel = ! empty($request->shipping_label ?? $order->shipping_label);
-                $data['shipping_cost'] = ($firstVariantId && $hasLabel)
+                $data['shipping_cost'] = $hasLabel
                     ? $this->computeOrderShipping($firstVariantId, $tierId, true, $totalQty)
                     : 0;
             }
@@ -883,10 +892,8 @@ class OrderController extends Controller
                     $totalQty += $qty;
                 }
                 $hasLabel = ! empty($winner->shipping_label);
-                $firstVariantId = (int) ($winner->items->first()?->product_variant_id ?? 0);
-                $shippingCost = $firstVariantId
-                    ? $this->computeOrderShipping($firstVariantId, $winner->user?->tier_id, $hasLabel, $totalQty)
-                    : (float) $winner->shipping_cost;
+                $firstVariantId = $this->firstVariantIdOf($winner->items);
+                $shippingCost = $this->computeOrderShipping($firstVariantId, $winner->user?->tier_id, $hasLabel, $totalQty);
 
                 $winner->update([
                     'print_cost' => $totalPrint,
@@ -1384,14 +1391,12 @@ class OrderController extends Controller
                 $totalPrint += ((float) $it->price + $itAcc) * $itQty;
                 $totalQty += $itQty;
             }
-            // Shipping is set from the order's first variant — same convention
-            // as createOrder/importCsv. Keep current shipping_cost if no
-            // variant exists (shouldn't happen but safe).
+            // Shipping is set from the order's first product-carrying item —
+            // same convention as createOrder/importCsv. Falls back to the flat
+            // addon-only fee when every item is addon-only.
             $hasLabel = ! empty($order->shipping_label);
-            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
-            $shippingCost = $firstVariantId
-                ? $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty)
-                : (float) $order->shipping_cost;
+            $firstVariantId = $this->firstVariantIdOf($order->items);
+            $shippingCost = $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty);
             $order->update([
                 'print_cost' => $totalPrint,
                 'shipping_cost' => $shippingCost,
@@ -1450,13 +1455,14 @@ class OrderController extends Controller
      * GET /api/order-items/{item}/variant-preview?product_variant_id=X
      *
      * Staff/owner. Returns the item price + order totals the order WOULD get if
-     * this item's variant were swapped — without saving. Mirrors
-     * updateItemVariant's recompute so the UI can review the new price first.
+     * this item's variant were swapped, or DROPPED (product_variant_id: null,
+     * item becomes addon-only) — without saving. Mirrors updateItemVariant's
+     * recompute so the UI can review the new price first.
      */
     public function variantPreview(Request $request, OrderItem $item)
     {
         $caller = $request->user();
-        $item->loadMissing('order.user', 'metas');
+        $item->loadMissing('order.user', 'metas', 'accessoryPrices');
         $order = $item->order;
         if (! $order) {
             return response()->json(['message' => 'Item has no order'], 404);
@@ -1466,36 +1472,35 @@ class OrderController extends Controller
         if (! $isStaff && $order->user_id !== $caller?->id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-        $request->validate(['product_variant_id' => 'required|integer|exists:product_variants,id']);
+        $request->validate(['product_variant_id' => 'nullable|integer|exists:product_variants,id']);
 
         $tierId = $order->user?->tier_id;
         if ($tierId === null) {
             return response()->json(['message' => "Order owner has no tier — can't price the variant"], 422);
         }
 
-        $newVariantId = (int) $request->product_variant_id;
+        $newVariantId = $request->filled('product_variant_id') ? (int) $request->product_variant_id : null;
+        if ($newVariantId === null && $item->accessoryPrices->isEmpty()) {
+            return response()->json(['message' => 'Không thể gỡ product: item chưa có addon nào để giữ lại.'], 422);
+        }
         $newItemPrice = $this->computeItemPrice($item->metas, $newVariantId, $tierId);
 
-        // Recompute totals with this item priced at the new variant.
+        // Recompute totals with this item priced (and variant swapped) as above.
         $order->load('items.accessoryPrices');
         $totalQty = 0;
         $totalPrint = 0;
+        $whatIfItems = [];
         foreach ($order->items as $it) {
             $itQty = max(1, (int) ($it->quantity ?? 1));
             $itAcc = (float) $it->accessoryPrices->sum('price');
             $itPrice = $it->id === $item->id ? $newItemPrice : (float) $it->price;
             $totalPrint += ($itPrice + $itAcc) * $itQty;
             $totalQty += $itQty;
+            $whatIfItems[] = ['product_variant_id' => $it->id === $item->id ? $newVariantId : $it->product_variant_id];
         }
         $hasLabel = ! empty($order->shipping_label);
-        // First variant drives shipping; if THIS item is first, use the new one.
-        $firstItem = $order->items->first();
-        $firstVariantId = ($firstItem && $firstItem->id === $item->id)
-            ? $newVariantId
-            : (int) ($firstItem?->product_variant_id ?? 0);
-        $shipping = $firstVariantId
-            ? $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty)
-            : (float) $order->shipping_cost;
+        $firstVariantId = $this->firstVariantIdOf($whatIfItems);
+        $shipping = $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty);
 
         return response()->json([
             'item_price' => round((float) $newItemPrice, 2),
@@ -1509,17 +1514,18 @@ class OrderController extends Controller
 
     /**
      * PUT /api/order-items/{item}/variant — swap the item's product variant for
-     * a different one and re-price. Staff or the order owner; blocked once the
-     * order is shipped/cancelled. Re-prices the item from the new variant
-     * (base_cost + 2nd_fee per its design faces) and recomputes order totals —
+     * a different one and re-price, or DROP its product entirely by sending
+     * product_variant_id: null — the item becomes addon-only and its price
+     * drops to 0 (its accessories still price it). Staff or the order owner;
+     * blocked once the order is shipped/cancelled. Recomputes order totals —
      * same recompute path as updateItemAccessories.
      *
-     * Body: { product_variant_id: int }
+     * Body: { product_variant_id: int|null }
      */
     public function updateItemVariant(Request $request, OrderItem $item)
     {
         $caller = $request->user();
-        $item->loadMissing('order.user', 'metas');
+        $item->loadMissing('order.user', 'metas', 'accessoryPrices');
         $order = $item->order;
         if (! $order) {
             return response()->json(['message' => 'Item has no order'], 404);
@@ -1535,7 +1541,7 @@ class OrderController extends Controller
         }
 
         $request->validate([
-            'product_variant_id' => 'required|integer|exists:product_variants,id',
+            'product_variant_id' => 'nullable|integer|exists:product_variants,id',
         ]);
 
         $ownerTierId = $order->user?->tier_id;
@@ -1543,13 +1549,21 @@ class OrderController extends Controller
             return response()->json(['message' => "Order owner has no tier — can't price the variant"], 422);
         }
 
-        return DB::transaction(function () use ($request, $item, $order, $ownerTierId) {
-            $newVariantId = (int) $request->product_variant_id;
+        $newVariantId = $request->filled('product_variant_id') ? (int) $request->product_variant_id : null;
+        if ($newVariantId === null && $item->accessoryPrices->isEmpty()) {
+            return response()->json(['message' => 'Không thể gỡ product: item chưa có addon nào để giữ lại (item sẽ trống).'], 422);
+        }
+
+        return DB::transaction(function () use ($item, $order, $ownerTierId, $newVariantId) {
             // Re-price the item from the new variant using its existing design
-            // faces (base_cost + 2nd_fee × (faces − 1)).
+            // faces (base_cost + 2nd_fee × (faces − 1)); 0 when dropping the
+            // product — its accessories carry the price instead.
             $newPrice = $this->computeItemPrice($item->metas, $newVariantId, $ownerTierId);
             $item->update([
                 'product_variant_id' => $newVariantId,
+                // Material is a per-product attribute — meaningless once the
+                // product is dropped.
+                'material_id' => $newVariantId ? $item->material_id : null,
                 'order_type_label' => $this->productOrderType($newVariantId),
                 'price' => $newPrice,
             ]);
@@ -1565,10 +1579,8 @@ class OrderController extends Controller
                 $totalQty += $itQty;
             }
             $hasLabel = ! empty($order->shipping_label);
-            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
-            $shippingCost = $firstVariantId
-                ? $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty)
-                : (float) $order->shipping_cost;
+            $firstVariantId = $this->firstVariantIdOf($order->items);
+            $shippingCost = $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty);
             $order->update([
                 'print_cost' => $totalPrint,
                 'shipping_cost' => $shippingCost,
@@ -1631,10 +1643,8 @@ class OrderController extends Controller
                 $totalQty += $itQty;
             }
             $hasLabel = ! empty($order->shipping_label);
-            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
-            $shippingCost = $firstVariantId
-                ? $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty)
-                : (float) $order->shipping_cost;
+            $firstVariantId = $this->firstVariantIdOf($order->items);
+            $shippingCost = $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty);
 
             $updates = [
                 'print_cost' => $totalPrint,
@@ -2689,7 +2699,10 @@ class OrderController extends Controller
 
                 $data = array_combine($header, $row);
 
-                // Resolve variant: prefer sku, fallback to product_variant_id
+                // Resolve variant: prefer sku, fallback to product_variant_id.
+                // Neither is required when the row carries an accessory instead
+                // (addon-only item, no product) — checked once accessory_code /
+                // accessory_item_id are resolved below.
                 $variantId = null;
                 if (! empty($data['sku'])) {
                     $variant = ProductVariant::where('sku', $data['sku'])->first();
@@ -2701,10 +2714,6 @@ class OrderController extends Controller
                     $variantId = $variant->id;
                 } elseif (! empty($data['product_variant_id'])) {
                     $variantId = (int) $data['product_variant_id'];
-                } else {
-                    $errors[] = "Line {$lineNum}: missing sku (or product_variant_id)";
-
-                    continue;
                 }
 
                 $quantity = max(1, (int) ($data['quantity'] ?? 1));
@@ -2767,6 +2776,13 @@ class OrderController extends Controller
                 } // any invalid → skip row entirely
                 $accessoryItemId = $resolvedAccPrices->isNotEmpty() ? $resolvedAccPrices->first()->id : null;
                 $accessoryUnitPrice = (float) $resolvedAccPrices->sum('price');
+
+                // No product AND no accessory — nothing on this line to charge for.
+                if ($variantId === null && $resolvedAccPrices->isEmpty()) {
+                    $errors[] = "Line {$lineNum}: missing sku (or product_variant_id) and no accessory_code (addon-only item needs at least an addon)";
+
+                    continue;
+                }
 
                 if ($existingOrder) {
                     // Row joins an existing order in this batch — append item only.
@@ -2840,7 +2856,7 @@ class OrderController extends Controller
                     'mockup_back' => $data['mockup_back'] ?? null,
                     'sku_label' => $data['sku_label'] ?? null,
                     'order_type' => (int) ($data['order_type'] ?? 0),
-                    'order_type_label' => $this->productOrderType((int) $variantId),
+                    'order_type_label' => $this->productOrderType($variantId),
                     'price' => $price,
                     'quantity' => $quantity,
                 ]);
@@ -2868,7 +2884,7 @@ class OrderController extends Controller
                     $totalPrint += ((float) $it->price + $itAcc) * $itQty;
                     $totalQty += $itQty;
                 }
-                $firstItemVariantId = (int) ($items->first()->product_variant_id ?? $variantId);
+                $firstItemVariantId = $this->firstVariantIdOf($items);
                 if ($order->ship_type === Order::SHIP_STAMP) {
                     $stampMax = Order::stampConfig()['max_items'];
                     if ($totalQty > $stampMax) {
@@ -3743,7 +3759,7 @@ class OrderController extends Controller
         $addressOverride = $request->input('address');
 
         $response = DB::transaction(function () use ($order, $owner, $data, $pricing, $addressOverride) {
-            $firstVariantId = (int) ($order->items->first()->product_variant_id ?? 0) ?: null;
+            $firstVariantId = $this->firstVariantIdOf($order->items);
             $resend = Order::create([
                 'user_id' => $owner->id,
                 'source' => $order->source,   // a resend stays in its channel
@@ -3979,8 +3995,15 @@ class OrderController extends Controller
      * Used by store(), importCsv() and fulfillByApiKey() so all three create
      * paths price 2-sided items identically.
      */
-    private function computeItemPrice(?iterable $metas, int $variantId, ?int $tierId): float
+    private function computeItemPrice(?iterable $metas, ?int $variantId, ?int $tierId): float
     {
+        // Addon-only item (no product chosen) — nothing to print, so no
+        // base_cost/2nd_fee. Its price comes entirely from its accessories,
+        // added by the caller via syncItemAccessories().
+        if (! $variantId) {
+            return 0.0;
+        }
+
         $price = $this->getVariantPriceByKey($variantId, $tierId, 'base_cost');
 
         $designKeys = ['front', 'back', 'left', 'right', 'neck', 'special'];
@@ -4050,8 +4073,9 @@ class OrderController extends Controller
      */
     private function computeOrderShipping(?int $refVariantId, ?int $tierId, bool $hasLabel, int $totalQty): float
     {
+        // No item in the order carries a product — addon-only order, flat fee.
         if (! $refVariantId) {
-            return 0;
+            return Order::addonOnlyShippingFee();
         }
         if ($hasLabel) {
             return $this->getVariantPriceByKey($refVariantId, $tierId, 'label_fee');
@@ -4060,6 +4084,26 @@ class OrderController extends Controller
         $addition = $this->getVariantPriceByKey($refVariantId, $tierId, 'addition_fee');
 
         return $base + max(0, $totalQty - 1) * $addition;
+    }
+
+    /**
+     * The "representative" variant used to price an order's shipping
+     * (computeOrderShipping) — the first item that actually carries a
+     * product, skipping any addon-only items ahead of it. Returns null when
+     * every item is addon-only, which computeOrderShipping treats as a flat
+     * addon-only shipping fee. Accepts either an OrderItem Eloquent
+     * collection or the raw `items` array from a create request.
+     */
+    private function firstVariantIdOf(iterable $items): ?int
+    {
+        foreach ($items as $it) {
+            $vid = is_array($it) ? ($it['product_variant_id'] ?? null) : ($it->product_variant_id ?? null);
+            if (! empty($vid)) {
+                return (int) $vid;
+            }
+        }
+
+        return null;
     }
 
     private function getVariantPriceByKey(int $variantId, ?int $tierId, string $key): float
@@ -4124,10 +4168,8 @@ class OrderController extends Controller
         }
 
         $hasLabel = ! empty($order->shipping_label);
-        $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
-        $newShipping = $firstVariantId
-            ? round((float) $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty), 2)
-            : round((float) $order->shipping_cost, 2);
+        $firstVariantId = $this->firstVariantIdOf($order->items);
+        $newShipping = round((float) $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty), 2);
 
         $print = round((float) $order->print_cost, 2);
         $newTotal = round($print + $newShipping, 2);
