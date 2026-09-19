@@ -4183,8 +4183,13 @@ class OrderController extends Controller
             ? $accessoryPrices
             : collect($accessoryPrices);
 
-        if (! $productVariantId && $accessoryPrices->isNotEmpty()
-            && $accessoryPrices->every(fn ($ap) => $ap->chipKindOfSelf() === 'holo')) {
+        // Zero-price accessories (e.g. a bundled default chip placeholder)
+        // don't count as "another addon" for the holo-only check below —
+        // only accessories that actually add cost matter.
+        $priced = $accessoryPrices->filter(fn ($ap) => (float) $ap->price > 0);
+
+        if (! $productVariantId && $priced->isNotEmpty()
+            && $priced->every(fn ($ap) => $ap->chipKindOfSelf() === 'holo')) {
             return AccessoryPrice::addonOnlyHoloPrice();
         }
 
