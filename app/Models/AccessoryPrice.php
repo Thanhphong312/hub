@@ -8,6 +8,19 @@ class AccessoryPrice extends Model
 {
     protected $fillable = ['accessory_id', 'tier_id', 'style', 'accessory_code', 'price', 'partner_price', 'stock', 'purchase_url', 'image_des'];
 
+    // Standalone price for holo when it's the ONLY accessory on an
+    // addon-only item (no product) — differs from the normal per-tier
+    // accessory_prices.price, which prices holo bundled with a product.
+    // Admin can override via app_settings.addon_only_holo_price.
+    const ADDON_ONLY_HOLO_PRICE = 0.59;
+
+    public static function addonOnlyHoloPrice(): float
+    {
+        $c = AppSetting::getJson('addon_only_holo_price', []);
+
+        return round((float) ($c['fee'] ?? self::ADDON_ONLY_HOLO_PRICE), 2);
+    }
+
     protected function casts(): array
     {
         return ['price' => 'decimal:2'];

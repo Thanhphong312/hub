@@ -323,7 +323,7 @@ class OrderController extends Controller
                 $ids = $orderedValid->pluck('id')->all();
                 $item->accessoryPrices()->sync($ids);
                 $item->update(['accessory_item_id' => $ids[0]]);
-                $total = (float) $orderedValid->sum('price');
+                $total = $this->accessoryUnitPriceFor($item->product_variant_id, $orderedValid);
             }
         }
 
@@ -887,7 +887,7 @@ class OrderController extends Controller
                 $totalPrint = 0;
                 foreach ($winner->items as $it) {
                     $qty = max(1, (int) ($it->quantity ?? 1));
-                    $acc = (float) $it->accessoryPrices->sum('price');
+                    $acc = $this->accessoryUnitPriceFor($it->product_variant_id, $it->accessoryPrices);
                     $totalPrint += ((float) $it->price + $acc) * $qty;
                     $totalQty += $qty;
                 }
@@ -977,22 +977,18 @@ class OrderController extends Controller
             $totalPrint = 0.0;
             foreach ($order->items as $it) {
                 $qty = max(1, (int) ($it->quantity ?? 1));
-                $acc = (float) $it->accessoryPrices->sum('price');
+                $acc = $this->accessoryUnitPriceFor($it->product_variant_id, $it->accessoryPrices);
                 $totalPrint += ((float) $it->price + $acc) * $qty;
                 $totalQty   += $qty;
             }
             $totalPrint = round($totalPrint, 2);
 
             $hasLabel       = ! empty($order->shipping_label);
-            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+            $firstVariantId = $this->firstVariantIdOf($order->items);
 
-            if ($order->ship_type === Order::SHIP_STAMP) {
-                $shippingCost = Order::stampShippingCost($totalQty);
-            } elseif ($firstVariantId) {
-                $shippingCost = $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty);
-            } else {
-                $shippingCost = (float) $order->shipping_cost;
-            }
+            $shippingCost = $order->ship_type === Order::SHIP_STAMP
+                ? Order::stampShippingCost($totalQty)
+                : $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty);
             $shippingCost = round($shippingCost, 2);
 
             $order->update([
@@ -1472,7 +1468,7 @@ class OrderController extends Controller
             $totalPrint = 0;
             foreach ($order->items as $it) {
                 $itQty = max(1, (int) ($it->quantity ?? 1));
-                $itAcc = (float) $it->accessoryPrices->sum('price');
+                $itAcc = $this->accessoryUnitPriceFor($it->product_variant_id, $it->accessoryPrices);
                 $totalPrint += ((float) $it->price + $itAcc) * $itQty;
                 $totalQty += $itQty;
             }
@@ -1577,11 +1573,12 @@ class OrderController extends Controller
         $whatIfItems = [];
         foreach ($order->items as $it) {
             $itQty = max(1, (int) ($it->quantity ?? 1));
-            $itAcc = (float) $it->accessoryPrices->sum('price');
+            $whatIfVariantId = $it->id === $item->id ? $newVariantId : $it->product_variant_id;
+            $itAcc = $this->accessoryUnitPriceFor($whatIfVariantId, $it->accessoryPrices);
             $itPrice = $it->id === $item->id ? $newItemPrice : (float) $it->price;
             $totalPrint += ($itPrice + $itAcc) * $itQty;
             $totalQty += $itQty;
-            $whatIfItems[] = ['product_variant_id' => $it->id === $item->id ? $newVariantId : $it->product_variant_id];
+            $whatIfItems[] = ['product_variant_id' => $whatIfVariantId];
         }
         $hasLabel = ! empty($order->shipping_label);
         $firstVariantId = $this->firstVariantIdOf($whatIfItems);
@@ -1659,7 +1656,7 @@ class OrderController extends Controller
             $totalPrint = 0;
             foreach ($order->items as $it) {
                 $itQty = max(1, (int) ($it->quantity ?? 1));
-                $itAcc = (float) $it->accessoryPrices->sum('price');
+                $itAcc = $this->accessoryUnitPriceFor($it->product_variant_id, $it->accessoryPrices);
                 $totalPrint += ((float) $it->price + $itAcc) * $itQty;
                 $totalQty += $itQty;
             }
@@ -1723,7 +1720,7 @@ class OrderController extends Controller
             $totalPrint = 0;
             foreach ($order->items as $it) {
                 $itQty = max(1, (int) ($it->quantity ?? 1));
-                $itAcc = (float) $it->accessoryPrices->sum('price');
+                $itAcc = $this->accessoryUnitPriceFor($it->product_variant_id, $it->accessoryPrices);
                 $totalPrint += ((float) $it->price + $itAcc) * $itQty;
                 $totalQty += $itQty;
             }
@@ -2860,7 +2857,7 @@ class OrderController extends Controller
                     continue;
                 } // any invalid → skip row entirely
                 $accessoryItemId = $resolvedAccPrices->isNotEmpty() ? $resolvedAccPrices->first()->id : null;
-                $accessoryUnitPrice = (float) $resolvedAccPrices->sum('price');
+                $accessoryUnitPrice = $this->accessoryUnitPriceFor($variantId, $resolvedAccPrices);
 
                 // No product AND no accessory — nothing on this line to charge for.
                 if ($variantId === null && $resolvedAccPrices->isEmpty()) {
@@ -2965,7 +2962,7 @@ class OrderController extends Controller
                 $totalPrint = 0;
                 foreach ($items as $it) {
                     $itQty = max(1, (int) ($it->quantity ?? 1));
-                    $itAcc = (float) $it->accessoryPrices->sum('price');
+                    $itAcc = $this->accessoryUnitPriceFor($it->product_variant_id, $it->accessoryPrices);
                     $totalPrint += ((float) $it->price + $itAcc) * $itQty;
                     $totalQty += $itQty;
                 }
@@ -4169,6 +4166,29 @@ class OrderController extends Controller
         $addition = $this->getVariantPriceByKey($refVariantId, $tierId, 'addition_fee');
 
         return $base + max(0, $totalQty - 1) * $addition;
+    }
+
+    /**
+     * The per-unit accessory total for an item. An addon-only item (no
+     * product) whose accessories are ALL holo gets holo's standalone price
+     * (AccessoryPrice::addonOnlyHoloPrice()) instead of the normal per-tier
+     * accessory_prices.price — holo priced alone (no product to absorb the
+     * cost) differs from holo priced alongside a product. Anything else
+     * (has a product, or mixes non-holo accessories) sums the actual tier
+     * prices as before.
+     */
+    private function accessoryUnitPriceFor(?int $productVariantId, $accessoryPrices): float
+    {
+        $accessoryPrices = $accessoryPrices instanceof \Illuminate\Support\Collection
+            ? $accessoryPrices
+            : collect($accessoryPrices);
+
+        if (! $productVariantId && $accessoryPrices->isNotEmpty()
+            && $accessoryPrices->every(fn ($ap) => $ap->chipKindOfSelf() === 'holo')) {
+            return AccessoryPrice::addonOnlyHoloPrice();
+        }
+
+        return (float) $accessoryPrices->sum('price');
     }
 
     /**
