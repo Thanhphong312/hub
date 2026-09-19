@@ -926,6 +926,91 @@ class OrderController extends Controller
         ]);
     }
 
+    /**
+     * POST /api/orders/{order}/absorb
+     *
+     * Gộp một đơn khác (source) vào đơn hiện tại (target = {order}):
+     * - Move toàn bộ OrderItems từ source sang target.
+     * - Move wallet_transactions của source sang target để lịch sử thanh toán
+     *   không mất.
+     * - paid_cost của target += paid_cost của source.
+     * - Source order + address bị xoá.
+     * - print_cost, shipping_cost, total_cost của target được tính lại.
+     *
+     * Body: { source_order_id: int }
+     * Chỉ admin/support (middleware đã enforce).
+     */
+    public function absorbOrder(Request $request, Order $order)
+    {
+        $request->validate([
+            'source_order_id' => 'required|string',
+        ]);
+
+        $raw = trim($request->source_order_id);
+        // Accept both numeric DB id and string system_id (e.g. "GC123", "BS-XXXX").
+        $source = is_numeric($raw)
+            ? Order::with('items.accessoryPrices')->find((int) $raw)
+            : Order::with('items.accessoryPrices')->where('system_id', $raw)->first();
+
+        if (! $source) {
+            return response()->json(['message' => "Không tìm thấy đơn \"{$raw}\""], 404);
+        }
+        if ($source->id === $order->id) {
+            return response()->json(['message' => 'Không thể gộp đơn với chính nó'], 422);
+        }
+
+        return DB::transaction(function () use ($order, $source) {
+            $movedCount = OrderItem::where('order_id', $source->id)
+                ->update(['order_id' => $order->id]);
+
+            WalletTransaction::where('order_id', $source->id)
+                ->update(['order_id' => $order->id]);
+
+            $order->increment('paid_cost', (float) $source->paid_cost);
+
+            Address::where('order_id', $source->id)->delete();
+            $source->delete();
+
+            // Tính lại totals của target từ tất cả items (cũ + mới chuyển sang).
+            $order->load('items.accessoryPrices', 'user');
+            $totalQty   = 0;
+            $totalPrint = 0.0;
+            foreach ($order->items as $it) {
+                $qty = max(1, (int) ($it->quantity ?? 1));
+                $acc = (float) $it->accessoryPrices->sum('price');
+                $totalPrint += ((float) $it->price + $acc) * $qty;
+                $totalQty   += $qty;
+            }
+            $totalPrint = round($totalPrint, 2);
+
+            $hasLabel       = ! empty($order->shipping_label);
+            $firstVariantId = (int) ($order->items->first()?->product_variant_id ?? 0);
+
+            if ($order->ship_type === Order::SHIP_STAMP) {
+                $shippingCost = Order::stampShippingCost($totalQty);
+            } elseif ($firstVariantId) {
+                $shippingCost = $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty);
+            } else {
+                $shippingCost = (float) $order->shipping_cost;
+            }
+            $shippingCost = round($shippingCost, 2);
+
+            $order->update([
+                'print_cost'    => $totalPrint,
+                'shipping_cost' => $shippingCost,
+                'total_cost'    => $totalPrint + $shippingCost,
+            ]);
+
+            return response()->json([
+                'message'        => "Đã gộp đơn #{$source->system_id} vào đây ({$movedCount} item(s) chuyển sang). Giá đơn đã được tính lại.",
+                'moved_items'    => $movedCount,
+                'print_cost'     => $totalPrint,
+                'shipping_cost'  => $shippingCost,
+                'total_cost'     => $totalPrint + $shippingCost,
+            ]);
+        });
+    }
+
     public function bulkAssign(Request $request)
     {
         $user = $request->user();
