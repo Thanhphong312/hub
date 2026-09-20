@@ -235,6 +235,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/shipengine-key/test', [TrackingController::class, 'testShipengineKey']);
         Route::get('/test-check', [TrackingController::class, 'testTrackingCheck']);
         Route::put('/shipengine-key', [TrackingController::class, 'updateShipengineKey']);
+        // labelscan (label.laviglobal.us) — backs CarrierTrackingService, used
+        // by /orders/{order}/fetch-tracking (fetch-label-to-tracking flow).
+        Route::get('/labelscan-key', [TrackingController::class, 'labelscanKey']);
+        Route::put('/labelscan-key', [TrackingController::class, 'updateLabelscanKey']);
+        Route::get('/labelscan-key/test', [TrackingController::class, 'testLabelscanKey']);
     });
 
     // Reprints (user-scoped) + reasons. Reason writes are admin-only; reading

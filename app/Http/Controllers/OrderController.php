@@ -1225,6 +1225,7 @@ class OrderController extends Controller
             return response()->json([
                 'message' => 'Tracking saved',
                 'tracking_id' => $tracking,
+                'carrier' => $result['carrier'] ?? null,
                 'order_id' => $order->id,
                 'system_id' => $order->system_id,
             ]);

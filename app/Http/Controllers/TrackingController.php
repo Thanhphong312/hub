@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use App\Models\AppSetting;
 use App\Models\Order;
 use App\Models\OrderTracking;
+use App\Services\CarrierTrackingService;
 use App\Services\ShipEngine\TrackingChecker;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 
 /**
  * Admin config + manual control for the ShipEngine delivery-tracking cron
@@ -236,5 +238,80 @@ class TrackingController extends Controller
             'has_key'  => !empty($cfg['api_key']) || !empty(config('shipengine.api_key')),
             'from_app' => !empty($cfg['api_key']),
         ]);
+    }
+
+    /**
+     * labelscan (label.laviglobal.us) — used by CarrierTrackingService to pull
+     * a tracking number off a shipping_label. Never returns the password;
+     * only whether it's configured, so the desktop app can show status without
+     * the secret round-tripping into the renderer.
+     */
+    public function labelscanKey()
+    {
+        $cfg = AppSetting::getJson('labelscan', []);
+        $cfg = is_array($cfg) ? $cfg : [];
+
+        return response()->json([
+            'has_key'  => !empty($cfg['username']) && !empty($cfg['password']),
+            'base_url' => $cfg['base_url'] ?? '',
+            'username' => $cfg['username'] ?? '',
+        ]);
+    }
+
+    public function updateLabelscanKey(Request $request)
+    {
+        $data = $request->validate([
+            'base_url' => 'nullable|string|max:255',
+            'username' => 'nullable|string|max:255',
+            'password' => 'nullable|string|max:255',
+        ]);
+
+        $cfg = AppSetting::getJson('labelscan', []);
+        $cfg = is_array($cfg) ? $cfg : [];
+
+        if ($request->filled('base_url')) {
+            $cfg['base_url'] = rtrim(trim($data['base_url']), '/');
+        }
+        if ($request->filled('username')) {
+            $cfg['username'] = trim($data['username']);
+        }
+        if ($request->has('password')) {
+            // Empty string clears it (same "blank = clear" convention as
+            // updateShipengineKey's api_key); a real value replaces it.
+            $cfg['password'] = trim((string) ($data['password'] ?? ''));
+        }
+        AppSetting::setJson('labelscan', $cfg);
+
+        return response()->json([
+            'ok'       => true,
+            'has_key'  => !empty($cfg['username']) && !empty($cfg['password']),
+            'base_url' => $cfg['base_url'] ?? '',
+            'username' => $cfg['username'] ?? '',
+        ]);
+    }
+
+    /** Ping labelscan's /health with the configured credentials. */
+    public function testLabelscanKey(CarrierTrackingService $carrier)
+    {
+        $cfg = $carrier->config();
+        if (! $carrier->hasCredentials()) {
+            return response()->json(['ok' => false, 'message' => 'Chưa cấu hình base_url/username/password.']);
+        }
+
+        try {
+            $res = Http::withBasicAuth($cfg['username'], $cfg['password'])
+                ->timeout(10)->get("{$cfg['base_url']}/health");
+
+            if ($res->status() === 401) {
+                return response()->json(['ok' => false, 'message' => 'Sai username/password (401).']);
+            }
+            if (! $res->successful()) {
+                return response()->json(['ok' => false, 'message' => 'Labelscan trả về lỗi ' . $res->status() . ': ' . $res->body()]);
+            }
+
+            return response()->json(['ok' => true, 'message' => 'Kết nối OK.', 'body' => $res->json()]);
+        } catch (\Throwable $e) {
+            return response()->json(['ok' => false, 'message' => $e->getMessage()]);
+        }
     }
 }
