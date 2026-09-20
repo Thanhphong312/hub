@@ -246,19 +246,18 @@ class TrackingController extends Controller
      * only whether it's configured, so the desktop app can show status without
      * the secret round-tripping into the renderer.
      */
-    public function labelscanKey()
+    public function labelscanKey(CarrierTrackingService $carrier)
     {
-        $cfg = AppSetting::getJson('labelscan', []);
-        $cfg = is_array($cfg) ? $cfg : [];
+        $cfg = $carrier->config();
 
         return response()->json([
-            'has_key'  => !empty($cfg['username']) && !empty($cfg['password']),
-            'base_url' => $cfg['base_url'] ?? '',
-            'username' => $cfg['username'] ?? '',
+            'has_key'  => $carrier->hasCredentials(),
+            'base_url' => $cfg['base_url'],
+            'username' => $cfg['username'],
         ]);
     }
 
-    public function updateLabelscanKey(Request $request)
+    public function updateLabelscanKey(Request $request, CarrierTrackingService $carrier)
     {
         $data = $request->validate([
             'base_url' => 'nullable|string|max:255',
@@ -282,11 +281,15 @@ class TrackingController extends Controller
         }
         AppSetting::setJson('labelscan', $cfg);
 
+        // Re-read through the service so the response reflects the default
+        // base_url fallback, not just whatever was literally stored.
+        $effective = $carrier->config();
+
         return response()->json([
             'ok'       => true,
-            'has_key'  => !empty($cfg['username']) && !empty($cfg['password']),
-            'base_url' => $cfg['base_url'] ?? '',
-            'username' => $cfg['username'] ?? '',
+            'has_key'  => $carrier->hasCredentials(),
+            'base_url' => $effective['base_url'],
+            'username' => $effective['username'],
         ]);
     }
 

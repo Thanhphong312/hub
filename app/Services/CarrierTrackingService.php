@@ -19,6 +19,12 @@ use Illuminate\Support\Facades\Http;
  */
 class CarrierTrackingService
 {
+    // There's only one labelscan deployment; default it so saving just
+    // username/password (the base_url field is easy to leave blank behind
+    // its own placeholder text) doesn't silently leave the service
+    // unconfigured.
+    private const DEFAULT_BASE_URL = 'https://label.laviglobal.us';
+
     public function hasCredentials(): bool
     {
         $cfg = $this->config();
@@ -33,7 +39,7 @@ class CarrierTrackingService
         $cfg = is_array($cfg) ? $cfg : [];
 
         return [
-            'base_url' => rtrim((string) ($cfg['base_url'] ?? ''), '/'),
+            'base_url' => rtrim((string) ($cfg['base_url'] ?? '') ?: self::DEFAULT_BASE_URL, '/'),
             'username' => (string) ($cfg['username'] ?? ''),
             'password' => (string) ($cfg['password'] ?? ''),
         ];
