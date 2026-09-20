@@ -1236,6 +1236,80 @@ class OrderController extends Controller
         }
     }
 
+    /**
+     * POST /api/orders/fetch-tracking-batch — same job as fetchTrackingOne but
+     * for up to 20 orders in ONE labelscan call (POST /scan/batch), so the
+     * desktop queue can process several orders per network round-trip instead
+     * of one. A per-order failure never fails the batch — each order gets its
+     * own row in `results`.
+     *
+     * Body: { order_ids: int[] }
+     */
+    public function fetchTrackingBatch(Request $request)
+    {
+        $user = $request->user();
+        if (! $user || ! in_array($user->role?->slug, ['admin', 'support'])) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $request->validate([
+            'order_ids' => 'required|array|min:1|max:20',
+            'order_ids.*' => 'integer',
+        ]);
+
+        $orders = Order::whereIn('id', $request->order_ids)
+            ->get(['id', 'system_id', 'shipping_label', 'tracking_id'])
+            ->keyBy('id');
+
+        $results = [];
+        $toFetch = [];
+        foreach ($request->order_ids as $id) {
+            $order = $orders->get($id);
+            if (! $order) {
+                $results[$id] = ['order_id' => $id, 'ok' => false, 'message' => 'Order not found'];
+            } elseif ($order->tracking_id) {
+                $results[$id] = ['order_id' => $id, 'system_id' => $order->system_id, 'ok' => true, 'tracking_id' => $order->tracking_id, 'message' => 'Already has tracking'];
+            } elseif (empty($order->shipping_label)) {
+                $results[$id] = ['order_id' => $id, 'system_id' => $order->system_id, 'ok' => false, 'message' => 'No shipping_label'];
+            } else {
+                $toFetch[$id] = $order;
+            }
+        }
+
+        if ($toFetch) {
+            try {
+                $scanned = app(CarrierTrackingService::class)->fetchBatch(
+                    array_map(fn ($o) => $o->shipping_label, $toFetch)
+                );
+            } catch (\Throwable $e) {
+                // Whole batch call failed (config/network) — every order in
+                // this chunk fails with the same reason.
+                foreach ($toFetch as $id => $order) {
+                    $results[$id] = ['order_id' => $id, 'system_id' => $order->system_id, 'ok' => false, 'message' => $e->getMessage()];
+                }
+                $scanned = [];
+            }
+
+            $i = 0;
+            foreach ($toFetch as $id => $order) {
+                $r = $scanned[$i++] ?? null;
+                if (! $r) {
+                    continue;
+                } // already filled by the catch above
+                if (empty($r['tracking_id'])) {
+                    $results[$id] = ['order_id' => $id, 'system_id' => $order->system_id, 'ok' => false, 'message' => $r['error'] ?? 'No tracking in response'];
+
+                    continue;
+                }
+                $order->update(['tracking_id' => $r['tracking_id']]);
+                $results[$id] = ['order_id' => $id, 'system_id' => $order->system_id, 'ok' => true, 'tracking_id' => $r['tracking_id'], 'carrier' => $r['carrier'] ?? null];
+            }
+        }
+
+        // Preserve the caller's original order_ids order in the response.
+        return response()->json(['results' => array_values(array_map(fn ($id) => $results[$id], $request->order_ids))]);
+    }
+
     public function runDuplicateRefresh(Request $request)
     {
         $user = $request->user();

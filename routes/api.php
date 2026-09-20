@@ -134,6 +134,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-merge-duplicates', [OrderController::class, 'bulkMergeDuplicates']);
     Route::post('/orders/refresh-duplicates', [OrderController::class, 'runDuplicateRefresh']);
     Route::get('/orders/pending-tracking', [OrderController::class, 'pendingTracking']);
+    // Must stay above any /orders/{order}/... route below — a literal
+    // segment here, not an order id.
+    Route::post('/orders/fetch-tracking-batch', [OrderController::class, 'fetchTrackingBatch']);
     Route::get('/orders/pending-labels', [OrderController::class, 'pendingLabels']);
     Route::get('/orders/resend-quota', [OrderController::class, 'resendQuota']);
     // Image-URL validation status (server-side; replaces client localStorage).
