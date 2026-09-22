@@ -178,6 +178,10 @@ class PartnerReportController extends Controller
                     'quantity' => (int) $i->quantity,
                 ])->values(),
                 'qty' => (int) $o->items->sum('quantity'),
+                // What the seller is actually charged for this order — shown
+                // alongside the partner amount so the margin between the two
+                // is visible without opening the order itself.
+                'order_total' => round((float) $o->total_cost, 2),
                 'current' => $current,
                 'computed' => $computed,
                 'locked' => $o->partner_locked_at !== null,
@@ -209,6 +213,7 @@ class PartnerReportController extends Controller
             'totals' => [
                 'orders' => $rows->count(),
                 'qty' => (int) $rows->sum('qty'),
+                'order_total' => round((float) $rows->sum('order_total'), 2),
                 'current' => round((float) $rows->sum(fn ($r) => $r['current'] ?? 0), 2),
                 'computed' => round((float) $rows->sum(fn ($r) => $r['computed'] ?? $r['current'] ?? 0), 2),
                 'locked' => $rows->where('locked', true)->count(),
