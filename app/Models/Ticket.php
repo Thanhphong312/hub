@@ -12,6 +12,7 @@ class Ticket extends Model
         'created_by',
         'subject',
         'content',
+        'attachments',
         'platform',
         'status',
         'solved_by',
@@ -21,9 +22,10 @@ class Ticket extends Model
     protected function casts(): array
     {
         return [
-            'platform'  => 'integer',
-            'status'    => 'integer',
-            'solved_at' => 'datetime',
+            'platform'    => 'integer',
+            'status'      => 'integer',
+            'solved_at'   => 'datetime',
+            'attachments' => 'array',
         ];
     }
 

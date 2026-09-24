@@ -90,8 +90,8 @@ class TicketController extends Controller
         $data = $request->validate([
             'order_id' => 'required|integer|exists:orders,id',
             'subject'  => 'required|string|max:255',
-            'content'  => 'required|string|max:20000',
             'platform' => 'nullable|integer|in:' . implode(',', Ticket::PLATFORMS),
+            ...$this->messageRules(),
         ]);
 
         $platform = Ticket::platformFor($user) ?? $data['platform'] ?? null;
@@ -111,8 +111,9 @@ class TicketController extends Controller
             'order_id'   => $data['order_id'],
             'created_by' => $user->id,
             'subject'    => $data['subject'],
-            'content'    => $data['content'],
-            'platform'   => $platform,
+            'content'     => $data['content'] ?? '',
+            'attachments' => $data['attachments'] ?? null,
+            'platform'    => $platform,
             'status'     => Ticket::STATUS_OPEN,
         ]);
 
@@ -135,13 +136,14 @@ class TicketController extends Controller
         $user = $request->user();
         $this->authorizeRead($user, $ticket);
 
-        $data = $request->validate(['content' => 'required|string|max:20000']);
+        $data = $request->validate($this->messageRules());
 
         $item = DB::transaction(function () use ($ticket, $user, $data) {
             $item = TicketItem::create([
                 'ticket_id' => $ticket->id,
                 'send_by'   => $user->id,
-                'content'   => $data['content'],
+                'content'     => $data['content'] ?? '',
+                'attachments' => $data['attachments'] ?? null,
             ]);
             $ticket->update([
                 'status'    => Ticket::STATUS_NEW_MESSAGE,
@@ -180,6 +182,28 @@ class TicketController extends Controller
             'message' => $solved ? 'Ticket solved' : 'Ticket re-opened',
             'ticket'  => $ticket->fresh()->load('solver:id,name'),
         ]);
+    }
+
+    /**
+     * Text and/or attachments — a message may be just a photo. Attachments are
+     * files already uploaded via POST /uploads/file, so only B2 URLs are
+     * accepted: a thread must not become a place to post arbitrary links.
+     */
+    private function messageRules(): array
+    {
+        $url = ['required', 'string', 'max:2048'];
+        $b2 = rtrim((string) config('filesystems.disks.b2.url'), '/');
+        if ($b2 !== '') {
+            $url[] = 'starts_with:' . $b2 . '/';
+        }
+
+        return [
+            'content'            => 'nullable|required_without:attachments|string|max:20000',
+            'attachments'        => 'nullable|array|max:10',
+            'attachments.*.url'  => $url,
+            'attachments.*.type' => 'required|in:image,video',
+            'attachments.*.name' => 'nullable|string|max:255',
+        ];
     }
 
     /** 404 rather than 403 for threads the user may not read — their existence is not public. */

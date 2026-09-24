@@ -6,7 +6,12 @@ use Illuminate\Database\Eloquent\Model;
 
 class TicketItem extends Model
 {
-    protected $fillable = ['ticket_id', 'send_by', 'content'];
+    protected $fillable = ['ticket_id', 'send_by', 'content', 'attachments'];
+
+    protected function casts(): array
+    {
+        return ['attachments' => 'array'];
+    }
 
     public function ticket()
     {
