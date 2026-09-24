@@ -713,6 +713,28 @@ class GangsheetController extends Controller
         ]);
     }
 
+    /**
+     * Clear every gang of one channel created more than N days ago (default 7).
+     * Same delete as bulkDestroy — orders/metas keep production=true.
+     */
+    public function clearOld(Request $request)
+    {
+        $data = $request->validate([
+            'days' => 'nullable|integer|min:1|max:365',
+            'source' => 'nullable|string',
+        ]);
+        $days = (int) ($data['days'] ?? 7);
+
+        $deleted = Gangsheet::where('source', Order::normalizeSource($data['source'] ?? null))
+            ->where('created_at', '<', now()->subDays($days))
+            ->delete();
+
+        return response()->json([
+            'message' => "Deleted {$deleted} gangsheet(s) older than {$days} day(s)",
+            'count' => $deleted,
+        ]);
+    }
+
     private function decodeIds($input): array
     {
         if (is_array($input)) {
