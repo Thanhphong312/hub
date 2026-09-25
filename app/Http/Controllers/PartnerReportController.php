@@ -68,13 +68,22 @@ class PartnerReportController extends Controller
                 $inWindow = (clone $shipped)
                     ->whereNotNull('completed_time')
                     ->whereBetween('completed_time', [$startUtc, $endUtc])
+                    ->with('tracking:id,order_id,status,delivered_at')
                     ->get(['id', 'completed_time', 'partner_revenue', 'partner_locked_at']);
+
+                // Delivered = the carrier says so (OrderTracking::isDelivered).
+                // Everything else shipped is still on its way — including
+                // orders whose tracking has not been checked yet.
+                $isDelivered = fn ($o) => (bool) $o->tracking?->isDelivered();
+                $deliveredWindow = $inWindow->filter($isDelivered)->count();
 
                 $daily = $inWindow
                     ->groupBy(fn ($o) => Carbon::parse($o->completed_time)->setTimezone($tz)->toDateString())
                     ->map(fn ($rows, $date) => [
                         'date' => $date,
                         'count' => $rows->count(),
+                        'delivered' => $rows->filter($isDelivered)->count(),
+                        'in_transit' => $rows->reject($isDelivered)->count(),
                         'revenue' => round((float) $rows->sum('partner_revenue'), 2),
                     ])
                     ->values()
@@ -89,6 +98,9 @@ class PartnerReportController extends Controller
                     'shipped_total' => (clone $shipped)->count(),
                     'shipped_today' => (clone $shipped)->where('completed_time', '>=', $todayStartUtc)->count(),
                     'shipped_window' => $inWindow->count(),
+                    // Of the window's shipped orders: carrier-delivered vs still in transit.
+                    'delivered_window' => $deliveredWindow,
+                    'in_transit_window' => $inWindow->count() - $deliveredWindow,
                     // Shipped but with no completed_time, so absent from `daily`.
                     'undated' => (clone $shipped)->whereNull('completed_time')->count(),
                     'revenue_total' => $earned,
