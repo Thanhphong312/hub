@@ -162,6 +162,28 @@ class TicketController extends Controller
     }
 
     /**
+     * Delete one reply. The sender may take back their own message; staff
+     * (admin/support) may remove anyone's. The opening message is the ticket
+     * itself and is not deletable here. Thread status is left alone — removing
+     * a message is moderation, not a new event in the conversation.
+     */
+    public function destroyItem(Request $request, Ticket $ticket, TicketItem $item)
+    {
+        $user = $request->user();
+        $this->authorizeRead($user, $ticket);
+        abort_unless((int) $item->ticket_id === (int) $ticket->id, 404, 'Message not found');
+
+        $isStaff = $user->hasRole('admin') || $user->hasRole('support');
+        if (!$isStaff && (int) $item->send_by !== (int) $user->id) {
+            return response()->json(['message' => 'Chỉ xoá được tin của chính mình'], 403);
+        }
+
+        $item->delete();
+
+        return response()->json(['message' => 'Message deleted']);
+    }
+
+    /**
      * Mark solved / re-open. Anyone who can read the thread can close it — the
      * person who raised it is usually the one who knows it is done — and
      * re-opening is the undo, so a mis-click costs nothing.

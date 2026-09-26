@@ -184,6 +184,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/tickets/{ticket}', [\App\Http\Controllers\TicketController::class, 'show']);
     Route::post('/tickets/{ticket}/reply', [\App\Http\Controllers\TicketController::class, 'reply']);
     Route::post('/tickets/{ticket}/solve', [\App\Http\Controllers\TicketController::class, 'solve']);
+    Route::delete('/tickets/{ticket}/items/{item}', [\App\Http\Controllers\TicketController::class, 'destroyItem']);
 
     // Products (read for all)
     Route::get('/products', [ProductController::class, 'index']);
