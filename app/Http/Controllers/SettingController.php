@@ -291,6 +291,9 @@ class SettingController extends Controller
         // Pass Sleeve: same card as the skin, band on the RIGHT, and ganged 6
         // distinct designs to a sheet with no duplicate copy underneath.
         ['key' => 'sleeve',  'label' => 'Pass Sleeve (band bên phải, gang 6 cái/trang)'],
+        // Sticker Sheet: 11×17 canvas, design scaled to 8×11 flush top-centre,
+        // barcode in the blank area below; ganged one 11×17 page per _qr.
+        ['key' => 'sticker_sheet', 'label' => 'Sticker Sheet (canvas 11×17, design 8×11 sát trên, barcode bên dưới)'],
     ];
 
     /** Resolve the convert layout for an order_type label (default when unset). */
