@@ -205,6 +205,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(CheckRole::class . ':admin')->group(function () {
         Route::post('/products', [ProductController::class, 'store']);
         Route::post('/products/{product}/duplicate', [ProductController::class, 'duplicate']);
+        Route::post('/products/{product}/copy-tier-prices', [ProductController::class, 'copyTierPrices']);
         Route::put('/products/{product}', [ProductController::class, 'update']);
         Route::delete('/products/{product}', [ProductController::class, 'destroy']);
         Route::post('/products/{product}/variants', [ProductController::class, 'storeVariant']);
