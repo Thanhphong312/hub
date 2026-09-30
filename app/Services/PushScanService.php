@@ -22,22 +22,26 @@ class PushScanService
      * Push one order. Returns ['ok' => bool, 'message' => string, 'fee' => float, 'charged' => float].
      * Idempotent: an order already in push_trackings is reported and left alone.
      */
-    public function push(Order $order): array
+    public function push(Order $order, bool $free = false): array
     {
-        if (in_array((int) $order->status, [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED], true)) {
-            return ['ok' => false, 'message' => "#{$order->system_id}: đơn đã shipped/cancelled", 'fee' => 0, 'charged' => 0];
+        // Shipped orders can still be pushed (re-run their tracking); only
+        // cancelled orders are dead.
+        if ((int) $order->status === Order::STATUS_CANCELLED) {
+            return ['ok' => false, 'message' => "#{$order->system_id}: đơn đã cancelled", 'fee' => 0, 'charged' => 0];
         }
         if ($order->ship_type === Order::SHIP_STAMP) {
             return ['ok' => false, 'message' => "#{$order->system_id}: đơn stamp không có tracking", 'fee' => 0, 'charged' => 0];
         }
 
-        return DB::transaction(function () use ($order) {
+        return DB::transaction(function () use ($order, $free) {
             $order = Order::whereKey($order->id)->lockForUpdate()->first();
             if (PushTracking::where('order_id', $order->id)->exists()) {
                 return ['ok' => false, 'message' => "#{$order->system_id}: đã push scan rồi", 'fee' => 0, 'charged' => 0];
             }
 
-            $fee = PushTracking::price();
+            // Staff can push free of charge: the order is queued with fee 0 and
+            // neither total_cost nor the wallet moves.
+            $fee = $free ? 0.0 : PushTracking::price();
             $total = round((float) $order->total_cost, 2);
             $paid = round((float) $order->paid_cost, 2);
             $isPaid = $paid > 0 && $paid >= $total;
@@ -79,9 +83,11 @@ class PushScanService
 
             return [
                 'ok' => true,
-                'message' => $charged > 0
-                    ? "#{$order->system_id}: push scan, surcharge \${$fee} trừ vào ví"
-                    : "#{$order->system_id}: push scan, +\${$fee} vào total",
+                'message' => $free
+                    ? "#{$order->system_id}: push scan (free)"
+                    : ($charged > 0
+                        ? "#{$order->system_id}: push scan, surcharge \${$fee} trừ vào ví"
+                        : "#{$order->system_id}: push scan, +\${$fee} vào total"),
                 'fee' => $fee,
                 'charged' => $charged,
             ];

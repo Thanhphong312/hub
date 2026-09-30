@@ -2267,7 +2267,8 @@ class OrderController extends Controller
      */
     /**
      * POST /api/orders/push-scan — queue orders for a same-day tracking scan.
-     * Body: { order_ids: int[] }. Each order gets the Settings → Push Scan
+     * Body: { order_ids: int[], free?: bool }. `free` (admin/support only)
+     * queues the orders with fee 0. Otherwise each order gets the Settings → Push Scan
      * price: added to total_cost when unpaid, debited from the owner's wallet
      * as a surcharge when already paid (see PushScanService). Sellers can only
      * push their own orders.
@@ -2277,9 +2278,16 @@ class OrderController extends Controller
         $request->validate([
             'order_ids' => 'required|array|min:1',
             'order_ids.*' => 'integer|exists:orders,id',
+            'free' => 'nullable|boolean',
         ]);
 
         $caller = $request->user();
+        // free = push without charging (fee 0) — staff only.
+        $free = $request->boolean('free');
+        if ($free && ! ($caller->hasRole('admin') || $caller->hasRole('support'))) {
+            return response()->json(['message' => 'Chỉ admin/support được push scan free'], 403);
+        }
+
         $query = Order::whereIn('id', $request->order_ids);
         if ($caller->hasRole('seller')) {
             $query->where('user_id', $caller->id);
@@ -2288,7 +2296,7 @@ class OrderController extends Controller
         $service = app(PushScanService::class);
         $results = [];
         foreach ($query->get() as $order) {
-            $results[] = ['order_id' => $order->id] + $service->push($order);
+            $results[] = ['order_id' => $order->id] + $service->push($order, $free);
         }
         $ok = collect($results)->where('ok', true);
 
