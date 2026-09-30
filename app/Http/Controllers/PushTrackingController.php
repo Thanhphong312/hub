@@ -25,6 +25,8 @@ class PushTrackingController extends Controller
         $query = PushTracking::with([
             'order:id,user_id,system_id,ref_id,status,ship_type,shipping_label,tracking_id,paid_cost,total_cost,push_scan_fee',
             'order.user:id,name,email',
+            // Delivery tracking state, shown next to the tracking number.
+            'order.tracking:id,order_id,status,status_description,last_event_at,delivered_at,checked_at',
             'mergedLabel:id,label_url,status',
         ])->orderByDesc('id');
 
