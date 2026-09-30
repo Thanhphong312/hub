@@ -104,6 +104,35 @@ class PushTrackingController extends Controller
     }
 
     /**
+     * POST /api/push-scan/merged-labels/{mergedLabel}/cancel — undo a merge:
+     * its merged rows go back to pending (merged_id cleared) so they can be
+     * merged again. Rows the tracking cron already marked run stay put; the
+     * merged label is deleted once nothing points at it any more.
+     */
+    public function cancelMergedLabel(MergedLabel $mergedLabel)
+    {
+        return DB::transaction(function () use ($mergedLabel) {
+            $reverted = PushTracking::where('merged_id', $mergedLabel->id)
+                ->where('status', PushTracking::STATUS_MERGED)
+                ->lockForUpdate()
+                ->update(['status' => PushTracking::STATUS_PENDING, 'merged_id' => null]);
+
+            $remaining = PushTracking::where('merged_id', $mergedLabel->id)->count();
+            if ($remaining === 0) {
+                $mergedLabel->delete();
+            }
+
+            return response()->json([
+                'message' => "Đã huỷ scan: {$reverted} đơn về pending"
+                    .($remaining > 0 ? " · {$remaining} đơn đã run nên giữ lại trong merged label #{$mergedLabel->id}" : " · đã xoá merged label #{$mergedLabel->id}"),
+                'reverted' => $reverted,
+                'remaining' => $remaining,
+                'deleted' => $remaining === 0,
+            ]);
+        });
+    }
+
+    /**
      * GET /api/push-scan/{pushTracking}/shipping-label-blob — proxy the order's
      * shipping_label bytes (PDF or image) so the desktop renderer can merge
      * them without B2/Drive CORS issues.
