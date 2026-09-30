@@ -21,6 +21,8 @@ class WalletController extends Controller
      * @authenticated
      * @queryParam type string `deposit`, `paid`, `refund`. Example: paid
      * @queryParam user_id int (admin only) Filter theo owner.
+     * @queryParam search string system_id / ref_id, gần đúng.
+     * @queryParam search_list string Nhiều system_id / ref_id (xuống dòng hoặc dấu phẩy), khớp chính xác.
      * @queryParam date_from string YYYY-MM-DD.
      * @queryParam date_to string YYYY-MM-DD.
      * @queryParam page int
@@ -43,18 +45,7 @@ class WalletController extends Controller
             $query->where('type', $request->type);
         }
 
-        // Search by order ref_id (on the related order) or system_id (snapshot
-        // column survives order deletion, so match it directly too).
-        if ($request->filled('search')) {
-            $term = trim($request->search);
-            $query->where(function ($q) use ($term) {
-                $q->where('order_system_id', 'like', "%{$term}%")
-                  ->orWhereHas('order', function ($oq) use ($term) {
-                      $oq->where('ref_id', 'like', "%{$term}%")
-                         ->orWhere('system_id', 'like', "%{$term}%");
-                  });
-            });
-        }
+        $this->applySearch($query, $request);
 
         if ($request->has('date_from')) {
             $query->whereDate('created_at', '>=', $request->date_from);
@@ -93,16 +84,7 @@ class WalletController extends Controller
         if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
-        if ($request->filled('search')) {
-            $term = trim($request->search);
-            $query->where(function ($q) use ($term) {
-                $q->where('order_system_id', 'like', "%{$term}%")
-                  ->orWhereHas('order', function ($oq) use ($term) {
-                      $oq->where('ref_id', 'like', "%{$term}%")
-                         ->orWhere('system_id', 'like', "%{$term}%");
-                  });
-            });
-        }
+        $this->applySearch($query, $request);
         if ($request->filled('date_from')) {
             $query->whereDate('created_at', '>=', $request->date_from);
         }
@@ -530,5 +512,39 @@ class WalletController extends Controller
                 ->where('status', WalletTransaction::STATUS_PENDING)
                 ->sum('amount'),
         ]);
+    }
+
+    /**
+     * Shared search filters for transactions() and exportTransactions():
+     *   search      — one term, partial match on order system_id / ref_id.
+     *   search_list — many ids (newline / comma separated), EXACT match on
+     *                 system_id or ref_id; paste a batch to see their rows.
+     * system_id is matched on the snapshot column too, which survives order
+     * deletion.
+     */
+    private function applySearch($query, Request $request): void
+    {
+        if ($request->filled('search')) {
+            $term = trim($request->search);
+            $query->where(function ($q) use ($term) {
+                $q->where('order_system_id', 'like', "%{$term}%")
+                  ->orWhereHas('order', function ($oq) use ($term) {
+                      $oq->where('ref_id', 'like', "%{$term}%")
+                         ->orWhere('system_id', 'like', "%{$term}%");
+                  });
+            });
+        }
+
+        if ($request->filled('search_list')) {
+            $ids = array_values(array_unique(array_filter(
+                preg_split('/[\s,]+/', (string) $request->search_list)
+            )));
+            if (! empty($ids)) {
+                $query->where(function ($q) use ($ids) {
+                    $q->whereIn('order_system_id', $ids)
+                      ->orWhereHas('order', fn ($oq) => $oq->whereIn('system_id', $ids)->orWhereIn('ref_id', $ids));
+                });
+            }
+        }
     }
 }
