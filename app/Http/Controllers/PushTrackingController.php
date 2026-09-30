@@ -115,17 +115,45 @@ class PushTrackingController extends Controller
             return response()->json(['message' => 'Order has no shipping_label'], 404);
         }
 
+        // Drive share links (/file/d/<id>/view) serve the HTML viewer, not the
+        // file — fetch the direct-download endpoint instead.
+        $driveId = app(\App\Services\ImageValidationService::class)->driveId($url);
+        $fetchUrl = $driveId ? "https://drive.google.com/uc?export=download&id={$driveId}" : $url;
+
         try {
-            $res = Http::timeout(20)->get($url);
+            $res = Http::timeout(20)->get($fetchUrl);
             if (! $res->ok()) {
                 return response()->json(['message' => "Upstream returned HTTP {$res->status()}"], 502);
             }
+            $body = $res->body();
+            $type = $res->header('Content-Type') ?: '';
 
-            return response($res->body(), 200, [
-                'Content-Type' => $res->header('Content-Type') ?: 'application/octet-stream',
+            // Drive answers big files with a "can't scan for viruses" page —
+            // follow its confirm token once.
+            if ($driveId && $this->isHtml($body, $type) && preg_match('/confirm=([0-9A-Za-z_-]+)/', $body, $m)) {
+                $res = Http::timeout(20)->get("https://drive.google.com/uc?export=download&confirm={$m[1]}&id={$driveId}");
+                if ($res->ok()) {
+                    $body = $res->body();
+                    $type = $res->header('Content-Type') ?: '';
+                }
+            }
+
+            // Still a web page (private file, deleted, login wall…) — say so
+            // instead of handing HTML to the PDF builder.
+            if ($this->isHtml($body, $type)) {
+                return response()->json(['message' => 'shipping_label is not a file (link returns a web page — check sharing permission)'], 502);
+            }
+
+            return response($body, 200, [
+                'Content-Type' => $type ?: 'application/octet-stream',
             ]);
         } catch (\Throwable $e) {
             return response()->json(['message' => $e->getMessage()], 502);
         }
+    }
+
+    private function isHtml(string $body, string $contentType): bool
+    {
+        return str_contains($contentType, 'text/html') || str_starts_with(ltrim(substr($body, 0, 64)), '<');
     }
 }
