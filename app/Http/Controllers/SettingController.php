@@ -352,7 +352,26 @@ class SettingController extends Controller
     }
 
     // ----------------------------------------------------------------------
-    // Resend config — shipping methods + prices, reason cases (+ which gets the
+    // Push scan price — charged per order the seller pushes for a same-day
+    // tracking scan. GET readable by any auth user (Orders confirm dialog +
+    // OrderCreate preview); PUT admin only.
+    // ----------------------------------------------------------------------
+    public function getPushScanConfig()
+    {
+        return response()->json(\App\Models\PushTracking::config());
+    }
+
+    public function updatePushScanConfig(Request $request)
+    {
+        $data = $request->validate([
+            'price' => 'required|numeric|min:0|max:100',
+        ]);
+        AppSetting::setJson(\App\Models\PushTracking::SETTINGS_KEY, ['price' => round((float) $data['price'], 2)]);
+        return response()->json(\App\Models\PushTracking::config());
+    }
+
+    // ----------------------------------------------------------------------
+    // Resend config —shipping methods + prices, reason cases (+ which gets the
     // base-cost support), and the monthly free-resend quota. Admin-editable.
     // ----------------------------------------------------------------------
     public function getResendConfig()

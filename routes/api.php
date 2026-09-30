@@ -79,6 +79,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/settings/order-types', [SettingController::class, 'getOrderTypes']);
     // Convert layouts — order_type → convert flow (composeImage reads it).
     Route::get('/settings/convert-layouts', [SettingController::class, 'getConvertLayouts']);
+    // Push scan price — readable by any auth user (Orders confirm + OrderCreate).
+    Route::get('/settings/push-scan-config', [SettingController::class, 'getPushScanConfig']);
 
     // Generic B2 upload proxy for browser SPAs (web-bullstart). Desktop apps
     // upload directly via the Electron main process and skip this.
@@ -96,6 +98,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/import-shipping-labels', [OrderController::class, 'importShippingLabels']);
     Route::post('/orders/bulk-status', [OrderController::class, 'bulkUpdateStatus']);
     Route::post('/orders/bulk-pay', [OrderController::class, 'bulkPay']);
+    Route::post('/orders/push-scan', [OrderController::class, 'pushScan']);
     Route::get('/orders/unpaid-summary', [OrderController::class, 'unpaidSummary']);
     Route::post('/orders/pay-all-unpaid', [OrderController::class, 'payAllUnpaid']);
     // Shipping-only recalc on explicitly selected orders (fix a mis-priced
@@ -283,6 +286,16 @@ Route::middleware('auth:sanctum')->group(function () {
     // label, meta values). Any authenticated user — including sellers — gets
     // the per-day folder so they can upload directly from the desktop app.
     Route::get('/gangsheets/storage-credentials', [GangsheetController::class, 'storageCredentials']);
+
+    // Push scan page (admin/support only) — bundle pushed orders' shipping
+    // labels into merged labels. Sellers push via POST /orders/push-scan.
+    Route::middleware(CheckRole::class . ':admin,support')->prefix('push-scan')->group(function () {
+        Route::get('/', [\App\Http\Controllers\PushTrackingController::class, 'index']);
+        Route::post('/merge', [\App\Http\Controllers\PushTrackingController::class, 'merge']);
+        Route::get('/merged-labels', [\App\Http\Controllers\PushTrackingController::class, 'mergedLabels']);
+        Route::put('/merged-labels/{mergedLabel}/status', [\App\Http\Controllers\PushTrackingController::class, 'updateMergedLabelStatus']);
+        Route::get('/{pushTracking}/shipping-label-blob', [\App\Http\Controllers\PushTrackingController::class, 'shippingLabelBlob']);
+    });
 
     // Gangsheet (admin/support only)
     Route::middleware(CheckRole::class . ':admin,support')->group(function () {
@@ -474,6 +487,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/vnpay-merchant', [SettingController::class, 'updateVnpayMerchant']);
         Route::put('/stamp-config', [SettingController::class, 'updateStampConfig']);
         Route::put('/resend-config', [SettingController::class, 'updateResendConfig']);
+        Route::put('/push-scan-config', [SettingController::class, 'updatePushScanConfig']);
 
         Route::get('/qr-config', [SettingController::class, 'getQrConfig']);
         Route::put('/qr-config', [SettingController::class, 'updateQrConfig']);

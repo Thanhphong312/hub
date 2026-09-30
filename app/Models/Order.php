@@ -9,7 +9,7 @@ class Order extends Model
     protected $fillable = [
         'user_id', 'source', 'system_id', 'ref_id', 'note', 'status', 'ship_type', 'shipping_label',
         'shipping_label_converted', 'convert_label', 'proof_image',
-        'tracking_id', 'print_cost', 'shipping_cost', 'total_cost',
+        'tracking_id', 'print_cost', 'shipping_cost', 'push_scan_fee', 'total_cost',
         'paid_cost', 'completed_time', 'completed_by', 'production', 'stock_decremented',
         'gangsheet_group_id', 'qr_bg_status', 'qr_bg_checked_at',
         'resend_of_order_id', 'resend_method', 'resend_reason', 'base_support',
@@ -253,6 +253,12 @@ class Order extends Model
     public function tracking()
     {
         return $this->hasOne(OrderTracking::class);
+    }
+
+    // Push-scan request (1:1). Null when the seller never pushed this order.
+    public function pushTracking()
+    {
+        return $this->hasOne(PushTracking::class);
     }
 
     public function address()

@@ -18,6 +18,7 @@ use App\Models\User;
 use App\Models\WalletTransaction;
 use App\Services\CarrierTrackingService;
 use App\Services\ImageValidationService;
+use App\Services\PushScanService;
 use App\Services\ShippoService;
 use App\Services\TelegramService;
 use Illuminate\Http\Request;
@@ -78,7 +79,7 @@ class OrderController extends Controller
 
         // `partner` is the partner-role user the order was handed to (nullable),
         // so the list can name them instead of just carrying a partner_id.
-        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user', 'partner:id,name']));
+        $query = Order::with(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user', 'partner:id,name', 'pushTracking']));
 
         // Delivery tracking state (skip the heavy `raw` JSON column).
         $query->with(['tracking' => fn ($q) => $q->select(
@@ -206,7 +207,7 @@ class OrderController extends Controller
             ? ['items.metas' => fn ($q) => $q->where('key', 'not regexp', '_qr(_[0-9]+)?$')]
             : ['items.metas'];
 
-        $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user']));
+        $order->load(array_merge($metasRel, ['items.productVariant.product', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address', 'user', 'pushTracking']));
         if ($hideQr) {
             $order->makeHidden('production');
         } else {
@@ -429,6 +430,7 @@ class OrderController extends Controller
             'note' => 'nullable|string|max:5000',
             'source' => 'nullable|string|in:'.implode(',', Order::SOURCES),
             'ship_by_stamp' => 'nullable|boolean',
+            'push_scan' => 'nullable|boolean',
             'items' => 'required|array|min:1',
             // Nullable: an item may be addon-only (no product) as long as it
             // carries at least one accessory — enforced right after validate(),
@@ -599,6 +601,12 @@ class OrderController extends Controller
             // pass without re-fetching so the Order page shows checked=true.
             $imgService->recordPass($order, $imgResult['image_count']);
 
+            // PUSH SCAN ticked on the form → queue it now; the fee lands on
+            // total_cost (order is unpaid, charged on pay).
+            if ($request->boolean('push_scan')) {
+                app(PushScanService::class)->push($order->fresh());
+            }
+
             // Best-effort Telegram notification — never blocks order creation.
             try {
                 app(TelegramService::class)->notifyNewOrder($order, $request->user());
@@ -652,7 +660,7 @@ class OrderController extends Controller
             'ship_type' => $shipType,
             'shipping_cost' => $shipping,
             'print_cost' => round((float) $order->print_cost, 2),
-            'total_cost' => round((float) $order->print_cost + $shipping, 2),
+            'total_cost' => round((float) $order->print_cost + $shipping + (float) $order->push_scan_fee, 2),
             'clears_label' => in_array($shipType, [Order::SHIP_STAMP, Order::SHIP_SELLER], true),
         ]);
     }
@@ -747,7 +755,7 @@ class OrderController extends Controller
         if (array_key_exists('shipping_cost', $data) || array_key_exists('print_cost', $data)) {
             $printCost = $data['print_cost'] ?? $order->print_cost;
             $shippingCost = $data['shipping_cost'] ?? $order->shipping_cost;
-            $data['total_cost'] = round((float) $printCost + (float) $shippingCost, 2);
+            $data['total_cost'] = round((float) $printCost + (float) $shippingCost + (float) $order->push_scan_fee, 2);
         }
 
         if (isset($data['status']) && $data['status'] == Order::STATUS_SHIPPED) {
@@ -898,7 +906,7 @@ class OrderController extends Controller
                 $winner->update([
                     'print_cost' => $totalPrint,
                     'shipping_cost' => $shippingCost,
-                    'total_cost' => $totalPrint + $shippingCost,
+                    'total_cost' => $totalPrint + $shippingCost + (float) $winner->push_scan_fee,
                     'paid_cost' => $totalPaid,
                 ]);
 
@@ -910,7 +918,7 @@ class OrderController extends Controller
                     'merged_count' => $losers->count(),
                     'loser_ids' => $loserIds,
                     'item_count' => $winner->items->count(),
-                    'total_cost' => $totalPrint + $shippingCost,
+                    'total_cost' => $totalPrint + $shippingCost + (float) $winner->push_scan_fee,
                 ];
             }
         });
@@ -994,7 +1002,7 @@ class OrderController extends Controller
             $order->update([
                 'print_cost'    => $totalPrint,
                 'shipping_cost' => $shippingCost,
-                'total_cost'    => $totalPrint + $shippingCost,
+                'total_cost'    => $totalPrint + $shippingCost + (float) $order->push_scan_fee,
             ]);
 
             return response()->json([
@@ -1002,7 +1010,7 @@ class OrderController extends Controller
                 'moved_items'    => $movedCount,
                 'print_cost'     => $totalPrint,
                 'shipping_cost'  => $shippingCost,
-                'total_cost'     => $totalPrint + $shippingCost,
+                'total_cost'     => $totalPrint + $shippingCost + (float) $order->push_scan_fee,
             ]);
         });
     }
@@ -1556,7 +1564,7 @@ class OrderController extends Controller
             $order->update([
                 'print_cost' => $totalPrint,
                 'shipping_cost' => $shippingCost,
-                'total_cost' => $totalPrint + $shippingCost,
+                'total_cost' => $totalPrint + $shippingCost + (float) $order->push_scan_fee,
             ]);
 
             return response()->json([
@@ -1664,7 +1672,7 @@ class OrderController extends Controller
             'old_item_price' => round((float) $item->price, 2),
             'print_cost' => round((float) $totalPrint, 2),
             'shipping_cost' => round((float) $shipping, 2),
-            'total_cost' => round((float) $totalPrint + $shipping, 2),
+            'total_cost' => round((float) $totalPrint + $shipping + (float) $order->push_scan_fee, 2),
             'old_total_cost' => round((float) $order->total_cost, 2),
         ]);
     }
@@ -1741,7 +1749,7 @@ class OrderController extends Controller
             $order->update([
                 'print_cost' => $totalPrint,
                 'shipping_cost' => $shippingCost,
-                'total_cost' => $totalPrint + $shippingCost,
+                'total_cost' => $totalPrint + $shippingCost + (float) $order->push_scan_fee,
             ]);
 
             return response()->json([
@@ -1806,7 +1814,7 @@ class OrderController extends Controller
             $updates = [
                 'print_cost' => $totalPrint,
                 'shipping_cost' => $shippingCost,
-                'total_cost' => $totalPrint + $shippingCost,
+                'total_cost' => $totalPrint + $shippingCost + (float) $order->push_scan_fee,
             ];
 
             // The partner's share was priced for the old quantity, so it no
@@ -2257,6 +2265,41 @@ class OrderController extends Controller
      *     @OA\Response(response=400, description="Already paid or insufficient wallet")
      * )
      */
+    /**
+     * POST /api/orders/push-scan — queue orders for a same-day tracking scan.
+     * Body: { order_ids: int[] }. Each order gets the Settings → Push Scan
+     * price: added to total_cost when unpaid, debited from the owner's wallet
+     * as a surcharge when already paid (see PushScanService). Sellers can only
+     * push their own orders.
+     */
+    public function pushScan(Request $request)
+    {
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        $caller = $request->user();
+        $query = Order::whereIn('id', $request->order_ids);
+        if ($caller->hasRole('seller')) {
+            $query->where('user_id', $caller->id);
+        }
+
+        $service = app(PushScanService::class);
+        $results = [];
+        foreach ($query->get() as $order) {
+            $results[] = ['order_id' => $order->id] + $service->push($order);
+        }
+        $ok = collect($results)->where('ok', true);
+
+        return response()->json([
+            'message' => "Push scan {$ok->count()}/".count($results).' đơn'
+                .($ok->sum('charged') > 0 ? ' · surcharge $'.number_format($ok->sum('charged'), 2).' trừ vào ví' : ''),
+            'results' => $results,
+            'wallet' => (float) $caller->fresh()->wallet,
+        ]);
+    }
+
     public function pay(Request $request, Order $order)
     {
         $user = $order->user;
@@ -2793,6 +2836,9 @@ class OrderController extends Controller
         $file = $request->file('file');
         $rows = array_map('str_getcsv', file($file->getPathname()));
         $header = array_map('trim', array_shift($rows));
+        // Sellers type the push-scan column as "PUSH SCAN" / "push_scan" —
+        // normalise to push_scan so the row lookup below has one key.
+        $header = array_map(fn ($h) => strtolower(str_replace(' ', '_', $h)) === 'push_scan' ? 'push_scan' : $h, $header);
 
         $user = $request->user();
         // Whole import lands in one channel — the screen that uploaded it.
@@ -2845,6 +2891,9 @@ class OrderController extends Controller
             // Rows sharing a ref_id append items to the same order instead of
             // creating a new one.
             $batchOrders = [];
+            // order id → Order for rows with PUSH SCAN = 1. Pushed after the
+            // loop, once every grouped row has been added to the totals.
+            $pushOrders = [];
 
             foreach ($rows as $index => $row) {
                 $lineNum = $index + 2;
@@ -3054,8 +3103,20 @@ class OrderController extends Controller
                 $order->update([
                     'print_cost' => $totalPrint,
                     'shipping_cost' => $shippingCost,
-                    'total_cost' => $totalPrint + $shippingCost,
+                    'total_cost' => $totalPrint + $shippingCost + (float) $order->push_scan_fee,
                 ]);
+
+                if (PushScanService::isFlagOn($data['push_scan'] ?? '')) {
+                    $pushOrders[$order->id] = $order;
+                }
+            }
+
+            $pushService = app(PushScanService::class);
+            foreach ($pushOrders as $pushOrder) {
+                $res = $pushService->push($pushOrder);
+                if (! $res['ok']) {
+                    $errors[] = 'Push scan '.$res['message'];
+                }
             }
 
             return response()->json([
@@ -3255,6 +3316,7 @@ class OrderController extends Controller
             'shipping_label',
             'first_name', 'last_name', 'address_1', 'address_2', 'city', 'state', 'zipcode', 'country',
             'meta_front', 'meta_back', 'meta_left', 'meta_right', 'meta_neck', 'meta_special',
+            'push_scan', // 1 = push scan (run tracking same day, fee added); blank = no
         ];
 
         $callback = function () use ($headers) {
@@ -3269,6 +3331,7 @@ class OrderController extends Controller
                 'https://drive.google.com/file/d/LABEL_ID/view',
                 '', '', '', '', '', '', '', '',
                 'https://drive.google.com/file/d/META_FRONT_ID/view', '', '', '', '', '',
+                '',
             ]);
             // Example 2: Seller Ship order — no shipping_label, address required.
             fputcsv($file, [
@@ -3279,6 +3342,7 @@ class OrderController extends Controller
                 '',
                 'John', 'Doe', '123 Main St', 'Apt 4', 'Austin', 'TX', '78701', 'US',
                 'https://drive.google.com/file/d/META_FRONT_ID/view', '', '', '', '', '',
+                '',
             ]);
             fclose($file);
         };
@@ -3304,6 +3368,7 @@ class OrderController extends Controller
             'ship_by_stamp',
             'first_name', 'last_name', 'address_1', 'address_2', 'city', 'state', 'zipcode', 'country',
             'meta_front', 'meta_back', 'meta_left', 'meta_right', 'meta_neck', 'meta_special',
+            'push_scan', // 1 = push scan (run tracking same day, fee added); blank = no
         ];
 
         $callback = function () use ($headers) {
@@ -3319,6 +3384,7 @@ class OrderController extends Controller
                 '1',
                 'John', 'Doe', '123 Main St', 'Apt 4', 'Austin', 'TX', '78701', 'US',
                 'https://drive.google.com/file/d/META_FRONT_ID/view', '', '', '', '', '',
+                '',
             ]);
             fclose($file);
         };
@@ -4357,7 +4423,7 @@ class OrderController extends Controller
         $newShipping = round((float) $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty), 2);
 
         $print = round((float) $order->print_cost, 2);
-        $newTotal = round($print + $newShipping, 2);
+        $newTotal = round($print + $newShipping + (float) $order->push_scan_fee, 2);
 
         return [
             'print_cost' => $print,
