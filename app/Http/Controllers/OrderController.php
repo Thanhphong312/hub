@@ -4418,25 +4418,80 @@ class OrderController extends Controller
      */
     private function recomputeOrderShipping(Order $order): array
     {
-        $order->loadMissing('items', 'user');
+        return $this->recomputeOrderPricing($order, false);
+    }
+
+    /**
+     * Re-price an order against the current price tables and the owner's
+     * CURRENT tier. Persists nothing.
+     *
+     *   $full = false → shipping only, stored print_cost kept (shipping-fix flow).
+     *   $full = true  → also re-prices every item: unit price from
+     *                   computeItemPrice() (base_cost + 2nd_fee per extra face),
+     *                   add-ons moved onto the owner's tier by accessory + style
+     *                   (an add-on with no match on that tier keeps its current
+     *                   row and is reported in `missing_addons`).
+     *
+     * Stamp orders are shipped at the stamp rate, not the variant's shipping.
+     * Returns print/shipping/total plus, when $full, the per-item changes
+     * (`items`: item_id => ['price', 'accessory_price_ids']) to persist.
+     */
+    private function recomputeOrderPricing(Order $order, bool $full): array
+    {
+        $order->loadMissing($full ? ['items.metas', 'items.accessoryPrices', 'user'] : ['items', 'user']);
         $tierId = $order->user?->tier_id;
 
         $totalQty = 0;
+        $print = 0.0;
+        $items = [];
+        $missing = [];
         foreach ($order->items as $it) {
-            $totalQty += max(1, (int) ($it->quantity ?? 1));
+            $qty = max(1, (int) ($it->quantity ?? 1));
+            $totalQty += $qty;
+            if (! $full) {
+                continue;
+            }
+
+            $price = $this->computeItemPrice($it->metas, $it->product_variant_id, $tierId);
+            $accRows = collect();
+            foreach ($it->accessoryPrices as $ap) {
+                $row = $ap;
+                if ($tierId && (int) $ap->tier_id !== (int) $tierId) {
+                    $row = AccessoryPrice::where('accessory_id', $ap->accessory_id)
+                        ->where('tier_id', $tierId)
+                        ->where('style', $ap->style)
+                        ->first();
+                    if (! $row) {
+                        $missing[] = trim(($ap->style ?: $ap->accessory_code ?: "add-on #{$ap->id}"));
+                        $row = $ap;
+                    }
+                }
+                $accRows->push($row);
+            }
+            $print += ($price + $this->accessoryUnitPriceFor($it->product_variant_id, $accRows)) * $qty;
+            $items[$it->id] = [
+                'price' => $price,
+                'accessory_price_ids' => $accRows->pluck('id')->map(fn ($id) => (int) $id)->all(),
+            ];
         }
 
-        $hasLabel = ! empty($order->shipping_label);
-        $firstVariantId = $this->firstVariantIdOf($order->items);
-        $newShipping = round((float) $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty), 2);
+        if ($order->ship_type === Order::SHIP_STAMP) {
+            $newShipping = round((float) Order::stampShippingCost($totalQty), 2);
+        } else {
+            $hasLabel = ! empty($order->shipping_label);
+            $firstVariantId = $this->firstVariantIdOf($order->items);
+            $newShipping = round((float) $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty), 2);
+        }
 
-        $print = round((float) $order->print_cost, 2);
+        $print = $full ? round($print, 2) : round((float) $order->print_cost, 2);
         $newTotal = round($print + $newShipping + (float) $order->push_scan_fee, 2);
 
         return [
             'print_cost' => $print,
             'shipping_cost' => $newShipping,
             'total_cost' => $newTotal,
+            'items' => $items,
+            'missing_addons' => array_values(array_unique($missing)),
         ];
     }
 
@@ -4462,23 +4517,29 @@ class OrderController extends Controller
         $request->validate([
             'order_ids' => 'required|array|min:1',
             'order_ids.*' => 'integer|exists:orders,id',
+            'full' => 'nullable|boolean',
         ]);
+        // full = re-price items + add-ons too (tính lại giá); default ship only.
+        $full = $request->boolean('full');
 
-        $orders = Order::with(['items', 'user'])->whereIn('id', $request->order_ids)->get();
+        $orders = Order::with(['items', 'user'])->whereIn('id', $request->order_ids)
+            ->where('status', '!=', Order::STATUS_CANCELLED)->get();
 
         $rows = [];
         $totalRefund = 0.0;
         foreach ($orders as $order) {
-            $new = $this->recomputeOrderShipping($order);
+            $new = $this->recomputeOrderPricing($order, $full);
             $oldShip = round((float) $order->shipping_cost, 2);
+            $oldPrint = round((float) $order->print_cost, 2);
             $oldTotal = round((float) $order->total_cost, 2);
             $newShip = $new['shipping_cost'];
+            $newPrint = $new['print_cost'];
             $newTotal = $new['total_cost'];
             $paid = round((float) $order->paid_cost, 2);
             $refund = max(0, round($paid - $newTotal, 2));
 
-            // Only surface orders whose shipping/total actually changed.
-            if (abs($newShip - $oldShip) < 0.005 && abs($newTotal - $oldTotal) < 0.005) {
+            // Only surface orders whose price actually changed.
+            if (abs($newShip - $oldShip) < 0.005 && abs($newPrint - $oldPrint) < 0.005 && abs($newTotal - $oldTotal) < 0.005) {
                 continue;
             }
 
@@ -4490,6 +4551,9 @@ class OrderController extends Controller
                 'user_id' => $order->user_id,
                 'user_name' => $order->user?->name,
                 'status' => (int) $order->status,
+                'old_print' => $oldPrint,
+                'new_print' => $newPrint,
+                'missing_addons' => $new['missing_addons'],
                 'old_shipping' => $oldShip,
                 'new_shipping' => $newShip,
                 'diff_shipping' => round($newShip - $oldShip, 2),
@@ -4503,6 +4567,7 @@ class OrderController extends Controller
 
         return response()->json([
             'requested' => count($request->order_ids),
+            'full' => $full,
             'changed' => count($rows),
             'total_refund' => round($totalRefund, 2),
             'orders' => $rows,
@@ -4533,11 +4598,15 @@ class OrderController extends Controller
         $request->validate([
             'order_ids' => 'required|array|min:1',
             'order_ids.*' => 'integer|exists:orders,id',
+            'full' => 'nullable|boolean',
         ]);
+        // full = re-price items + add-ons too (tính lại giá); default ship only.
+        $full = $request->boolean('full');
 
-        $orders = Order::with(['items', 'user'])->whereIn('id', $request->order_ids)->get();
+        $orders = Order::with(['items', 'user'])->whereIn('id', $request->order_ids)
+            ->where('status', '!=', Order::STATUS_CANCELLED)->get();
 
-        $result = DB::transaction(function () use ($orders) {
+        $result = DB::transaction(function () use ($orders, $full) {
             $updated = 0;
             $refunded = 0;
             $totalRefund = 0.0;
@@ -4545,15 +4614,17 @@ class OrderController extends Controller
             $details = [];
 
             foreach ($orders as $order) {
-                $new = $this->recomputeOrderShipping($order);
+                $new = $this->recomputeOrderPricing($order, $full);
                 $newShip = $new['shipping_cost'];
+                $newPrint = $new['print_cost'];
                 $newTotal = $new['total_cost'];
                 $oldShip = round((float) $order->shipping_cost, 2);
+                $oldPrint = round((float) $order->print_cost, 2);
                 $oldTotal = round((float) $order->total_cost, 2);
                 $paid = round((float) $order->paid_cost, 2);
 
                 // Nothing drifted → leave the order untouched.
-                if (abs($newShip - $oldShip) < 0.005 && abs($newTotal - $oldTotal) < 0.005) {
+                if (abs($newShip - $oldShip) < 0.005 && abs($newPrint - $oldPrint) < 0.005 && abs($newTotal - $oldTotal) < 0.005) {
                     continue;
                 }
 
@@ -4562,6 +4633,22 @@ class OrderController extends Controller
                     'shipping_cost' => $newShip,
                     'total_cost' => $newTotal,
                 ];
+                if ($full) {
+                    $updates['print_cost'] = $newPrint;
+                    // Item prices + add-ons re-pointed at the owner's tier. The
+                    // pivot is synced directly (not via syncItemAccessories):
+                    // same accessory + style, so the _qr band text is unchanged
+                    // and the overlays must not be dropped.
+                    foreach ($order->items as $it) {
+                        $chg = $new['items'][$it->id] ?? null;
+                        if (! $chg) continue;
+                        $it->update([
+                            'price' => $chg['price'],
+                            'accessory_item_id' => $chg['accessory_price_ids'][0] ?? null,
+                        ]);
+                        $it->accessoryPrices()->sync($chg['accessory_price_ids']);
+                    }
+                }
 
                 if ($refund > 0 && $order->user) {
                     $owner = $walletCache[$order->user_id]
@@ -4582,7 +4669,9 @@ class OrderController extends Controller
                         'balance_before' => $balanceBefore,
                         'balance_after' => (float) $owner->wallet,
                         'refunded_at' => now(),
-                        'note' => "Refund chênh lệch shipping đơn #{$order->system_id} ({$oldShip} → {$newShip})",
+                        'note' => $full
+                            ? "Refund chênh lệch giá đơn #{$order->system_id} (total {$oldTotal} → {$newTotal})"
+                            : "Refund chênh lệch shipping đơn #{$order->system_id} ({$oldShip} → {$newShip})",
                     ]);
 
                     $refunded++;
@@ -4595,6 +4684,7 @@ class OrderController extends Controller
                 $details[] = [
                     'id' => $order->id,
                     'system_id' => $order->system_id,
+                    'new_print' => $newPrint,
                     'new_shipping' => $newShip,
                     'new_total' => $newTotal,
                     'refund' => $refund,
