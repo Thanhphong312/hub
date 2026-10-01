@@ -296,6 +296,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/merged-labels', [\App\Http\Controllers\PushTrackingController::class, 'mergedLabels']);
         Route::put('/merged-labels/{mergedLabel}/status', [\App\Http\Controllers\PushTrackingController::class, 'updateMergedLabelStatus']);
         Route::post('/merged-labels/{mergedLabel}/cancel', [\App\Http\Controllers\PushTrackingController::class, 'cancelMergedLabel']);
+        Route::delete('/merged-labels/{mergedLabel}', [\App\Http\Controllers\PushTrackingController::class, 'destroyMergedLabel']);
         Route::get('/{pushTracking}/shipping-label-blob', [\App\Http\Controllers\PushTrackingController::class, 'shippingLabelBlob']);
     });
 

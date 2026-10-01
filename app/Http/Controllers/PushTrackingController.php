@@ -135,6 +135,73 @@ class PushTrackingController extends Controller
     }
 
     /**
+     * DELETE /api/push-scan/merged-labels/{mergedLabel}?refund=0|1 — delete the
+     * merged label AND drop its orders from push scan entirely (their
+     * push_trackings rows go, whatever the status), as if never pushed.
+     *
+     * refund=1 also takes each row's push-scan fee back off the order:
+     * push_scan_fee and total_cost shrink, and what the seller had already
+     * paid beyond the new total is credited to their wallet (refund tx).
+     * refund=0 keeps the fee on the orders.
+     */
+    public function destroyMergedLabel(Request $request, MergedLabel $mergedLabel)
+    {
+        $refundFee = $request->boolean('refund');
+
+        return DB::transaction(function () use ($mergedLabel, $refundFee) {
+            $rows = PushTracking::with('order.user')->where('merged_id', $mergedLabel->id)->lockForUpdate()->get();
+            $refunded = 0.0;
+            $feeRemoved = 0.0;
+
+            foreach ($rows as $row) {
+                $order = $row->order;
+                $fee = round((float) $row->fee, 2);
+                if ($refundFee && $order && $fee > 0) {
+                    $newFee = max(0, round((float) $order->push_scan_fee - $fee, 2));
+                    $newTotal = max(0, round((float) $order->total_cost - $fee, 2));
+                    $paid = round((float) $order->paid_cost, 2);
+                    $back = min($fee, max(0, round($paid - $newTotal, 2)));
+                    $updates = ['push_scan_fee' => $newFee, 'total_cost' => $newTotal];
+
+                    if ($back > 0 && $order->user) {
+                        $user = \App\Models\User::lockForUpdate()->find($order->user_id);
+                        $before = (float) $user->wallet;
+                        $user->increment('wallet', $back);
+                        $updates['paid_cost'] = round($paid - $back, 2);
+                        \App\Models\WalletTransaction::create([
+                            'user_id' => $user->id,
+                            'order_id' => $order->id,
+                            'order_system_id' => $order->system_id,
+                            'type' => 'refund',
+                            'status' => \App\Models\WalletTransaction::STATUS_APPROVED,
+                            'amount' => $back,
+                            'balance_before' => $before,
+                            'balance_after' => (float) $user->fresh()->wallet,
+                            'refunded_at' => now(),
+                            'note' => "Refund push scan #{$order->system_id} (xoá merged label #{$mergedLabel->id})",
+                        ]);
+                        $refunded += $back;
+                    }
+                    $order->update($updates);
+                    $feeRemoved += $fee;
+                }
+                $row->delete();
+            }
+            $mergedLabel->delete();
+
+            return response()->json([
+                'message' => "Đã xoá merged label #{$mergedLabel->id} · bỏ push scan {$rows->count()} đơn"
+                    .($refundFee
+                        ? ' · hoàn phí $'.number_format($feeRemoved, 2).($refunded > 0 ? ' (trả về ví $'.number_format($refunded, 2).')' : '')
+                        : ' · giữ phí'),
+                'removed' => $rows->count(),
+                'fee_removed' => round($feeRemoved, 2),
+                'wallet_refunded' => round($refunded, 2),
+            ]);
+        });
+    }
+
+    /**
      * GET /api/push-scan/{pushTracking}/shipping-label-blob — proxy the order's
      * shipping_label bytes (PDF or image) so the desktop renderer can merge
      * them without B2/Drive CORS issues.
