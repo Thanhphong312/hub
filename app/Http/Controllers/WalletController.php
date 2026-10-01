@@ -124,7 +124,7 @@ class WalletController extends Controller
                     $t->method ?? '',
                     $t->transaction_id ?? '',
                     $t->order?->system_id ?? $t->order_system_id ?? '',
-                    $t->order?->ref_id ?? '',
+                    $t->order?->ref_id ?? $t->order_ref_id ?? '',
                     // Keep sign (paid/refund are stored negative/positive
                     // — accountants want to see direction).
                     number_format((float) $t->amount, 2, '.', ''),
@@ -458,6 +458,7 @@ class WalletController extends Controller
                     'user_id'         => $user->id,
                     'order_id'        => $tx->order_id,
                     'order_system_id' => $tx->order_system_id ?? $tx->order?->system_id,
+                    'order_ref_id'    => $tx->order_ref_id ?? $tx->order?->ref_id,
                     'type'            => 'refund',
                     'status'          => WalletTransaction::STATUS_APPROVED,
                     'amount'          => $amount, // positive — credited back
@@ -519,8 +520,8 @@ class WalletController extends Controller
      *   search      — one term, partial match on order system_id / ref_id.
      *   search_list — many ids (newline / comma separated), EXACT match on
      *                 system_id or ref_id; paste a batch to see their rows.
-     * system_id is matched on the snapshot column too, which survives order
-     * deletion.
+     * system_id / ref_id are matched on their snapshot columns too, which
+     * survive order deletion.
      */
     private function applySearch($query, Request $request): void
     {
@@ -528,6 +529,7 @@ class WalletController extends Controller
             $term = trim($request->search);
             $query->where(function ($q) use ($term) {
                 $q->where('order_system_id', 'like', "%{$term}%")
+                  ->orWhere('order_ref_id', 'like', "%{$term}%")
                   ->orWhereHas('order', function ($oq) use ($term) {
                       $oq->where('ref_id', 'like', "%{$term}%")
                          ->orWhere('system_id', 'like', "%{$term}%");
@@ -542,6 +544,7 @@ class WalletController extends Controller
             if (! empty($ids)) {
                 $query->where(function ($q) use ($ids) {
                     $q->whereIn('order_system_id', $ids)
+                      ->orWhereIn('order_ref_id', $ids)
                       ->orWhereHas('order', fn ($oq) => $oq->whereIn('system_id', $ids)->orWhereIn('ref_id', $ids));
                 });
             }
