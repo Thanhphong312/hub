@@ -164,6 +164,7 @@ Route::middleware('auth:sanctum')->group(function () {
         ->middleware(CheckRole::class.':admin,support');
     // Add an item to an existing order (staff, or the seller while new_order).
     Route::post('/orders/{order}/items', [OrderController::class, 'addItem']);
+    Route::delete('/order-items/{item}', [OrderController::class, 'destroyItem']);
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
     Route::put('/order-items/{item}/mockups', [OrderController::class, 'updateItemMockups']);
     Route::put('/order-items/{item}/accessories', [OrderController::class, 'updateItemAccessories']);

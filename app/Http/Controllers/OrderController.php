@@ -1717,6 +1717,41 @@ class OrderController extends Controller
         });
     }
 
+    /**
+     * DELETE /api/order-items/{item} — remove an item and re-price the order.
+     * Same rules as addItem (staff, or the owner while new_order with nothing
+     * in production). The last item can't go — cancel the order instead. The
+     * remaining items' unproduced _qr are dropped (the accessory summary on
+     * every overlay counts the whole order). Metas / add-ons cascade.
+     */
+    public function destroyItem(Request $request, OrderItem $item)
+    {
+        $caller = $request->user();
+        $item->loadMissing('order');
+        $order = $item->order;
+        if (! $order) {
+            return response()->json(['message' => 'Item has no order'], 404);
+        }
+        if ($denied = $this->itemEditDenied($caller, $order)) return $denied;
+        if ($order->items()->count() <= 1) {
+            return response()->json(['message' => 'Đơn chỉ còn 1 item — không xoá được, hãy huỷ đơn nếu cần.'], 422);
+        }
+
+        return DB::transaction(function () use ($caller, $item, $order) {
+            $item->delete();
+            $this->dropUnproducedQr($order->items()->pluck('id')->all());
+
+            $fresh = $this->recomputeOrderTotals($order);
+            $refunded = $this->refundSellerOverpay($caller, $fresh, 'xoá item');
+            $fresh = $fresh->fresh();
+
+            return response()->json([
+                'message' => 'Đã xoá item · total $'.number_format((float) $fresh->total_cost, 2).$this->balanceNote($fresh, $refunded),
+                'order' => $fresh,
+            ]);
+        });
+    }
+
     public function updateItemAccessories(Request $request, OrderItem $item)
     {
         $caller = $request->user();
