@@ -1513,6 +1513,210 @@ class OrderController extends Controller
      * created and we shouldn't switch tiers mid-flight just because an
      * admin is editing.
      */
+    // ---- Seller item editing (new_order only) ------------------------------
+
+    /**
+     * Who may change an order's items. Staff: anything not shipped/cancelled.
+     * The owning seller: only while the order is still new_order and none of
+     * its overlays has gone to production — after that the print run is
+     * committed and changes go through support. Returns an error response,
+     * or null when allowed.
+     */
+    private function itemEditDenied($caller, Order $order): ?\Illuminate\Http\JsonResponse
+    {
+        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
+        if (! $isStaff && $order->user_id !== $caller?->id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        if (in_array((int) $order->status, [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED], true)) {
+            return response()->json(['message' => 'Đơn đã shipped/cancelled — không sửa được item'], 422);
+        }
+        if (! $isStaff) {
+            if ((int) $order->status !== Order::STATUS_NEW_ORDER) {
+                return response()->json(['message' => 'Chỉ sửa được item khi đơn còn new_order'], 422);
+            }
+            $inProduction = OrderItemMeta::whereIn('order_item_id', $order->items()->pluck('id'))
+                ->where('production', true)->exists();
+            if ($inProduction) {
+                return response()->json(['message' => 'Đơn đã vào sản xuất — liên hệ support để sửa'], 422);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Recompute and persist print / shipping / total from the order's current
+     * items. Stamp orders ship at the stamp rate; others by the first product
+     * item + owner tier. Returns the fresh order.
+     */
+    private function recomputeOrderTotals(Order $order): Order
+    {
+        $order->load('items.accessoryPrices', 'user');
+        $totalQty = 0;
+        $totalPrint = 0.0;
+        foreach ($order->items as $it) {
+            $itQty = max(1, (int) ($it->quantity ?? 1));
+            $itAcc = $this->accessoryUnitPriceFor($it->product_variant_id, $it->accessoryPrices);
+            $totalPrint += ((float) $it->price + $itAcc) * $itQty;
+            $totalQty += $itQty;
+        }
+        $shippingCost = $order->ship_type === Order::SHIP_STAMP
+            ? Order::stampShippingCost($totalQty)
+            : $this->computeOrderShipping($this->firstVariantIdOf($order->items), $order->user?->tier_id, ! empty($order->shipping_label), $totalQty);
+        $order->update([
+            'print_cost' => round($totalPrint, 2),
+            'shipping_cost' => round($shippingCost, 2),
+            'total_cost' => round($totalPrint + $shippingCost + (float) $order->push_scan_fee, 2),
+        ]);
+
+        return $order->fresh();
+    }
+
+    /**
+     * After a SELLER edits their own paid order: if they had paid more than the
+     * new total, give the difference back to their wallet (refund tx). An
+     * increase is left as an unpaid balance — the Pay button / auto-pay
+     * settles it. Staff edits move no money (see updateItemQuantity).
+     * Returns the amount refunded.
+     */
+    private function refundSellerOverpay($caller, Order $order, string $what): float
+    {
+        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
+        if ($isStaff) return 0.0;
+
+        $over = round((float) $order->paid_cost - (float) $order->total_cost, 2);
+        if ($over <= 0.005) return 0.0;
+
+        $user = User::lockForUpdate()->find($order->user_id);
+        $before = (float) $user->wallet;
+        $user->increment('wallet', $over);
+        $order->update(['paid_cost' => round((float) $order->total_cost, 2)]);
+        WalletTransaction::create([
+            'user_id' => $user->id,
+            'order_id' => $order->id,
+            'order_system_id' => $order->system_id,
+            'type' => 'refund',
+            'status' => WalletTransaction::STATUS_APPROVED,
+            'amount' => $over,
+            'balance_before' => $before,
+            'balance_after' => (float) $user->fresh()->wallet,
+            'refunded_at' => now(),
+            'note' => "Refund chênh lệch sửa đơn #{$order->system_id} ({$what})",
+        ]);
+
+        return $over;
+    }
+
+    /** Drop not-yet-produced *_qr overlays so the converter rebuilds them. */
+    private function dropUnproducedQr(array $itemIds): void
+    {
+        if (empty($itemIds)) return;
+        OrderItemMeta::whereIn('order_item_id', $itemIds)
+            ->where('key', 'regexp', '_qr(_[0-9]+)?$')
+            ->where('production', false)
+            ->delete();
+    }
+
+    /** Message tail describing the payment state after an item edit. */
+    private function balanceNote(Order $order, float $refunded): string
+    {
+        if ($refunded > 0) return ' · đã hoàn $'.number_format($refunded, 2).' về ví';
+        $due = round((float) $order->total_cost - (float) $order->paid_cost, 2);
+        if ((float) $order->paid_cost > 0 && $due > 0.005) return ' · còn thiếu $'.number_format($due, 2).' (bấm Pay)';
+        return '';
+    }
+
+    /**
+     * POST /api/orders/{order}/items — add an item to an existing order and
+     * re-price it. Staff, or the owner while the order is new_order (see
+     * itemEditDenied). Same item shape as store(): product_variant_id (or
+     * addon-only with accessory_ids), quantity, accessory_ids[], material_id,
+     * mockup_front/back, metas[{key,value}] — design URLs are validated the
+     * same way. Every unproduced _qr of the order is dropped because the
+     * accessory summary stamped on each overlay counts the whole order.
+     */
+    public function addItem(Request $request, Order $order)
+    {
+        $caller = $request->user();
+        if ($denied = $this->itemEditDenied($caller, $order)) return $denied;
+
+        $data = $request->validate([
+            'product_variant_id' => 'nullable|exists:product_variants,id',
+            'material_id' => 'nullable|exists:materials,id',
+            'quantity' => 'nullable|integer|min:1|max:999',
+            'accessory_ids' => 'nullable|array',
+            'accessory_ids.*' => 'integer|exists:accessory_prices,id',
+            'mockup_front' => 'nullable|string',
+            'mockup_back' => 'nullable|string',
+            'metas' => 'nullable|array',
+            'metas.*.key' => 'required_with:metas|string|in:front,back,left,right,neck,special',
+            'metas.*.value' => 'nullable|string',
+        ]);
+
+        $order->loadMissing('user');
+        $tierId = $order->user?->tier_id;
+        if ($tierId === null) {
+            return response()->json(['message' => "Order owner has no tier — can't price the item"], 422);
+        }
+        $variantId = ! empty($data['product_variant_id']) ? (int) $data['product_variant_id'] : null;
+        $accIds = $this->collectAccessoryIds($data);
+        if (! $variantId && empty($accIds)) {
+            return response()->json(['message' => 'Cần chọn product hoặc ít nhất 1 addon.'], 422);
+        }
+        $metas = array_values(array_filter($data['metas'] ?? [], fn ($m) => trim((string) ($m['value'] ?? '')) !== ''));
+        if ($variantId && empty($metas)) {
+            return response()->json(['message' => 'Item có product cần ít nhất 1 design (front/back…).'], 422);
+        }
+        $qty = max(1, (int) ($data['quantity'] ?? 1));
+        if ($order->ship_type === Order::SHIP_STAMP) {
+            $stampMax = Order::stampConfig()['max_items'];
+            $newQty = (int) $order->items()->sum('quantity') + $qty;
+            if ($newQty > $stampMax) {
+                return response()->json(['message' => "Đơn stamp tối đa {$stampMax} items (sau khi thêm sẽ là {$newQty})."], 422);
+            }
+        }
+
+        $itemPayload = ['metas' => $metas, 'mockup_front' => $data['mockup_front'] ?? null, 'mockup_back' => $data['mockup_back'] ?? null];
+        $img = app(ImageValidationService::class)->validatePayload([$itemPayload]);
+        if (! $img['ok']) {
+            return response()->json([
+                'message' => 'Invalid image URLs',
+                'failures' => array_map(fn ($f) => ['field' => $f['field'], 'label' => $f['label'], 'url' => $f['url'], 'reason' => $f['reason']], $img['failures']),
+            ], 422);
+        }
+
+        return DB::transaction(function () use ($caller, $order, $variantId, $accIds, $metas, $qty, $data, $tierId) {
+            $item = OrderItem::create([
+                'order_id' => $order->id,
+                'product_variant_id' => $variantId,
+                'material_id' => $this->resolveMaterialId($data['material_id'] ?? null, $variantId),
+                'accessory_item_id' => null,
+                'mockup_front' => $data['mockup_front'] ?? null,
+                'mockup_back' => $data['mockup_back'] ?? null,
+                'order_type' => 0,
+                'order_type_label' => $this->productOrderType($variantId),
+                'price' => $this->computeItemPrice($metas, $variantId, $tierId),
+                'quantity' => $qty,
+            ]);
+            foreach ($metas as $m) {
+                OrderItemMeta::create(['order_item_id' => $item->id, 'key' => $m['key'], 'value' => $m['value']]);
+            }
+            $this->syncItemAccessories($item, $accIds, $tierId);
+            $this->dropUnproducedQr($order->items()->where('id', '!=', $item->id)->pluck('id')->all());
+
+            $fresh = $this->recomputeOrderTotals($order);
+            $refunded = $this->refundSellerOverpay($caller, $fresh, 'thêm item');
+            $fresh = $fresh->fresh();
+
+            return response()->json([
+                'message' => 'Đã thêm item · total $'.number_format((float) $fresh->total_cost, 2).$this->balanceNote($fresh, $refunded),
+                'item_id' => $item->id,
+                'order' => $fresh,
+            ], 201);
+        });
+    }
+
     public function updateItemAccessories(Request $request, OrderItem $item)
     {
         $caller = $request->user();
@@ -1522,14 +1726,7 @@ class OrderController extends Controller
             return response()->json(['message' => 'Item has no order'], 404);
         }
 
-        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
-        $isOwner = $order->user_id === $caller?->id;
-        if (! $isStaff && ! $isOwner) {
-            return response()->json(['message' => 'Forbidden'], 403);
-        }
-        if (in_array((int) $order->status, [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED], true)) {
-            return response()->json(['message' => 'Order is shipped or cancelled — accessories are locked'], 422);
-        }
+        if ($denied = $this->itemEditDenied($caller, $order)) return $denied;
 
         $request->validate([
             'accessory_ids' => 'present|array',
@@ -1541,34 +1738,16 @@ class OrderController extends Controller
             return response()->json(['message' => "Order owner has no tier — can't price accessories"], 422);
         }
 
-        return DB::transaction(function () use ($request, $item, $order, $ownerTierId) {
+        return DB::transaction(function () use ($request, $caller, $item, $order, $ownerTierId) {
             $accIds = array_values(array_unique(array_map('intval', $request->accessory_ids)));
             $this->syncItemAccessories($item, $accIds, $ownerTierId);
 
             // Recompute order totals from every item now in the order.
-            $order->load('items.accessoryPrices', 'user');
-            $totalQty = 0;
-            $totalPrint = 0;
-            foreach ($order->items as $it) {
-                $itQty = max(1, (int) ($it->quantity ?? 1));
-                $itAcc = $this->accessoryUnitPriceFor($it->product_variant_id, $it->accessoryPrices);
-                $totalPrint += ((float) $it->price + $itAcc) * $itQty;
-                $totalQty += $itQty;
-            }
-            // Shipping is set from the order's first product-carrying item —
-            // same convention as createOrder/importCsv. Falls back to the flat
-            // addon-only fee when every item is addon-only.
-            $hasLabel = ! empty($order->shipping_label);
-            $firstVariantId = $this->firstVariantIdOf($order->items);
-            $shippingCost = $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty);
-            $order->update([
-                'print_cost' => $totalPrint,
-                'shipping_cost' => $shippingCost,
-                'total_cost' => $totalPrint + $shippingCost + (float) $order->push_scan_fee,
-            ]);
+            $fresh = $this->recomputeOrderTotals($order);
+            $refunded = $this->refundSellerOverpay($caller, $fresh, 'đổi add-on');
 
             return response()->json([
-                'message' => 'Accessories updated; order totals recomputed',
+                'message' => 'Accessories updated; order totals recomputed'.$this->balanceNote($fresh->fresh(), $refunded),
                 'item_id' => $item->id,
                 'accessory_ids' => $item->accessoryPrices()->pluck('accessory_prices.id'),
                 'order' => $order->fresh()->load([
@@ -1665,7 +1844,9 @@ class OrderController extends Controller
         }
         $hasLabel = ! empty($order->shipping_label);
         $firstVariantId = $this->firstVariantIdOf($whatIfItems);
-        $shipping = $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty);
+        $shipping = $order->ship_type === Order::SHIP_STAMP
+            ? Order::stampShippingCost($totalQty)
+            : $this->computeOrderShipping($firstVariantId, $tierId, $hasLabel, $totalQty);
 
         return response()->json([
             'item_price' => round((float) $newItemPrice, 2),
@@ -1696,14 +1877,7 @@ class OrderController extends Controller
             return response()->json(['message' => 'Item has no order'], 404);
         }
 
-        $isStaff = $caller?->role && in_array($caller->role->slug, ['admin', 'support']);
-        $isOwner = $order->user_id === $caller?->id;
-        if (! $isStaff && ! $isOwner) {
-            return response()->json(['message' => 'Forbidden'], 403);
-        }
-        if ((int) $order->status === Order::STATUS_CANCELLED) {
-            return response()->json(['message' => 'Order is cancelled — variant is locked'], 422);
-        }
+        if ($denied = $this->itemEditDenied($caller, $order)) return $denied;
 
         $request->validate([
             'product_variant_id' => 'nullable|integer|exists:product_variants,id',
@@ -1719,7 +1893,7 @@ class OrderController extends Controller
             return response()->json(['message' => 'Không thể gỡ product: item chưa có addon nào để giữ lại (item sẽ trống).'], 422);
         }
 
-        return DB::transaction(function () use ($item, $order, $ownerTierId, $newVariantId) {
+        return DB::transaction(function () use ($caller, $item, $order, $ownerTierId, $newVariantId) {
             // Re-price the item from the new variant using its existing design
             // faces (base_cost + 2nd_fee × (faces − 1)); 0 when dropping the
             // product — its accessories carry the price instead.
@@ -1732,28 +1906,16 @@ class OrderController extends Controller
                 'order_type_label' => $this->productOrderType($newVariantId),
                 'price' => $newPrice,
             ]);
+            // A different product can mean a different convert layout / size —
+            // rebuild this item's overlays (produced ones are left alone).
+            $this->dropUnproducedQr([$item->id]);
 
             // Recompute order totals from every item (mirrors updateItemAccessories).
-            $order->load('items.accessoryPrices', 'user');
-            $totalQty = 0;
-            $totalPrint = 0;
-            foreach ($order->items as $it) {
-                $itQty = max(1, (int) ($it->quantity ?? 1));
-                $itAcc = $this->accessoryUnitPriceFor($it->product_variant_id, $it->accessoryPrices);
-                $totalPrint += ((float) $it->price + $itAcc) * $itQty;
-                $totalQty += $itQty;
-            }
-            $hasLabel = ! empty($order->shipping_label);
-            $firstVariantId = $this->firstVariantIdOf($order->items);
-            $shippingCost = $this->computeOrderShipping($firstVariantId, $order->user?->tier_id, $hasLabel, $totalQty);
-            $order->update([
-                'print_cost' => $totalPrint,
-                'shipping_cost' => $shippingCost,
-                'total_cost' => $totalPrint + $shippingCost + (float) $order->push_scan_fee,
-            ]);
+            $fresh = $this->recomputeOrderTotals($order);
+            $refunded = $this->refundSellerOverpay($caller, $fresh, 'đổi product');
 
             return response()->json([
-                'message' => 'Variant updated; order totals recomputed',
+                'message' => 'Variant updated; order totals recomputed'.$this->balanceNote($fresh->fresh(), $refunded),
                 'item_id' => $item->id,
                 'order' => $order->fresh()->load([
                     'items.metas', 'items.productVariant.product', 'items.material',

@@ -162,6 +162,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{order}/reconvert-label', [OrderController::class, 'reconvertLabel']);
     Route::post('/orders/{order}/absorb', [OrderController::class, 'absorbOrder'])
         ->middleware(CheckRole::class.':admin,support');
+    // Add an item to an existing order (staff, or the seller while new_order).
+    Route::post('/orders/{order}/items', [OrderController::class, 'addItem']);
     Route::put('/order-items/{item}/metas', [OrderController::class, 'updateItemMetas']);
     Route::put('/order-items/{item}/mockups', [OrderController::class, 'updateItemMockups']);
     Route::put('/order-items/{item}/accessories', [OrderController::class, 'updateItemAccessories']);
