@@ -41,9 +41,18 @@ class QrController extends Controller
             abort(403, 'Forbidden');
         }
 
+        // Tickets on this order the viewer may read (same platform rules as
+        // the ticket API), newest first, with their replies.
+        $tickets = \App\Models\Ticket::visibleTo($user)
+            ->where('order_id', $order->id)
+            ->with(['creator:id,name', 'items.sender:id,name'])
+            ->orderByDesc('id')
+            ->get();
+
         return view('qr.show', [
             'order' => $order,
             'user' => $user,
+            'tickets' => $tickets,
             // When enabled (Settings → QR), opening a not-yet-shipped order
             // auto-marks it shipped then prints the label on page load.
             'autoShipPrint' => (bool) (\App\Models\AppSetting::getJson('qr_config', [])['auto_ship_print'] ?? false),

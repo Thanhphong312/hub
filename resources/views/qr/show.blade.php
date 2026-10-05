@@ -239,6 +239,63 @@
         </form>
     </div>
 
+    {{-- Tickets on this order (only when there are any) — shown above
+         everything so whoever scans the order sees the issue before printing
+         or shipping it. --}}
+    @if ($tickets->isNotEmpty())
+        @php
+            $openCount = $tickets->where('status', '!=', \App\Models\Ticket::STATUS_CLOSE)->count();
+            $ticketStatus = [
+                1 => ['open', 'bg-red-100 text-red-700'],
+                2 => ['close', 'bg-neutral-100 text-neutral-500'],
+                3 => ['new message', 'bg-amber-100 text-amber-700'],
+            ];
+            $platformName = [1 => 'Seller', 2 => 'Partner'];
+            $tz = config('app.display_timezone');
+        @endphp
+        <div class="mb-6 rounded-xl border-2 {{ $openCount ? 'border-red-300 bg-red-50/60' : 'border-neutral-200 bg-white' }} p-4 shadow-sm">
+            <h2 class="font-semibold text-sm mb-3 {{ $openCount ? 'text-red-700' : 'text-neutral-700' }}">
+                💬 Ticket ({{ $tickets->count() }}){{ $openCount ? " — {$openCount} đang mở" : '' }}
+            </h2>
+            <div class="space-y-3">
+                @foreach ($tickets as $t)
+                    @php [$stLabel, $stCls] = $ticketStatus[$t->status] ?? $ticketStatus[1]; @endphp
+                    <details class="bg-white rounded-lg border border-neutral-200" {{ $t->status !== \App\Models\Ticket::STATUS_CLOSE ? 'open' : '' }}>
+                        <summary class="cursor-pointer px-3 py-2 flex flex-wrap items-center gap-2 text-sm">
+                            <span class="font-semibold text-neutral-800">#{{ $t->id }} {{ $t->subject }}</span>
+                            <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase {{ $stCls }}">{{ $stLabel }}</span>
+                            <span class="text-[11px] text-neutral-400">{{ $platformName[$t->platform] ?? '' }} · {{ $t->creator->name ?? '?' }} · {{ $t->created_at->copy()->setTimezone($tz)->format('Y-m-d H:i') }}</span>
+                        </summary>
+                        <div class="px-3 pb-3 space-y-2 text-sm">
+                            @foreach (array_merge(
+                                [['who' => $t->creator->name ?? '?', 'at' => $t->created_at, 'content' => $t->content, 'attachments' => $t->attachments]],
+                                $t->items->map(fn ($i) => ['who' => $i->sender->name ?? '?', 'at' => $i->created_at, 'content' => $i->content, 'attachments' => $i->attachments])->all()
+                            ) as $msg)
+                                <div class="border-l-2 border-neutral-200 pl-3">
+                                    <div class="text-[11px] text-neutral-400">{{ $msg['who'] }} · {{ $msg['at']->copy()->setTimezone($tz)->format('Y-m-d H:i') }}</div>
+                                    @if ($msg['content'])
+                                        <div class="text-neutral-800 whitespace-pre-line">{{ $msg['content'] }}</div>
+                                    @endif
+                                    @if (!empty($msg['attachments']))
+                                        <div class="flex flex-wrap gap-2 mt-1">
+                                            @foreach ($msg['attachments'] as $a)
+                                                @if (($a['type'] ?? '') === 'image')
+                                                    <a href="{{ $a['url'] }}" target="_blank" rel="noreferrer"><img src="{{ $a['url'] }}" alt="{{ $a['name'] ?? '' }}" class="h-20 rounded border border-neutral-200 object-cover" /></a>
+                                                @else
+                                                    <a href="{{ $a['url'] }}" target="_blank" rel="noreferrer" class="text-xs text-orange-600 underline">{{ $a['name'] ?? 'video' }}</a>
+                                                @endif
+                                            @endforeach
+                                        </div>
+                                    @endif
+                                </div>
+                            @endforeach
+                        </div>
+                    </details>
+                @endforeach
+            </div>
+        </div>
+    @endif
+
     {{-- Top row: Order info + Address + Shipping label preview --}}
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
         @php
