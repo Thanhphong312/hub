@@ -167,6 +167,12 @@ class PartnerReportController extends Controller
             $query->where('system_id', 'like', '%'.$request->system_id.'%');
         }
 
+        // Only orders that have no partner amount yet — the default view of
+        // the "Tính tiền" modal, so the operator sees what still needs pricing.
+        if ($request->boolean('unpriced')) {
+            $query->whereNull('partner_revenue');
+        }
+
         $orders = $query->orderBy('completed_time')->get();
         $listId = $partner->partner_price_list_id;
 
