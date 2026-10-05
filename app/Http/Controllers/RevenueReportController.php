@@ -13,16 +13,17 @@ use Illuminate\Support\Facades\DB;
  * Revenue summary for a period (admin only): seller top-ups, order totals
  * per seller, and what was split to each partner.
  *
- * Days follow the America/Chicago convention used by the partner report:
- * date_from/date_to are local days, converted to a UTC window here.
+ * Days are UTC calendar days — the same window the Orders list/export
+ * filter uses (whereDate on created_at), so the totals match an export of
+ * the same dates.
  */
 class RevenueReportController extends Controller
 {
-    private const TZ = 'America/Chicago';
+    private const TZ = 'UTC';
 
     /**
      * GET /api/revenue-report
-     *   date_from, date_to   YYYY-MM-DD (Chicago days, inclusive)
+     *   date_from, date_to   YYYY-MM-DD (UTC days, inclusive)
      *   date_field           created_at | completed_time — which order date
      *                        the order + partner tables filter on
      */
@@ -35,8 +36,8 @@ class RevenueReportController extends Controller
         ]);
 
         $tz = self::TZ;
-        $from = Carbon::parse($request->date_from, $tz)->startOfDay()->utc();
-        $to = Carbon::parse($request->date_to, $tz)->endOfDay()->utc();
+        $from = Carbon::parse($request->date_from, $tz)->startOfDay();
+        $to = Carbon::parse($request->date_to, $tz)->endOfDay();
         $dateField = $request->input('date_field', 'created_at');
 
         // 1) Top-ups: approved deposits into seller wallets.
