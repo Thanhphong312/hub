@@ -40,7 +40,7 @@ class TrackingController extends Controller
     /** Counts for the dashboard / settings page. */
     public function stats()
     {
-        $withTracking = Order::whereNotNull('tracking_id')->where('tracking_id', '!=', '')
+        $withTracking = Order::whereNotNull('tracking_id')->whereNotIn('tracking_id', ['', Order::TRACKING_NOT_FOUND])
             ->where('status', '!=', Order::STATUS_CANCELLED)->count();
         $delivered = OrderTracking::where('status', 'delivered')->count();
         $inTransit = OrderTracking::whereNotNull('date_intransit')->where('status', '!=', 'delivered')->count();
@@ -140,7 +140,7 @@ class TrackingController extends Controller
 
         // Pick the most recently shipped order that has a tracking_id.
         $order = Order::whereNotNull('tracking_id')
-            ->where('tracking_id', '!=', '')
+            ->whereNotIn('tracking_id', ['', Order::TRACKING_NOT_FOUND])
             ->orderByDesc('id')
             ->first(['id', 'system_id', 'tracking_id']);
 

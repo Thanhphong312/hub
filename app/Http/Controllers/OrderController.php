@@ -1232,11 +1232,16 @@ class OrderController extends Controller
             $tracking = $result['tracking_id'] ?? null;
 
             if (! $tracking) {
+                // Label read but no tracking on it: park the order with the
+                // not-found placeholder so it leaves the fetch queue.
+                $order->update(['tracking_id' => Order::TRACKING_NOT_FOUND]);
+
                 // Use 422 (not 502) so web servers don't replace our JSON body
                 // with their own HTML error page — frontend needs the upstream
                 // message to know whether to retry or skip the order.
                 return response()->json([
-                    'message' => 'No tracking in carrier response',
+                    'message' => 'No tracking in carrier response — saved '.Order::TRACKING_NOT_FOUND,
+                    'tracking_id' => Order::TRACKING_NOT_FOUND,
                     'body' => $result['raw'] ?? null,
                 ], 422);
             }
@@ -1318,7 +1323,16 @@ class OrderController extends Controller
                     continue;
                 } // already filled by the catch above
                 if (empty($r['tracking_id'])) {
-                    $results[$id] = ['order_id' => $id, 'system_id' => $order->system_id, 'ok' => false, 'message' => $r['error'] ?? 'No tracking in response'];
+                    // This label could not be read: park it with the
+                    // not-found placeholder so it leaves the fetch queue.
+                    // (A whole-batch failure — network/config — is handled by
+                    // the catch above and saves nothing, so it gets retried.)
+                    $order->update(['tracking_id' => Order::TRACKING_NOT_FOUND]);
+                    $results[$id] = [
+                        'order_id' => $id, 'system_id' => $order->system_id, 'ok' => false,
+                        'tracking_id' => Order::TRACKING_NOT_FOUND,
+                        'message' => ($r['error'] ?? 'No tracking in response').' — saved '.Order::TRACKING_NOT_FOUND,
+                    ];
 
                     continue;
                 }

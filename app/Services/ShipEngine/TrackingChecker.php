@@ -79,7 +79,7 @@ class TrackingChecker
         $ids = array_values(array_unique(array_map('intval', $ids)));
         $orders = Order::with('tracking')
             ->whereIn('id', $ids)
-            ->whereNotNull('tracking_id')->where('tracking_id', '!=', '')
+            ->whereNotNull('tracking_id')->whereNotIn('tracking_id', ['', Order::TRACKING_NOT_FOUND])
             ->where('status', '!=', Order::STATUS_CANCELLED)
             ->get();
 
@@ -130,7 +130,7 @@ class TrackingChecker
         $q = Order::query()
             ->leftJoin('order_trackings', 'order_trackings.order_id', '=', 'orders.id')
             ->whereNotNull('orders.tracking_id')
-            ->where('orders.tracking_id', '!=', '')
+            ->whereNotIn('orders.tracking_id', ['', Order::TRACKING_NOT_FOUND])
             ->where('orders.status', '!=', Order::STATUS_CANCELLED)
             ->where(function ($w) {
                 $w->whereNull('order_trackings.status')

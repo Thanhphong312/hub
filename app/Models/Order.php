@@ -122,6 +122,11 @@ class Order extends Model
     const STATUS_ONHOLD = 5;
     const STATUS_SHIPPED = 6;
     const STATUS_CANCELLED = 7;
+
+    // Saved as tracking_id when fetch tracking could not read a tracking
+    // number off the shipping label, so the order leaves the fetch queue.
+    // Not a real tracking number: the delivery checkers skip it.
+    const TRACKING_NOT_FOUND = '000000000000';
     const STATUS_RESEND = 8;
 
     const STATUS_MAP = [
