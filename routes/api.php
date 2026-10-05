@@ -204,6 +204,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Materials read is public — registered above, outside auth:sanctum.
     // Writes are admin-only and live in the admin group below.
 
+    // Revenue summary: seller top-ups, order totals, partner split (admin only).
+    Route::middleware(CheckRole::class . ':admin')
+        ->get('/revenue-report', [\App\Http\Controllers\RevenueReportController::class, 'summary']);
+
     // Products (admin write)
     Route::middleware(CheckRole::class . ':admin')->group(function () {
         Route::post('/products', [ProductController::class, 'store']);
