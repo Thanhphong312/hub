@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\MergedLabel;
+use App\Models\Order;
 use App\Models\PushTracking;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -41,6 +42,51 @@ class PushTrackingController extends Controller
         }
 
         return response()->json($query->paginate(min(500, (int) $request->input('per_page', 100))));
+    }
+
+    /**
+     * GET /api/push-scan/stale — orders created more than 1.5 days ago whose
+     * delivery tracking is still stuck at pre_shipment / accepted. The label
+     * exists but USPS hasn't actually moved the package, so these likely need a
+     * (re)push scan. Oldest first. Each row carries `already_pushed` so the UI
+     * can flag orders already queued in push_trackings.
+     */
+    public function staleTracking(Request $request)
+    {
+        $cutoff   = now()->subHours(36); // 1.5 days
+        $statuses = ['pre_shipment', 'accepted'];
+
+        $query = Order::query()
+            ->select('id', 'user_id', 'system_id', 'ref_id', 'status', 'ship_type', 'shipping_label', 'tracking_id', 'paid_cost', 'total_cost', 'push_scan_fee', 'created_at')
+            ->with([
+                'user:id,name,email',
+                'tracking:id,order_id,status,status_description,last_event_at,delivered_at,checked_at',
+            ])
+            ->whereNotNull('tracking_id')
+            ->where('tracking_id', '!=', '')
+            ->where('created_at', '<', $cutoff)
+            ->where('status', '!=', Order::STATUS_CANCELLED)
+            ->whereHas('tracking', fn ($q) => $q->whereIn('status', $statuses))
+            ->orderBy('created_at'); // most overdue first
+
+        if ($request->filled('search')) {
+            $s = trim($request->search);
+            $query->where(fn ($q) => $q->where('system_id', 'like', "%{$s}%")
+                ->orWhere('ref_id', 'like', "%{$s}%")
+                ->orWhere('tracking_id', 'like', "%{$s}%"));
+        }
+
+        $result = $query->paginate(min(500, (int) $request->input('per_page', 200)));
+
+        // Flag orders already queued in push_trackings so staff don't double-push.
+        $pushed = PushTracking::whereIn('order_id', collect($result->items())->pluck('id'))
+            ->pluck('order_id')->flip();
+        $result->getCollection()->transform(function ($o) use ($pushed) {
+            $o->already_pushed = isset($pushed[$o->id]);
+            return $o;
+        });
+
+        return response()->json($result);
     }
 
     /**

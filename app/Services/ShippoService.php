@@ -93,13 +93,28 @@ class ShippoService
             'mass_unit'     => $pcfg['mass_unit'] ?? 'oz',
         ];
 
+        $shipmentPayload = [
+            'address_from' => $addressFrom,
+            'address_to'   => $addressTo,
+            'parcels'      => [$parcel],
+            'async'        => false,
+        ];
+
+        // International shipments (from country != to country) require a customs
+        // declaration — USPS rejects the shipment without one. Build it from the
+        // order items and attach its object_id. Domestic orders skip this.
+        $fromCountry = strtoupper(trim((string) ($addressFrom['country'] ?? 'US')));
+        $toCountry   = strtoupper(trim((string) ($addressTo['country'] ?? 'US')));
+        if ($fromCountry !== $toCountry) {
+            $customs = $this->createCustomsDeclaration($order, $addressFrom, $parcel, $headers, $c);
+            if (! $customs['ok']) {
+                return ['ok' => false, 'message' => $customs['message'], 'detail' => $customs['detail'] ?? null];
+            }
+            $shipmentPayload['customs_declaration'] = $customs['object_id'];
+        }
+
         try {
-            $shipResp = Http::withHeaders($headers)->timeout(60)->post(self::BASE . '/shipments/', [
-                'address_from' => $addressFrom,
-                'address_to'   => $addressTo,
-                'parcels'      => [$parcel],
-                'async'        => false,
-            ]);
+            $shipResp = Http::withHeaders($headers)->timeout(60)->post(self::BASE . '/shipments/', $shipmentPayload);
             if (!$shipResp->successful()) {
                 return ['ok' => false, 'message' => 'Shippo shipment lỗi (HTTP ' . $shipResp->status() . ')', 'detail' => $shipResp->json()];
             }
@@ -157,6 +172,119 @@ class ShippoService
         } catch (\Throwable $e) {
             return ['ok' => false, 'message' => 'Shippo exception: ' . $e->getMessage()];
         }
+    }
+
+    /**
+     * Create a Shippo customs declaration for an international order: one
+     * customs item per order item, then the declaration that references them.
+     * Returns ['ok'=>true,'object_id'=>...] or ['ok'=>false,'message'=>...].
+     *
+     * Config under shippo_config.customs (all optional, with working defaults):
+     *   contents_type, non_delivery_option, certify, certify_signer, incoterm,
+     *   eel_pfc, currency, default_description, default_net_weight,
+     *   default_tariff_number, contents_explanation.
+     */
+    private function createCustomsDeclaration(Order $order, array $addressFrom, array $parcel, array $headers, array $c): array
+    {
+        $cust          = $c['customs'] ?? [];
+        $massUnit      = $parcel['mass_unit'] ?? 'oz';
+        $originCountry = strtoupper(trim((string) ($addressFrom['country'] ?? 'US')));
+        $currency      = $cust['currency'] ?? 'USD';
+        $defaultDesc   = $cust['default_description'] ?? 'Merchandise';
+        $defaultWeight = (string) ($cust['default_net_weight'] ?? '3');
+        $defaultTariff = trim((string) ($cust['default_tariff_number'] ?? ''));
+
+        $order->loadMissing('items.productVariant.product');
+
+        $itemIds = [];
+        foreach ($order->items as $it) {
+            $variant = $it->productVariant;
+            $product = $variant->product ?? null;
+
+            // Per-product customs info (set on the Product) wins; fall back to
+            // the config defaults, then to the product name.
+            $desc = $defaultDesc;
+            if ($product && ! empty($product->customs_description)) {
+                $desc = $product->customs_description;
+            } elseif ($product && ! empty($product->name)) {
+                $desc = $product->name;
+            }
+
+            // USPS requires net_weight > 0 and value > 0 on every line.
+            $weight = ($variant && (float) $variant->weight > 0)
+                ? (string) $variant->weight
+                : $defaultWeight;
+
+            // Declared value: product override → item price → $1 floor.
+            $value = ($product && $product->customs_value !== null && (float) $product->customs_value > 0)
+                ? (float) $product->customs_value
+                : (float) $it->price;
+            if ($value <= 0) {
+                $value = 1.0;
+            }
+
+            $tariff = ($product && ! empty($product->hs_tariff_number))
+                ? trim((string) $product->hs_tariff_number)
+                : $defaultTariff;
+
+            $itemOrigin = ($product && ! empty($product->origin_country))
+                ? strtoupper(trim((string) $product->origin_country))
+                : $originCountry;
+
+            $payload = [
+                'description'    => mb_substr(trim($desc) ?: $defaultDesc, 0, 70),
+                'quantity'       => max(1, (int) $it->quantity),
+                'net_weight'     => $weight,
+                'mass_unit'      => $massUnit,
+                'value_amount'   => number_format($value, 2, '.', ''),
+                'value_currency' => $currency,
+                'origin_country' => $itemOrigin,
+            ];
+            if ($tariff !== '') {
+                $payload['tariff_number'] = $tariff;
+            }
+
+            $resp = Http::withHeaders($headers)->timeout(60)->post(self::BASE . '/customs/items/', $payload);
+            if (! $resp->successful() || empty($resp->json()['object_id'])) {
+                return ['ok' => false, 'message' => 'Tạo customs item lỗi (HTTP ' . $resp->status() . ')', 'detail' => $resp->json()];
+            }
+            $itemIds[] = $resp->json()['object_id'];
+        }
+
+        if (empty($itemIds)) {
+            return ['ok' => false, 'message' => 'Đơn không có item để khai hải quan (customs)'];
+        }
+
+        $declPayload = [
+            'contents_type'       => $cust['contents_type'] ?? 'MERCHANDISE',
+            'non_delivery_option' => $cust['non_delivery_option'] ?? 'RETURN',
+            'certify'             => $cust['certify'] ?? true,
+            'certify_signer'      => $cust['certify_signer'] ?? ($addressFrom['name'] ?? 'BullStart'),
+            'items'               => $itemIds,
+        ];
+        // EEL/PFC exemption code is required for US exports. Low-value parcels
+        // (< $2500) use NOEEI 30.37(a); override via config if needed.
+        $eel = $cust['eel_pfc'] ?? ($originCountry === 'US' ? 'NOEEI_30_37_a' : null);
+        if (! empty($eel)) {
+            $declPayload['eel_pfc'] = $eel;
+        }
+        // Incoterm: some destinations/carriers reject the declaration without
+        // one. Default to DDU (recipient pays duties) — the USPS-international
+        // norm; override via config.
+        $incoterm = $cust['incoterm'] ?? 'DDU';
+        if (! empty($incoterm)) {
+            $declPayload['incoterm'] = $incoterm;
+        }
+        if (! empty($cust['contents_explanation'])) {
+            $declPayload['contents_explanation'] = $cust['contents_explanation'];
+        }
+
+        $declResp = Http::withHeaders($headers)->timeout(60)->post(self::BASE . '/customs/declarations/', $declPayload);
+        if (! $declResp->successful() || empty($declResp->json()['object_id'])) {
+            return ['ok' => false, 'message' => 'Tạo customs declaration lỗi (HTTP ' . $declResp->status() . ')', 'detail' => $declResp->json()];
+        }
+
+        return ['ok' => true, 'object_id' => $declResp->json()['object_id']];
     }
 
     /** Pick a rate per the configured strategy: cheapest | carrier | service. */

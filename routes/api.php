@@ -295,6 +295,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // labels into merged labels. Sellers push via POST /orders/push-scan.
     Route::middleware(CheckRole::class . ':admin,support')->prefix('push-scan')->group(function () {
         Route::get('/', [\App\Http\Controllers\PushTrackingController::class, 'index']);
+        Route::get('/stale', [\App\Http\Controllers\PushTrackingController::class, 'staleTracking']);
         Route::post('/merge', [\App\Http\Controllers\PushTrackingController::class, 'merge']);
         Route::get('/merged-labels', [\App\Http\Controllers\PushTrackingController::class, 'mergedLabels']);
         Route::put('/merged-labels/{mergedLabel}/status', [\App\Http\Controllers\PushTrackingController::class, 'updateMergedLabelStatus']);

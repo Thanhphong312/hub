@@ -6,7 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 
 class Product extends Model
 {
-    protected $fillable = ['name', 'style', 'line_id', 'order_type', 'status'];
+    protected $fillable = [
+        'name', 'style', 'line_id', 'order_type', 'status',
+        // Customs / tariff info for international shipping labels.
+        'customs_description', 'hs_tariff_number', 'origin_country', 'customs_value',
+    ];
 
     public function variants()
     {

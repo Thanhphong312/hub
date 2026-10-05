@@ -234,9 +234,16 @@ class ProductController extends Controller
             'style' => 'nullable|string',
             'line_id' => 'nullable|string|max:16',
             'order_type' => 'nullable|string|max:64',
+            'customs_description' => 'nullable|string|max:120',
+            'hs_tariff_number' => 'nullable|string|max:32',
+            'origin_country' => 'nullable|string|size:2',
+            'customs_value' => 'nullable|numeric|min:0',
         ]);
 
-        $product = Product::create($request->only('name', 'style', 'line_id', 'order_type'));
+        $product = Product::create($request->only(
+            'name', 'style', 'line_id', 'order_type',
+            'customs_description', 'hs_tariff_number', 'origin_country', 'customs_value'
+        ));
         return response()->json(['message' => 'Product created', 'product' => $product], 201);
     }
 
@@ -248,9 +255,16 @@ class ProductController extends Controller
             'line_id' => 'nullable|string|max:16',
             'order_type' => 'nullable|string|max:64',
             'status' => 'nullable|integer|in:0,1',
+            'customs_description' => 'nullable|string|max:120',
+            'hs_tariff_number' => 'nullable|string|max:32',
+            'origin_country' => 'nullable|string|size:2',
+            'customs_value' => 'nullable|numeric|min:0',
         ]);
 
-        $product->update($request->only('name', 'style', 'line_id', 'order_type', 'status'));
+        $product->update($request->only(
+            'name', 'style', 'line_id', 'order_type', 'status',
+            'customs_description', 'hs_tariff_number', 'origin_country', 'customs_value'
+        ));
         return response()->json(['message' => 'Product updated', 'product' => $product]);
     }
 
@@ -287,6 +301,10 @@ class ProductController extends Controller
                 'style'   => $data['style'] ?? $product->style,
                 'line_id' => $data['line_id'] ?? null,
                 'status'  => $product->status,
+                'customs_description' => $product->customs_description,
+                'hs_tariff_number'    => $product->hs_tariff_number,
+                'origin_country'      => $product->origin_country,
+                'customs_value'       => $product->customs_value,
             ]);
 
             foreach ($product->variants as $variant) {

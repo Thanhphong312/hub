@@ -18,6 +18,7 @@ use App\Models\User;
 use App\Models\WalletTransaction;
 use App\Services\CarrierTrackingService;
 use App\Services\ImageValidationService;
+use App\Services\OrderBackupService;
 use App\Services\PushScanService;
 use App\Services\ShippoService;
 use App\Services\TelegramService;
@@ -530,7 +531,8 @@ class OrderController extends Controller
                 : $rawRefId; // user explicitly chose to keep duplicate
         }
 
-        return DB::transaction(function () use ($request, $hasLabel, $byStamp, $finalRefId, $imgService, $imgResult) {
+        $createdOrder = null;
+        $response = DB::transaction(function () use ($request, $hasLabel, $byStamp, $finalRefId, $imgService, $imgResult, &$createdOrder) {
             $firstVariantId = $this->firstVariantIdOf($request->items);
             $order = Order::create([
                 'user_id' => $request->user()->id,
@@ -614,11 +616,22 @@ class OrderController extends Controller
                 \Log::warning('[telegram] notifyNewOrder: '.$e->getMessage());
             }
 
+            $createdOrder = $order;
+
             return response()->json([
                 'message' => 'Order created',
                 'order' => $order->fresh()->load(['items.metas', 'items.productVariant', 'items.material', 'items.accessoryPrice.accessory', 'items.accessoryPrice.tier', 'items.accessoryPrices.accessory', 'items.accessoryPrices.tier', 'address']),
             ], 201);
         });
+
+        // Durable off-site backup (B2 order-jsons/ + order_backups table), run
+        // after the tx commits so the snapshot reflects the fully-built order.
+        // Best-effort: never let a backup hiccup fail a successful create.
+        if ($createdOrder) {
+            app(OrderBackupService::class)->archive($createdOrder->fresh(), 'web');
+        }
+
+        return $response;
     }
 
     /**
@@ -3335,6 +3348,15 @@ class OrderController extends Controller
         });
 
         $this->refreshDuplicateRefIds();
+
+        // Durable backup of the import: per-order rows in order_backups +
+        // ONE combined JSON on B2 (order-jsons/imports/) — a single upload, so
+        // a large import isn't slowed by N network round-trips. Best-effort.
+        try {
+            app(OrderBackupService::class)->archiveImportBatch($createdOrderIds, 'import_csv');
+        } catch (\Throwable $e) {
+            \Log::warning('[order-backup] import archive failed: '.$e->getMessage());
+        }
 
         // Image-URL validation for imported orders runs in the desktop client:
         // the import response returns created_ids, and the client validates +
