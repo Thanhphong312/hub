@@ -78,7 +78,7 @@ class ConversionController extends Controller
                      < (select count(*) from order_item_metas s
                         where s.order_item_id = order_items.id
                           and s.`key` in ({$sourceKeys})
-                          and s.value is not null and s.value <> '')
+                          and s.value regexp '^[[:space:]]*https?://')
                        * greatest(coalesce(order_items.quantity, 1), 1)"
                 );
             })
@@ -102,7 +102,7 @@ class ConversionController extends Controller
                 $sourceKeysWithValue = [];
                 foreach (self::SOURCE_KEYS as $sk) {
                     $m = $existingByKey->get($sk);
-                    if ($m && !empty($m->value)) {
+                    if ($m && self::isDesignUrl($m->value)) {
                         $sourceKeysWithValue[] = $sk;
                     }
                 }
@@ -383,13 +383,25 @@ class ConversionController extends Controller
      *   "N" when no accessory). Items sharing the same letter are merged so a
      *   long order doesn't produce a runaway "1P-1P-1P-1P-…" string.
      */
-    /** True when the item has at least one non-empty source design meta. */
+    /**
+     * A source meta is a design only when it holds an http(s) link. Sellers
+     * sometimes type free text into a meta_* column (a tracking number in
+     * meta_back, "27/9" in meta_left); that can't be converted and would sit
+     * in the queue forever, so it is ignored. Keep in sync with the regexp in
+     * pending().
+     */
+    private static function isDesignUrl($value): bool
+    {
+        return is_string($value) && preg_match('#^\s*https?://#i', $value) === 1;
+    }
+
+    /** True when the item has at least one source design link. */
     private function itemHasSourceDesign($item): bool
     {
         $byKey = $item->metas->keyBy('key');
         foreach (self::SOURCE_KEYS as $sk) {
             $m = $byKey->get($sk);
-            if ($m && !empty($m->value)) return true;
+            if ($m && self::isDesignUrl($m->value)) return true;
         }
 
         return false;
