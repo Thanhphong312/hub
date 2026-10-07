@@ -128,6 +128,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/design-checks/{designCheck}/apply', [\App\Http\Controllers\DesignCheckController::class, 'apply'])
         ->middleware(CheckRole::class . ':admin,support');
     Route::post('/orders/bulk-reconvert', [OrderController::class, 'bulkReconvert']);
+    // Move orders between channels (Order FPT ↔ Orders).
+    Route::post('/orders/bulk-set-source', [OrderController::class, 'bulkSetSource'])
+        ->middleware(CheckRole::class . ':admin,support');
     Route::post('/orders/bulk-reconvert-label', [OrderController::class, 'bulkReconvertLabel']);
     Route::post('/orders/bulk-delete', [OrderController::class, 'bulkDestroy']);
     Route::post('/orders/bulk-re-production', [OrderController::class, 'bulkReProduction']);
@@ -314,6 +317,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangsheets/lookup-orders', [GangsheetController::class, 'lookupOrders']);
         // Partner assignment (admin assigns gangs to partner users).
         Route::get('/gangsheets/partner-users', [GangsheetController::class, 'partnerUsers']);
+        Route::get('/gangsheets/creators', [GangsheetController::class, 'creators']);
 
         // Partner reporting: what each partner shipped and what it owes them.
         Route::get('/partner-report/dashboard', [\App\Http\Controllers\PartnerReportController::class, 'dashboard']);

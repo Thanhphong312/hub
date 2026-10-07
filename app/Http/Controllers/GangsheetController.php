@@ -79,6 +79,11 @@ class GangsheetController extends Controller
             }
         }
 
+        // Who built the gang (Manage → "Người tạo").
+        if ($request->filled('created_by')) {
+            $query->where('created_by_user_id', (int) $request->created_by);
+        }
+
         // Only gangs with work left. Applied to the QUERY, not the page, so
         // pagination counts what it actually returns.
         if ($request->boolean('unshipped')) {
@@ -151,6 +156,24 @@ class GangsheetController extends Controller
     }
 
     /** Users with the 'partner' role — for the admin "assign to partner" picker. */
+    /**
+     * Everyone who has created a gang on this channel — options for the
+     * Manage tab's "Người tạo" filter.
+     */
+    public function creators(Request $request)
+    {
+        $source = strtolower(trim((string) $request->input('source')));
+        $ids = Gangsheet::query()
+            ->when($source !== 'all', fn ($q) => $q->where('source', Order::normalizeSource($request->input('source'))))
+            ->whereNotNull('created_by_user_id')
+            ->distinct()
+            ->pluck('created_by_user_id');
+
+        return response()->json(
+            User::whereIn('id', $ids)->select('id', 'name', 'email')->orderBy('name')->get()
+        );
+    }
+
     public function partnerUsers()
     {
         return response()->json(

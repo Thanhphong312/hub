@@ -1369,6 +1369,39 @@ class OrderController extends Controller
      * Non-staff users can only target their own orders; orders they don't own
      * are silently skipped and reported in the response.
      */
+    /**
+     * POST /api/orders/bulk-set-source — move orders to another channel
+     * (normal ↔ fpt), i.e. from Order FPT to Orders or back. Staff only.
+     * Only the order's source changes; gangsheets / gangsheet labels already
+     * built keep their own channel.
+     *
+     * Body: { order_ids: int[], source: 'normal'|'fpt' }
+     */
+    public function bulkSetSource(Request $request)
+    {
+        $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer',
+            'source' => 'required|string|in:'.implode(',', Order::SOURCES),
+        ]);
+
+        $source = $request->source;
+        $orders = Order::whereIn('id', $request->order_ids)->get(['id', 'system_id', 'source', 'production']);
+        $toMove = $orders->where('source', '!=', $source);
+
+        $moved = $toMove->isEmpty() ? 0 : Order::whereIn('id', $toMove->pluck('id'))->update(['source' => $source]);
+        $label = $source === Order::SOURCE_FPT ? 'Order FPT' : 'Orders';
+
+        return response()->json([
+            'message' => "Đã chuyển {$moved} đơn sang {$label}"
+                .($orders->count() - $moved > 0 ? ', '.($orders->count() - $moved).' đơn đã ở sẵn đó' : ''),
+            'moved' => $moved,
+            'skipped' => $orders->count() - $moved,
+            // Already in a gangsheet: the gang/label stays in the old channel.
+            'in_production' => $toMove->where('production', true)->pluck('system_id')->values(),
+        ]);
+    }
+
     public function bulkReconvert(Request $request)
     {
         $request->validate([
