@@ -318,6 +318,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Partner assignment (admin assigns gangs to partner users).
         Route::get('/gangsheets/partner-users', [GangsheetController::class, 'partnerUsers']);
         Route::get('/gangsheets/creators', [GangsheetController::class, 'creators']);
+        Route::get('/gangsheets/duplicates', [GangsheetController::class, 'duplicates']);
 
         // Partner reporting: what each partner shipped and what it owes them.
         Route::get('/partner-report/dashboard', [\App\Http\Controllers\PartnerReportController::class, 'dashboard']);
@@ -352,6 +353,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // Re-gang in place: fetch the orders behind a sheet, rebuild, then
         // swap the files on the SAME record (keeps partners, downloaded mark).
         Route::get('/gangsheets/{gangsheet}/rebuild-source', [GangsheetController::class, 'rebuildSource']);
+        Route::post('/gangsheets/{gangsheet}/orders/{order}/unproduce', [GangsheetController::class, 'unproduceOrder']);
+        Route::post('/orders/{order}/unproduce-gang', [GangsheetController::class, 'unproduceOrderEverywhere']);
         Route::put('/gangsheets/{gangsheet}/files', [GangsheetController::class, 'replaceFiles']);
         Route::get('/gangsheets/{gangsheet}', [GangsheetController::class, 'show']);
         Route::delete('/gangsheets/{gangsheet}', [GangsheetController::class, 'destroy']);

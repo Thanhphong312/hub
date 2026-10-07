@@ -4,7 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Models\AppSetting;
 use App\Models\Gangsheet;
+use App\Models\GangsheetLabel;
 use App\Models\Order;
+use App\Models\OrderItem;
+use App\Models\OrderItemMeta;
 use App\Models\PartnerAccessoryPrice;
 use App\Models\PartnerVariantPrice;
 use App\Models\User;
@@ -98,19 +101,20 @@ class GangsheetController extends Controller
 
         $paginated = $query->paginate($request->get('per_page', 20));
 
-        // Duplicate detection: a gang is flagged when it shares an order_id with
-        // another gang (the same order ended up on more than one gangsheet).
+        // Duplicate detection: a gang is flagged when it shares a print with
+        // another gang (see printKeys — the same _qr, or for legacy gangs the
+        // same order, ended up on more than one gangsheet).
         // Cheap to do in PHP across all gangs — there are only a few dozen.
         $orderToGangs = [];
-        foreach (Gangsheet::select('id', 'order_ids')->get() as $g) {
-            foreach (($g->order_ids ?? []) as $oid) {
-                $orderToGangs[(int) $oid][] = $g->id;
+        foreach (Gangsheet::select('id', 'order_ids', 'meta_ids')->get() as $g) {
+            foreach (self::printKeys($g) as $k) {
+                $orderToGangs[$k][] = $g->id;
             }
         }
         $paginated->getCollection()->each(function ($g) use ($orderToGangs) {
             $others = [];
-            foreach (($g->order_ids ?? []) as $oid) {
-                foreach ($orderToGangs[(int) $oid] ?? [] as $gid) {
+            foreach (self::printKeys($g) as $k) {
+                foreach ($orderToGangs[$k] ?? [] as $gid) {
                     if ($gid !== $g->id) {
                         $others[$gid] = true;
                     }
@@ -156,6 +160,101 @@ class GangsheetController extends Controller
     }
 
     /** Users with the 'partner' role — for the admin "assign to partner" picker. */
+    /**
+     * Gangs that share orders, grouped, with a suggested clean-up — the
+     * Manage tab's "Xoá gang trùng" confirm list.
+     *
+     * A group is every gang linked through a shared print (A∩B, B∩C → one
+     * group). Within a group the NEWEST gang is kept, then older gangs are
+     * walked newest-first: one whose prints are ALL already on a kept gang is
+     * suggested for deletion; one that still holds a print nobody else has is
+     * kept too, so deleting the suggestions never leaves a print without a
+     * gang. Nothing is deleted here — the client confirms and calls
+     * bulk-delete.
+     */
+    public function duplicates(Request $request)
+    {
+        $source = strtolower(trim((string) $request->input('source')));
+        $gangs = Gangsheet::with('creator:id,name', 'partners:id,name')
+            ->when($source !== 'all', fn ($q) => $q->where('source', Order::normalizeSource($request->input('source'))))
+            ->orderByDesc('id')
+            ->get(['id', 'filename', 'created_at', 'created_by_user_id', 'orders_count', 'metas_count', 'order_ids', 'meta_ids', 'downloaded_at']);
+
+        // Union-find over gangs sharing a print (printKeys).
+        $parent = [];
+        $find = function ($x) use (&$parent, &$find) {
+            return $parent[$x] === $x ? $x : ($parent[$x] = $find($parent[$x]));
+        };
+        $firstGangOfKey = [];
+        foreach ($gangs as $g) {
+            $parent[$g->id] = $g->id;
+            foreach (self::printKeys($g) as $k) {
+                if (isset($firstGangOfKey[$k])) {
+                    $parent[$find($g->id)] = $find($firstGangOfKey[$k]);
+                } else {
+                    $firstGangOfKey[$k] = $g->id;
+                }
+            }
+        }
+
+        $byRoot = [];
+        foreach ($gangs as $g) {
+            $byRoot[$find($g->id)][] = $g;   // stays newest-first
+        }
+
+        $groups = [];
+        foreach ($byRoot as $members) {
+            if (count($members) < 2) continue;
+
+            $covered = [];   // print keys on a kept gang
+            $rows = [];
+            foreach ($members as $i => $g) {
+                $keys = self::printKeys($g);
+                $uncovered = array_values(array_diff($keys, array_keys($covered)));
+                $delete = $i > 0 && empty($uncovered);
+                if (! $delete) {
+                    foreach ($keys as $k) $covered[$k] = true;
+                }
+                $rows[] = [
+                    'id' => $g->id,
+                    'filename' => $g->filename,
+                    'created_at' => $g->created_at,
+                    'creator' => $g->creator,
+                    'partners' => $g->partners,
+                    'orders_count' => count($g->order_ids ?? []),
+                    'metas_count' => $g->metas_count,
+                    'downloaded_at' => $g->downloaded_at,
+                    // Prints only this gang (among those kept so far) carries.
+                    'unique_prints' => $i === 0 ? count($keys) : count($uncovered),
+                    'total_prints' => count($keys),
+                    'suggest_delete' => $delete,
+                ];
+            }
+            $groups[] = ['gangs' => $rows];
+        }
+
+        return response()->json([
+            'groups' => $groups,
+            'suggested_ids' => collect($groups)->flatMap(fn ($gr) => collect($gr['gangs'])->where('suggest_delete', true)->pluck('id'))->values(),
+        ]);
+    }
+
+    /**
+     * What a gang prints, as comparable keys: its _qr meta ids ("m:123"), or
+     * for legacy gangs recorded without meta_ids its order ids ("o:45").
+     * Compared by _qr rather than by order because a Sticker Sheet order with
+     * quantity 2 is legitimately split across two gangs, one _qr each.
+     */
+    private static function printKeys($g): array
+    {
+        $metaIds = $g->meta_ids ?? [];
+        if (! empty($metaIds)) {
+            return array_values(array_unique(array_map(fn ($id) => 'm:'.(int) $id, $metaIds)));
+        }
+
+        return array_values(array_unique(array_map(fn ($id) => 'o:'.(int) $id, $g->order_ids ?? [])));
+    }
+
     /**
      * Everyone who has created a gang on this channel — options for the
      * Manage tab's "Người tạo" filter.
@@ -431,6 +530,96 @@ class GangsheetController extends Controller
             'gangsheet' => $gangsheet,
             'orders' => $orders,
         ]);
+    }
+
+    /**
+     * "Xoá production" for one order of a gang (Manage → gang detail).
+     *
+     * The order goes back to the gang queue: its _qr metas printed by THIS gang
+     * (all its _qr when the gang predates meta_ids) and the order itself are
+     * set production=false, and the order is taken off the gang and its label
+     * so a re-gang does not show it twice. _qr printed by other gangs (e.g. a
+     * Sticker Sheet's second copy) are left alone. The gang's PDF still holds
+     * the page until it is rebuilt.
+     */
+    public function unproduceOrder(Gangsheet $gangsheet, Order $order)
+    {
+        $orderIds = array_map('intval', $gangsheet->order_ids ?? []);
+        if (! in_array($order->id, $orderIds, true)) {
+            return response()->json(['message' => "Đơn {$order->system_id} không nằm trong gang này"], 422);
+        }
+
+        return DB::transaction(function () use ($gangsheet, $order, $orderIds) {
+            $itemIds = OrderItem::where('order_id', $order->id)->pluck('id');
+            $orderQr = OrderItemMeta::whereIn('order_item_id', $itemIds)
+                ->where('key', 'regexp', self::QR_KEY_REGEX);
+
+            $gangMetaIds = array_map('intval', $gangsheet->meta_ids ?? []);
+            $metaIds = empty($gangMetaIds)
+                ? (clone $orderQr)->pluck('id')->all()
+                : (clone $orderQr)->whereIn('id', $gangMetaIds)->pluck('id')->all();
+
+            $metasReset = empty($metaIds) ? 0
+                : OrderItemMeta::whereIn('id', $metaIds)->update(['production' => false]);
+            $order->update(['production' => false]);
+
+            $leftOrders = array_values(array_diff($orderIds, [$order->id]));
+            $leftMetas = array_values(array_diff($gangMetaIds, $metaIds));
+            $gangsheet->update([
+                'order_ids' => $leftOrders,
+                'meta_ids' => $leftMetas,
+                'orders_count' => count($leftOrders),
+                'metas_count' => empty($gangMetaIds) ? max(0, (int) $gangsheet->metas_count - count($metaIds)) : count($leftMetas),
+            ]);
+
+            foreach (GangsheetLabel::where('gangsheet_id', $gangsheet->id)->get() as $label) {
+                $ids = array_values(array_diff(array_map('intval', $label->order_ids ?? []), [$order->id]));
+                $label->update([
+                    'order_ids' => $ids,
+                    'orders_count' => count($ids),
+                    'total_items_qty' => empty($ids) ? 0 : (int) OrderItem::whereIn('order_id', $ids)->sum('quantity'),
+                ]);
+            }
+
+            return response()->json([
+                'message' => "Đã xoá production {$order->system_id}: {$metasReset} _qr về hàng chờ, gỡ khỏi gang",
+                'metas_reset' => $metasReset,
+                'gangsheet' => $gangsheet->fresh(),
+            ]);
+        });
+    }
+
+    /**
+     * Same "Xoá production" from the Orders screen, for one order: taken off
+     * EVERY gang that holds it (same per-gang rules as unproduceOrder), then
+     * the order and all of its _qr are production=false so the whole order is
+     * back in the gang queue.
+     */
+    public function unproduceOrderEverywhere(Order $order)
+    {
+        return DB::transaction(function () use ($order) {
+            $gangs = Gangsheet::whereRaw('JSON_CONTAINS(order_ids, ?)', [(string) $order->id])->get();
+            $names = [];
+            foreach ($gangs as $g) {
+                $this->unproduceOrder($g, $order);
+                $names[] = $g->filename;
+            }
+
+            $itemIds = OrderItem::where('order_id', $order->id)->pluck('id');
+            $metasReset = OrderItemMeta::whereIn('order_item_id', $itemIds)
+                ->where('key', 'regexp', self::QR_KEY_REGEX)
+                ->where('production', true)
+                ->update(['production' => false]);
+            $order->update(['production' => false]);
+
+            return response()->json([
+                'message' => $gangs->isEmpty()
+                    ? "Đã xoá production {$order->system_id} (không nằm trong gang nào)"
+                    : "Đã xoá production {$order->system_id}, gỡ khỏi {$gangs->count()} gang",
+                'gangs' => $names,
+                'metas_reset' => $metasReset,
+            ]);
+        });
     }
 
     /**
