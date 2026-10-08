@@ -457,6 +457,8 @@ class StickerSheetController extends Controller
             'status' => $ms->first()->order?->status,
             'sheets' => $ms->sum($qty),
             'partner' => $ms->first()->order?->partner?->only(['id', 'name']),
+            // Lets the app gang / hand off just the orders a search matched.
+            'analysis_ids' => $ms->pluck('id')->values()->all(),
         ] + $ganged($ms);
         $singleIds = $sheetsOf->filter(fn ($n) => $n === 1)->keys();
         $multiIds = $sheetsOf->filter(fn ($n) => $n >= 2)->keys();
