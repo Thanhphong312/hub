@@ -345,9 +345,9 @@ class StickerSheetController extends Controller
      * template — a cluster of look-alike sheets ("Chưa có mẫu #n"). Then:
      *   single  orders printing exactly ONE sheet, grouped by design, each
      *           group with its system IDs;
-     *   multi   orders printing 2+ sheets. One order can mix designs, so each
-     *           order is broken into design × sheets, and orders with the
-     *           same mix ("A ×1 + B ×2") are listed together.
+     *   multi   orders printing 2+ sheets, one entry per order. An order can
+     *           mix designs, so each lists design × sheets; design_options
+     *           (every design in a multi order) feeds the app's filter.
      * `statuses` picks the order statuses; without it every open order (not
      * shipped / cancelled).
      */
@@ -435,7 +435,8 @@ class StickerSheetController extends Controller
 
         $groups = [];
         $unmatched = [];
-        $combos = [];
+        $multiOrders = [];
+        $designOptions = [];
         if ($mode === 'single') {
             $singleRows = $rows->whereIn('order_id', $singleIds);
             foreach ($singleRows->groupBy(fn ($a) => $designOf[$a->id]) as $key => $ms) {
@@ -450,7 +451,7 @@ class StickerSheetController extends Controller
             usort($groups, fn ($x, $y) => $y['sheets'] <=> $x['sheets']);
             usort($unmatched, fn ($x, $y) => $y['sheets'] <=> $x['sheets']);
         } else {
-            $bySig = [];
+            // One entry per order: what it prints, design × sheets.
             foreach ($multiIds as $oid) {
                 $ms = $byOrder[$oid];
                 $parts = [];
@@ -458,22 +459,33 @@ class StickerSheetController extends Controller
                     $k = $designOf[$a->id];
                     $parts[$k] = ($parts[$k] ?? 0) + $qty($a);
                 }
-                ksort($parts);
-                $sig = implode('+', array_map(fn ($k, $n) => "{$k}x{$n}", array_keys($parts), $parts));
-                $bySig[$sig]['parts'] ??= collect($parts)->map(fn ($n, $k) => $designs[$k] + ['qty' => $n])->values()->all();
-                $bySig[$sig]['orders'][] = $orderInfo($ms);
-            }
-            foreach ($bySig as $sig => $c) {
-                usort($c['parts'], fn ($x, $y) => $y['qty'] <=> $x['qty']);
-                $combos[] = [
-                    'signature' => $sig,
-                    'parts' => $c['parts'],
-                    'orders' => $c['orders'],
-                    'orders_count' => count($c['orders']),
-                    'sheets' => array_sum(array_column($c['orders'], 'sheets')),
+                arsort($parts);
+                $multiOrders[] = $orderInfo($ms) + [
+                    'parts' => collect($parts)->map(fn ($n, $k) => array_diff_key($designs[$k], ['analysis_ids' => 1]) + ['qty' => $n])->values()->all(),
                 ];
             }
-            usort($combos, fn ($x, $y) => [$y['orders_count'], $y['sheets']] <=> [$x['orders_count'], $x['sheets']]);
+            usort($multiOrders, fn ($x, $y) => $y['order_id'] <=> $x['order_id']);
+
+            // Filter options: every design present in a multi order.
+            $count = [];
+            foreach ($multiOrders as $o) {
+                foreach ($o['parts'] as $part) {
+                    $count[$part['key']]['orders'] = ($count[$part['key']]['orders'] ?? 0) + 1;
+                    $count[$part['key']]['sheets'] = ($count[$part['key']]['sheets'] ?? 0) + $part['qty'];
+                }
+            }
+            foreach ($count as $k => $c) {
+                $designOptions[] = [
+                    'key' => $k,
+                    'label' => $designs[$k]['label'],
+                    'is_template' => (bool) $designs[$k]['template'],
+                    'orders' => $c['orders'],
+                    'sheets' => $c['sheets'],
+                ];
+            }
+            // Templates first (by name), then the look-alike clusters in number order.
+            usort($designOptions, fn ($x, $y) => [! $x['is_template'], $x['is_template'] ? $x['label'] : (int) substr($x['key'], 1)]
+                <=> [! $y['is_template'], $y['is_template'] ? $y['label'] : (int) substr($y['key'], 1)]);
         }
 
         // Designs in scope nobody has analysed yet.
@@ -488,7 +500,8 @@ class StickerSheetController extends Controller
             'mode' => $mode,
             'groups' => $groups,
             'unmatched' => $unmatched,
-            'combos' => $combos,
+            'orders' => $multiOrders,
+            'design_options' => $designOptions,
             'not_analysed' => $notAnalysed,
             'counts' => ['single' => $singleIds->count(), 'multi' => $multiIds->count()],
             'totals' => [
