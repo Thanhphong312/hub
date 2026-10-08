@@ -328,6 +328,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/sticker-sheets/analyses/{analysis}', [\App\Http\Controllers\StickerSheetController::class, 'update']);
         Route::get('/sticker-sheets/groups', [\App\Http\Controllers\StickerSheetController::class, 'groups']);
         Route::get('/sticker-sheets/summary', [\App\Http\Controllers\StickerSheetController::class, 'summary']);
+        Route::post('/sticker-sheets/gang-source', [\App\Http\Controllers\StickerSheetController::class, 'gangSource']);
         Route::get('/sticker-templates', [\App\Http\Controllers\StickerSheetController::class, 'templates']);
         Route::post('/sticker-templates', [\App\Http\Controllers\StickerSheetController::class, 'storeTemplate']);
         Route::post('/sticker-templates/rematch', [\App\Http\Controllers\StickerSheetController::class, 'rematch']);

@@ -16,6 +16,7 @@ class Gangsheet extends Model
         'line_id',
         'source',
         'page_format',
+        'sticker_template_id',
         'first_system_id',
         'last_system_id',
         'orders_count',
@@ -25,6 +26,11 @@ class Gangsheet extends Model
         'downloaded_at',
         'downloaded_by_user_id',
     ];
+
+    public function stickerTemplate()
+    {
+        return $this->belongsTo(StickerTemplate::class);
+    }
 
     protected function casts(): array
     {

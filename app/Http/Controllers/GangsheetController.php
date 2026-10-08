@@ -21,7 +21,7 @@ class GangsheetController extends Controller
 
     public function index(Request $request)
     {
-        $query = Gangsheet::with('creator:id,name', 'partners:id,name', 'downloadedBy:id,name')->orderBy('id', 'desc');
+        $query = Gangsheet::with('creator:id,name', 'partners:id,name', 'downloadedBy:id,name', 'stickerTemplate:id,name')->orderBy('id', 'desc');
 
         // Channel scope. Gangs written before the column existed default to
         // 'normal', so the normal screen keeps listing everything it used to.
@@ -85,6 +85,11 @@ class GangsheetController extends Controller
         // Who built the gang (Manage → "Người tạo").
         if ($request->filled('created_by')) {
             $query->where('created_by_user_id', (int) $request->created_by);
+        }
+
+        // Sticker Sheet template of the gang's _qr (Manage → "Mẫu sticker").
+        if ($request->filled('sticker_template_id')) {
+            $query->where('sticker_template_id', (int) $request->sticker_template_id);
         }
 
         // Only gangs with work left. Applied to the QUERY, not the page, so

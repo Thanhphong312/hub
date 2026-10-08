@@ -209,6 +209,7 @@ class StickerSheetController extends Controller
 
         // The same files on other orders take this result without analysing.
         $copied = self::reuseSameLinks();
+        StickerSheetAnalysis::syncGangTemplates();
 
         return response()->json([
             'message' => "Đã lưu {$saved} phân tích, {$matched} khớp mẫu".($copied ? ", chép sang {$copied} sheet cùng link" : ''),
@@ -288,6 +289,7 @@ class StickerSheetController extends Controller
                 : null;
         }
         $same = StickerSheetAnalysis::where('design_key', $analysis->design_key)->update($changes);
+        if (array_key_exists('template_id', $data)) StickerSheetAnalysis::syncGangTemplates();
 
         return response()->json([
             'analysis' => $analysis->fresh()->load('template:id,name,sticker_count'),
@@ -441,7 +443,7 @@ class StickerSheetController extends Controller
             $singleRows = $rows->whereIn('order_id', $singleIds);
             foreach ($singleRows->groupBy(fn ($a) => $designOf[$a->id]) as $key => $ms) {
                 $orders = $ms->groupBy('order_id')->map($orderInfo)->values();
-                $g = $designs[$key] + [
+                $g = ['analysis_ids' => $ms->pluck('id')->values()->all()] + $designs[$key] + [
                     'orders' => $orders,
                     'orders_count' => $orders->count(),
                     'sheets' => $orders->sum('sheets'),
@@ -455,13 +457,15 @@ class StickerSheetController extends Controller
             foreach ($multiIds as $oid) {
                 $ms = $byOrder[$oid];
                 $parts = [];
+                $partIds = [];
                 foreach ($ms as $a) {
                     $k = $designOf[$a->id];
                     $parts[$k] = ($parts[$k] ?? 0) + $qty($a);
+                    $partIds[$k][] = $a->id;
                 }
                 arsort($parts);
                 $multiOrders[] = $orderInfo($ms) + [
-                    'parts' => collect($parts)->map(fn ($n, $k) => array_diff_key($designs[$k], ['analysis_ids' => 1]) + ['qty' => $n])->values()->all(),
+                    'parts' => collect($parts)->map(fn ($n, $k) => ['analysis_ids' => $partIds[$k]] + array_diff_key($designs[$k], ['analysis_ids' => 1]) + ['qty' => $n])->values()->all(),
                 ];
             }
             usort($multiOrders, fn ($x, $y) => $y['order_id'] <=> $x['order_id']);
@@ -478,6 +482,7 @@ class StickerSheetController extends Controller
                 $designOptions[] = [
                     'key' => $k,
                     'label' => $designs[$k]['label'],
+                    'sample_url' => $designs[$k]['sample_url'],
                     'is_template' => (bool) $designs[$k]['template'],
                     'orders' => $c['orders'],
                     'sheets' => $c['sheets'],
@@ -509,6 +514,61 @@ class StickerSheetController extends Controller
                 'sheets' => $sheetsOf->only($ids->all())->sum(),
             ],
         ]);
+    }
+
+    /**
+     * POST /sticker-sheets/gang-source  { analysis_ids: [...] }
+     * Orders to gang for these designs, shaped like /gangsheets/pending-orders
+     * so the desktop builder takes them as-is — but each item keeps ONLY the
+     * unproduced _qr of the analysed designs (front → front_qr_1, front_qr_2…).
+     * Shipped / cancelled orders are left out. `skipped` lists designs with no
+     * _qr left to gang (not converted yet, or already on a gang).
+     */
+    public function gangSource(Request $request)
+    {
+        $data = $request->validate([
+            'analysis_ids' => 'required|array|min:1',
+            'analysis_ids.*' => 'integer',
+        ]);
+        $analyses = StickerSheetAnalysis::with('order:id,system_id,status')
+            ->whereIn('id', $data['analysis_ids'])->get();
+        $closed = [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED];
+        $analyses = $analyses->filter(fn ($a) => $a->order && ! in_array($a->order->status, $closed, true));
+
+        $wanted = [];   // item id → [source key…]
+        foreach ($analyses as $a) $wanted[$a->order_item_id][] = $a->meta_key;
+
+        $orders = Order::with([
+            'items.metas' => fn ($q) => $q->where('key', 'regexp', '_qr(_[0-9]+)?$')->where('production', false),
+            'items.productVariant.product:id,name,line_id,order_type',
+            'items.material:id,name',
+            'items.accessoryPrice.accessory:id,name,product_id,gangsheet_split',
+            'items.accessoryPrices.accessory:id,name,product_id,gangsheet_split',
+        ])->whereIn('id', $analyses->pluck('order_id')->unique())->orderBy('id')->get();
+
+        $ready = [];
+        $found = [];   // "item:key" that has a _qr to gang
+        foreach ($orders as $o) {
+            $items = $o->items->filter(fn ($it) => isset($wanted[$it->id]))->values();
+            foreach ($items as $it) {
+                $keep = $it->metas->filter(function ($m) use ($wanted, $it, &$found) {
+                    if (! preg_match('/^(.+)_qr(_\d+)?$/', $m->key, $mm) || ! in_array($mm[1], $wanted[$it->id], true)) return false;
+                    $found[$it->id.':'.$mm[1]] = true;
+
+                    return true;
+                })->values();
+                $it->setRelation('metas', $keep);
+            }
+            $items = $items->filter(fn ($it) => $it->metas->isNotEmpty())->values();
+            if ($items->isEmpty()) continue;
+            $o->setRelation('items', $items);
+            $ready[] = $o;
+        }
+
+        $skipped = $analyses->reject(fn ($a) => isset($found[$a->order_item_id.':'.$a->meta_key]))
+            ->map(fn ($a) => $a->order->system_id)->unique()->values();
+
+        return response()->json(['orders' => $ready, 'skipped' => $skipped]);
     }
 
     // ---------------------------------------------------------------- templates
@@ -563,6 +623,7 @@ class StickerSheetController extends Controller
                 ]);
             }
             $auto = self::rematchUnmatched();
+            StickerSheetAnalysis::syncGangTemplates();
 
             return response()->json([
                 'message' => "Đã lưu mẫu \"{$template->name}\"",
@@ -598,6 +659,7 @@ class StickerSheetController extends Controller
     public function rematch()
     {
         $n = self::rematchUnmatched();
+        StickerSheetAnalysis::syncGangTemplates();
 
         return response()->json(['message' => "Khớp thêm {$n} sheet vào mẫu", 'matched' => $n]);
     }
