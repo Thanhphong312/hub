@@ -378,7 +378,8 @@ class StickerSheetController extends Controller
 
         $rows = StickerSheetAnalysis::with([
             'template:id,name,sticker_count,sample_url,note',
-            'order:id,system_id,status,created_at',
+            'order:id,system_id,status,created_at,partner_id',
+            'order.partner:id,name',
             'orderItem:id,quantity',
         ])->whereHas('order', $inScope)
             ->orderBy('order_id')->get();
@@ -455,6 +456,7 @@ class StickerSheetController extends Controller
             'system_id' => $ms->first()->order?->system_id,
             'status' => $ms->first()->order?->status,
             'sheets' => $ms->sum($qty),
+            'partner' => $ms->first()->order?->partner?->only(['id', 'name']),
         ] + $ganged($ms);
         $singleIds = $sheetsOf->filter(fn ($n) => $n === 1)->keys();
         $multiIds = $sheetsOf->filter(fn ($n) => $n >= 2)->keys();
@@ -598,6 +600,62 @@ class StickerSheetController extends Controller
             ->map(fn ($a) => $a->order->system_id)->unique()->values();
 
         return response()->json(['orders' => $ready, 'skipped' => $skipped]);
+    }
+
+    /**
+     * POST /sticker-sheets/assign-partner  { analysis_ids, user_ids }
+     * Hand the gangs already made for these designs to partner(s): every
+     * Sticker Sheet gang holding one of their _qr goes through the same
+     * setPartners as the Gangsheet screen (one partner also stamps the orders'
+     * partner_id; none takes them back). Designs not ganged yet are skipped.
+     */
+    public function assignPartner(Request $request)
+    {
+        $data = $request->validate([
+            'analysis_ids' => 'required|array|min:1',
+            'analysis_ids.*' => 'integer',
+            'user_ids' => 'present|array',
+            'user_ids.*' => 'integer|exists:users,id',
+        ]);
+
+        $want = [];   // "item:source"
+        foreach (StickerSheetAnalysis::whereIn('id', $data['analysis_ids'])->get(['order_item_id', 'meta_key']) as $a) {
+            $want[$a->order_item_id.':'.$a->meta_key] = true;
+        }
+        $items = array_unique(array_map(fn ($k) => (int) explode(':', $k)[0], array_keys($want)));
+        $qrIds = [];
+        foreach (OrderItemMeta::whereIn('order_item_id', $items)->where('key', 'regexp', '_qr(_[0-9]+)?$')
+            ->get(['id', 'order_item_id', 'key']) as $m) {
+            if (preg_match('/^(.+)_qr(_\d+)?$/', $m->key, $mm) && isset($want[$m->order_item_id.':'.$mm[1]])) {
+                $qrIds[$m->id] = true;
+            }
+        }
+
+        $gangs = \App\Models\Gangsheet::where('page_format', 'native')->get(['id', 'meta_ids', 'order_ids'])
+            ->filter(fn ($g) => collect($g->meta_ids ?? [])->contains(fn ($id) => isset($qrIds[(int) $id])));
+
+        $assigned = 0;
+        $locked = 0;
+        $gangCtl = app(GangsheetController::class);
+        foreach ($gangs as $g) {
+            $res = json_decode($gangCtl->setPartners(new Request(['user_ids' => $data['user_ids']]), $g)->getContent(), true);
+            $assigned += (int) ($res['orders_assigned'] ?? 0) + (int) ($res['orders_cleared'] ?? 0);
+            $locked += (int) ($res['orders_skipped_locked'] ?? 0);
+        }
+
+        $who = $data['user_ids']
+            ? \App\Models\User::whereIn('id', $data['user_ids'])->pluck('name')->implode(', ')
+            : null;
+
+        return response()->json([
+            'message' => $gangs->isEmpty()
+                ? 'Các đơn này chưa có gang nào để chia'
+                : ($who ? "Đã chia {$gangs->count()} gang cho {$who}" : "Đã gỡ partner khỏi {$gangs->count()} gang")
+                    .($locked ? " · {$locked} đơn đã chốt giữ nguyên partner" : ''),
+            'gangs' => $gangs->count(),
+            'orders' => $assigned,
+            'locked' => $locked,
+        ]);
     }
 
     // ------------------------------------------------------- partner app (read)
