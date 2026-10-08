@@ -320,6 +320,20 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/gangsheets/creators', [GangsheetController::class, 'creators']);
         Route::get('/gangsheets/duplicates', [GangsheetController::class, 'duplicates']);
 
+        // Sticker Sheet analysis + templates (bullstart-app "Sticker Sheet" menu).
+        Route::get('/sticker-sheets/pending', [\App\Http\Controllers\StickerSheetController::class, 'pending']);
+        Route::get('/sticker-sheets/analyses', [\App\Http\Controllers\StickerSheetController::class, 'index']);
+        Route::post('/sticker-sheets/analyses', [\App\Http\Controllers\StickerSheetController::class, 'store']);
+        Route::get('/sticker-sheets/analyses/{analysis}', [\App\Http\Controllers\StickerSheetController::class, 'show']);
+        Route::put('/sticker-sheets/analyses/{analysis}', [\App\Http\Controllers\StickerSheetController::class, 'update']);
+        Route::get('/sticker-sheets/groups', [\App\Http\Controllers\StickerSheetController::class, 'groups']);
+        Route::get('/sticker-sheets/summary', [\App\Http\Controllers\StickerSheetController::class, 'summary']);
+        Route::get('/sticker-templates', [\App\Http\Controllers\StickerSheetController::class, 'templates']);
+        Route::post('/sticker-templates', [\App\Http\Controllers\StickerSheetController::class, 'storeTemplate']);
+        Route::post('/sticker-templates/rematch', [\App\Http\Controllers\StickerSheetController::class, 'rematch']);
+        Route::put('/sticker-templates/{template}', [\App\Http\Controllers\StickerSheetController::class, 'updateTemplate']);
+        Route::delete('/sticker-templates/{template}', [\App\Http\Controllers\StickerSheetController::class, 'destroyTemplate']);
+
         // Partner reporting: what each partner shipped and what it owes them.
         Route::get('/partner-report/dashboard', [\App\Http\Controllers\PartnerReportController::class, 'dashboard']);
         Route::get('/partner-report/{partner}/orders', [\App\Http\Controllers\PartnerReportController::class, 'orders']);
