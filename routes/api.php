@@ -431,6 +431,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/storage-credentials', [PartnerController::class, 'storageCredentials']);
         Route::post('/gangsheets', [PartnerController::class, 'storeGangsheet']);
         Route::post('/orders/reconvert', [PartnerController::class, 'reconvert']);
+        // Sticker Sheet: summary + gang source over the partner's own orders,
+        // and the templates for filters. Analysis / templates stay staff-only.
+        Route::get('/sticker-templates', [\App\Http\Controllers\StickerSheetController::class, 'partnerTemplates']);
+        Route::get('/sticker-sheets/summary', [\App\Http\Controllers\StickerSheetController::class, 'partnerSummary']);
+        Route::post('/sticker-sheets/gang-source', [\App\Http\Controllers\StickerSheetController::class, 'partnerGangSource']);
     });
 
     // VNPay (authenticated — seller initiates a deposit)

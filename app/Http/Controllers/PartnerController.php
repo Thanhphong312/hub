@@ -172,7 +172,7 @@ class PartnerController extends Controller
     public function gangsheets(Request $request)
     {
         $query = $request->user()->assignedGangsheets()
-            ->with('creator:id,name')
+            ->with('creator:id,name', 'stickerTemplate:id,name')
             ->orderBy('gangsheets.id', 'desc');
 
         // Channel scope, same rule as the admin list: no param means 'normal',
@@ -197,6 +197,11 @@ class PartnerController extends Controller
             } else {
                 $query->where('gangsheets.page_format', $request->page_format);
             }
+        }
+
+        // Sticker Sheet template of the gang's _qr.
+        if ($request->filled('sticker_template_id')) {
+            $query->where('gangsheets.sticker_template_id', (int) $request->sticker_template_id);
         }
 
         // Only gangs with work left — same filter as the admin list.

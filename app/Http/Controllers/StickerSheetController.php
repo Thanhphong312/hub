@@ -30,6 +30,13 @@ class StickerSheetController extends Controller
      */
     public const MATCH_MAX = 24;
 
+    /**
+     * Partner app scope: when set, summary / gang-source only see orders
+     * handed to this partner (orders.partner_id). Set by the partner* entry
+     * points below; null for staff.
+     */
+    private ?int $partnerId = null;
+
     /** order_type labels whose convert layout is Sticker Sheet. */
     private static function stickerOrderTypes(): array
     {
@@ -363,9 +370,11 @@ class StickerSheetController extends Controller
         self::reuseSameLinks();
         $mode = $request->input('mode', 'single');
         $statuses = array_map('intval', $request->input('statuses', []));
-        $inScope = fn ($o) => $statuses
+        $pid = $this->partnerId;
+        $inScope = fn ($o) => ($statuses
             ? $o->whereIn('status', $statuses)
-            : $o->whereNotIn('status', [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED]);
+            : $o->whereNotIn('status', [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED]))
+            ->when($pid, fn ($q) => $q->where('partner_id', $pid));
 
         $rows = StickerSheetAnalysis::with([
             'template:id,name,sticker_count,sample_url,note',
@@ -424,6 +433,21 @@ class StickerSheetController extends Controller
         }
 
         // --- single vs multi by sheets per order.
+        // Ganged or not: each design's _qr (front → front_qr_1, front_qr_2…)
+        // and how many are production (= put on a gang).
+        $qrStat = [];   // "item:source" → [total, ganged]
+        foreach (OrderItemMeta::whereIn('order_item_id', $rows->pluck('order_item_id')->unique())
+            ->where('key', 'regexp', '_qr(_[0-9]+)?$')->get(['order_item_id', 'key', 'production']) as $m) {
+            if (! preg_match('/^(.+)_qr(_\d+)?$/', $m->key, $mm)) continue;
+            $k = $m->order_item_id.':'.$mm[1];
+            $qrStat[$k][0] = ($qrStat[$k][0] ?? 0) + 1;
+            $qrStat[$k][1] = ($qrStat[$k][1] ?? 0) + ($m->production ? 1 : 0);
+        }
+        $ganged = fn ($ms) => [
+            'qr_total' => $ms->sum(fn ($a) => $qrStat[$a->order_item_id.':'.$a->meta_key][0] ?? 0),
+            'qr_ganged' => $ms->sum(fn ($a) => $qrStat[$a->order_item_id.':'.$a->meta_key][1] ?? 0),
+        ];
+
         $byOrder = $rows->groupBy('order_id');
         $sheetsOf = $byOrder->map(fn ($ms) => $ms->sum($qty));
         $orderInfo = fn ($ms) => [
@@ -431,7 +455,7 @@ class StickerSheetController extends Controller
             'system_id' => $ms->first()->order?->system_id,
             'status' => $ms->first()->order?->status,
             'sheets' => $ms->sum($qty),
-        ];
+        ] + $ganged($ms);
         $singleIds = $sheetsOf->filter(fn ($n) => $n === 1)->keys();
         $multiIds = $sheetsOf->filter(fn ($n) => $n >= 2)->keys();
 
@@ -447,6 +471,7 @@ class StickerSheetController extends Controller
                     'orders' => $orders,
                     'orders_count' => $orders->count(),
                     'sheets' => $orders->sum('sheets'),
+                    'orders_ganged' => $orders->filter(fn ($o) => $o['qr_total'] > 0 && $o['qr_ganged'] >= $o['qr_total'])->count(),
                 ];
                 if ($g['template']) $groups[] = $g; else $unmatched[] = $g;
             }
@@ -457,15 +482,17 @@ class StickerSheetController extends Controller
             foreach ($multiIds as $oid) {
                 $ms = $byOrder[$oid];
                 $parts = [];
-                $partIds = [];
+                $partRows = [];
                 foreach ($ms as $a) {
                     $k = $designOf[$a->id];
                     $parts[$k] = ($parts[$k] ?? 0) + $qty($a);
-                    $partIds[$k][] = $a->id;
+                    $partRows[$k][] = $a;
                 }
                 arsort($parts);
                 $multiOrders[] = $orderInfo($ms) + [
-                    'parts' => collect($parts)->map(fn ($n, $k) => ['analysis_ids' => $partIds[$k]] + array_diff_key($designs[$k], ['analysis_ids' => 1]) + ['qty' => $n])->values()->all(),
+                    'parts' => collect($parts)->map(fn ($n, $k) => ['analysis_ids' => array_map(fn ($a) => $a->id, $partRows[$k])]
+                        + array_diff_key($designs[$k], ['analysis_ids' => 1])
+                        + ['qty' => $n] + $ganged(collect($partRows[$k])))->values()->all(),
                 ];
             }
             usort($multiOrders, fn ($x, $y) => $y['order_id'] <=> $x['order_id']);
@@ -530,10 +557,12 @@ class StickerSheetController extends Controller
             'analysis_ids' => 'required|array|min:1',
             'analysis_ids.*' => 'integer',
         ]);
-        $analyses = StickerSheetAnalysis::with('order:id,system_id,status')
+        $analyses = StickerSheetAnalysis::with('order:id,system_id,status,partner_id')
             ->whereIn('id', $data['analysis_ids'])->get();
         $closed = [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED];
-        $analyses = $analyses->filter(fn ($a) => $a->order && ! in_array($a->order->status, $closed, true));
+        $pid = $this->partnerId;
+        $analyses = $analyses->filter(fn ($a) => $a->order && ! in_array($a->order->status, $closed, true)
+            && (! $pid || (int) $a->order->partner_id === $pid));
 
         $wanted = [];   // item id → [source key…]
         foreach ($analyses as $a) $wanted[$a->order_item_id][] = $a->meta_key;
@@ -569,6 +598,39 @@ class StickerSheetController extends Controller
             ->map(fn ($a) => $a->order->system_id)->unique()->values();
 
         return response()->json(['orders' => $ready, 'skipped' => $skipped]);
+    }
+
+    // ------------------------------------------------------- partner app (read)
+
+    /** Partner role → scope to their orders; admin testing the partner app sees all. */
+    private function scopeToPartner(Request $request): void
+    {
+        $u = $request->user();
+        $this->partnerId = ($u && $u->role?->slug === 'partner') ? (int) $u->id : null;
+    }
+
+    /** GET /partner/sticker-sheets/summary — same as summary, partner's orders only. */
+    public function partnerSummary(Request $request)
+    {
+        $this->scopeToPartner($request);
+
+        return $this->summary($request);
+    }
+
+    /** POST /partner/sticker-sheets/gang-source — same as gangSource, partner's orders only. */
+    public function partnerGangSource(Request $request)
+    {
+        $this->scopeToPartner($request);
+
+        return $this->gangSource($request);
+    }
+
+    /** GET /partner/sticker-templates — templates for the partner app's filters. */
+    public function partnerTemplates()
+    {
+        return response()->json(
+            StickerTemplate::orderBy('name')->get(['id', 'name', 'sticker_count', 'sample_url', 'note'])
+        );
     }
 
     // ---------------------------------------------------------------- templates
