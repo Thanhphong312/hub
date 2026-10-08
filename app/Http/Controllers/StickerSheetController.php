@@ -339,56 +339,60 @@ class StickerSheetController extends Controller
     }
 
     /**
-     * GET /sticker-sheets/summary
-     * Open orders (not shipped / cancelled) grouped by the sheet they print:
-     * one group per template, then designs on no template clustered by
-     * fingerprint. Each group lists its system IDs so the batch can be pulled.
+     * GET /sticker-sheets/summary?mode=single|multi&statuses[]=…
+     *
+     * Every analysed sheet first gets a DESIGN: its template, or — on no
+     * template — a cluster of look-alike sheets ("Chưa có mẫu #n"). Then:
+     *   single  orders printing exactly ONE sheet, grouped by design, each
+     *           group with its system IDs;
+     *   multi   orders printing 2+ sheets. One order can mix designs, so each
+     *           order is broken into design × sheets, and orders with the
+     *           same mix ("A ×1 + B ×2") are listed together.
+     * `statuses` picks the order statuses; without it every open order (not
+     * shipped / cancelled).
      */
-    public function summary()
+    public function summary(Request $request)
     {
+        $request->validate([
+            'mode' => 'nullable|in:single,multi',
+            'statuses' => 'nullable|array',
+            'statuses.*' => 'integer|in:'.implode(',', array_keys(Order::STATUS_MAP)),
+        ]);
         self::reuseSameLinks();
-        $closed = [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED];
+        $mode = $request->input('mode', 'single');
+        $statuses = array_map('intval', $request->input('statuses', []));
+        $inScope = fn ($o) => $statuses
+            ? $o->whereIn('status', $statuses)
+            : $o->whereNotIn('status', [Order::STATUS_SHIPPED, Order::STATUS_CANCELLED]);
 
         $rows = StickerSheetAnalysis::with([
             'template:id,name,sticker_count,sample_url,note',
             'order:id,system_id,status,created_at',
             'orderItem:id,quantity',
-        ])->whereHas('order', fn ($o) => $o->whereNotIn('status', $closed))
+        ])->whereHas('order', $inScope)
             ->orderBy('order_id')->get();
+        $qty = fn ($a) => max(1, (int) ($a->orderItem?->quantity ?? 1));
 
-        $pack = function ($members, $template) {
-            $members = collect($members);
-            $first = $members->first();
-            $orders = $members->groupBy('order_id')->map(fn ($ms) => [
-                'order_id' => $ms->first()->order_id,
-                'system_id' => $ms->first()->order?->system_id,
-                'status' => $ms->first()->order?->status,
-                'sheets' => $ms->sum(fn ($a) => max(1, (int) ($a->orderItem?->quantity ?? 1))),
-            ])->values();
-
-            return [
-                'template' => $template ? $template->only(['id', 'name', 'sticker_count', 'note']) : null,
-                'sample_url' => $template?->sample_url ?: $first->source_url,
-                'sample_analysis_id' => $first->id,
-                'sticker_count' => $template?->sticker_count ?? (int) $members->pluck('sticker_count')->countBy()->sortDesc()->keys()->first(),
-                'orders' => $orders,
-                'orders_count' => $orders->count(),
-                'sheets' => $orders->sum('sheets'),
-                'analysis_ids' => $members->pluck('id')->values(),
+        // --- design of every row: template, or a look-alike cluster.
+        $designOf = [];   // analysis id → design key
+        $designs = [];    // key → info
+        foreach ($rows->whereNotNull('template_id')->groupBy('template_id') as $tid => $ms) {
+            $t = $ms->first()->template;
+            $designs["t{$tid}"] = [
+                'key' => "t{$tid}",
+                'template' => $t->only(['id', 'name', 'sticker_count', 'note']),
+                'label' => $t->name,
+                'sample_url' => $t->sample_url ?: $ms->first()->source_url,
+                'sample_analysis_id' => $ms->first()->id,
+                'sticker_count' => $t->sticker_count,
+                'analysis_ids' => $ms->pluck('id')->values()->all(),
             ];
-        };
-
-        $groups = [];
-        foreach ($rows->whereNotNull('template_id')->groupBy('template_id') as $ms) {
-            $groups[] = $pack($ms, $ms->first()->template);
+            foreach ($ms as $m) $designOf[$m->id] = "t{$tid}";
         }
-        usort($groups, fn ($a, $b) => $b['sheets'] <=> $a['sheets']);
-
-        // No template yet: cluster by fingerprint so repeats still show together.
         $loose = $rows->whereNull('template_id')->values();
         $bins = $loose->map(fn ($a) => hex2bin($a->phash))->all();
         $taken = [];
-        $unmatched = [];
+        $clusters = [];
         foreach ($loose as $i => $a) {
             if (isset($taken[$i])) continue;
             $members = [$a];
@@ -399,23 +403,97 @@ class StickerSheetController extends Controller
                     $taken[$j] = true;
                 }
             }
-            $unmatched[] = $pack($members, null);
+            $clusters[] = collect($members);
         }
-        usort($unmatched, fn ($a, $b) => $b['sheets'] <=> $a['sheets']);
+        // Number the clusters biggest first, so "#1" is the most printed.
+        usort($clusters, fn ($x, $y) => $y->sum($qty) <=> $x->sum($qty));
+        foreach ($clusters as $n => $ms) {
+            $key = 'u'.($n + 1);
+            $designs[$key] = [
+                'key' => $key,
+                'template' => null,
+                'label' => 'Chưa có mẫu #'.($n + 1),
+                'sample_url' => $ms->first()->source_url,
+                'sample_analysis_id' => $ms->first()->id,
+                'sticker_count' => (int) $ms->pluck('sticker_count')->countBy()->sortDesc()->keys()->first(),
+                'analysis_ids' => $ms->pluck('id')->values()->all(),
+            ];
+            foreach ($ms as $m) $designOf[$m->id] = $key;
+        }
 
-        // Open Sticker Sheet designs nobody has analysed yet.
+        // --- single vs multi by sheets per order.
+        $byOrder = $rows->groupBy('order_id');
+        $sheetsOf = $byOrder->map(fn ($ms) => $ms->sum($qty));
+        $orderInfo = fn ($ms) => [
+            'order_id' => $ms->first()->order_id,
+            'system_id' => $ms->first()->order?->system_id,
+            'status' => $ms->first()->order?->status,
+            'sheets' => $ms->sum($qty),
+        ];
+        $singleIds = $sheetsOf->filter(fn ($n) => $n === 1)->keys();
+        $multiIds = $sheetsOf->filter(fn ($n) => $n >= 2)->keys();
+
+        $groups = [];
+        $unmatched = [];
+        $combos = [];
+        if ($mode === 'single') {
+            $singleRows = $rows->whereIn('order_id', $singleIds);
+            foreach ($singleRows->groupBy(fn ($a) => $designOf[$a->id]) as $key => $ms) {
+                $orders = $ms->groupBy('order_id')->map($orderInfo)->values();
+                $g = $designs[$key] + [
+                    'orders' => $orders,
+                    'orders_count' => $orders->count(),
+                    'sheets' => $orders->sum('sheets'),
+                ];
+                if ($g['template']) $groups[] = $g; else $unmatched[] = $g;
+            }
+            usort($groups, fn ($x, $y) => $y['sheets'] <=> $x['sheets']);
+            usort($unmatched, fn ($x, $y) => $y['sheets'] <=> $x['sheets']);
+        } else {
+            $bySig = [];
+            foreach ($multiIds as $oid) {
+                $ms = $byOrder[$oid];
+                $parts = [];
+                foreach ($ms as $a) {
+                    $k = $designOf[$a->id];
+                    $parts[$k] = ($parts[$k] ?? 0) + $qty($a);
+                }
+                ksort($parts);
+                $sig = implode('+', array_map(fn ($k, $n) => "{$k}x{$n}", array_keys($parts), $parts));
+                $bySig[$sig]['parts'] ??= collect($parts)->map(fn ($n, $k) => $designs[$k] + ['qty' => $n])->values()->all();
+                $bySig[$sig]['orders'][] = $orderInfo($ms);
+            }
+            foreach ($bySig as $sig => $c) {
+                usort($c['parts'], fn ($x, $y) => $y['qty'] <=> $x['qty']);
+                $combos[] = [
+                    'signature' => $sig,
+                    'parts' => $c['parts'],
+                    'orders' => $c['orders'],
+                    'orders_count' => count($c['orders']),
+                    'sheets' => array_sum(array_column($c['orders'], 'sheets')),
+                ];
+            }
+            usort($combos, fn ($x, $y) => [$y['orders_count'], $y['sheets']] <=> [$x['orders_count'], $x['sheets']]);
+        }
+
+        // Designs in scope nobody has analysed yet.
         $notAnalysed = self::unanalysedQuery()
-            ->whereHas('orderItem.order', fn ($o) => $o->whereNotIn('status', $closed))
+            ->whereHas('orderItem.order', $inScope)
             ->with('orderItem.order:id,system_id')->get(['id', 'order_item_id'])
             ->map(fn ($m) => $m->orderItem?->order?->system_id)->filter()->unique()->values();
 
+        $ids = $mode === 'single' ? $singleIds : $multiIds;
+
         return response()->json([
+            'mode' => $mode,
             'groups' => $groups,
             'unmatched' => $unmatched,
+            'combos' => $combos,
             'not_analysed' => $notAnalysed,
+            'counts' => ['single' => $singleIds->count(), 'multi' => $multiIds->count()],
             'totals' => [
-                'orders' => $rows->pluck('order_id')->unique()->count(),
-                'sheets' => collect($groups)->sum('sheets') + collect($unmatched)->sum('sheets'),
+                'orders' => $ids->count(),
+                'sheets' => $sheetsOf->only($ids->all())->sum(),
             ],
         ]);
     }
