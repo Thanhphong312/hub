@@ -498,51 +498,91 @@ class ProductController extends Controller
             'from_tier_id' => 'required|exists:tiers,id',
             'to_tier_id'   => 'required|exists:tiers,id|different:from_tier_id',
         ]);
-        $from = (int) $data['from_tier_id'];
-        $to   = (int) $data['to_tier_id'];
-
-        [$variantCount, $accessoryCount] = DB::transaction(function () use ($product, $from, $to) {
-            $variantCount = 0;
-            $variantIds = $product->variants()->pluck('id');
-            $sourceVariantPrices = ProductVariantPrice::whereIn('product_variant_id', $variantIds)
-                ->where('tier_id', $from)->get();
-            foreach ($sourceVariantPrices as $p) {
-                ProductVariantPrice::updateOrCreate(
-                    ['product_variant_id' => $p->product_variant_id, 'tier_id' => $to, 'key' => $p->key],
-                    ['price' => $p->price, 'partner_price' => $p->partner_price]
-                );
-                $variantCount++;
-            }
-
-            $accessoryCount = 0;
-            $accessoryIds = $product->accessories()->pluck('id');
-            $sourceAccessoryPrices = AccessoryPrice::whereIn('accessory_id', $accessoryIds)
-                ->where('tier_id', $from)->get();
-            foreach ($sourceAccessoryPrices as $p) {
-                // New rows start at stock 0 like duplicate(); an existing row
-                // keeps its stock — only pricing/labels are copied.
-                $row = AccessoryPrice::firstOrNew(
-                    ['accessory_id' => $p->accessory_id, 'tier_id' => $to, 'style' => $p->style],
-                    ['stock' => 0]
-                );
-                $row->fill([
-                    'accessory_code' => $p->accessory_code,
-                    'price'          => $p->price,
-                    'partner_price'  => $p->partner_price,
-                    'purchase_url'   => $p->purchase_url,
-                    'image_des'      => $p->image_des,
-                ])->save();
-                $accessoryCount++;
-            }
-
-            return [$variantCount, $accessoryCount];
-        });
+        [$variantCount, $accessoryCount] = DB::transaction(
+            fn () => $this->copyProductTierPrices($product, (int) $data['from_tier_id'], (int) $data['to_tier_id'])
+        );
 
         return response()->json([
             'message' => "Đã copy {$variantCount} giá variant + {$accessoryCount} giá add-on",
             'variant_prices' => $variantCount,
             'accessory_prices' => $accessoryCount,
         ]);
+    }
+
+    /**
+     * POST /products/copy-tier-prices — { product_ids[], from_tier_id, to_tier_id }.
+     * Same as copyTierPrices for every selected product, in one transaction.
+     */
+    public function bulkCopyTierPrices(Request $request)
+    {
+        $data = $request->validate([
+            'product_ids'   => 'required|array|min:1',
+            'product_ids.*' => 'integer|exists:products,id',
+            'from_tier_id'  => 'required|exists:tiers,id',
+            'to_tier_id'    => 'required|exists:tiers,id|different:from_tier_id',
+        ]);
+        $from = (int) $data['from_tier_id'];
+        $to   = (int) $data['to_tier_id'];
+        $products = Product::whereIn('id', array_unique($data['product_ids']))->get();
+
+        [$variantCount, $accessoryCount] = DB::transaction(function () use ($products, $from, $to) {
+            $v = $a = 0;
+            foreach ($products as $product) {
+                [$pv, $pa] = $this->copyProductTierPrices($product, $from, $to);
+                $v += $pv;
+                $a += $pa;
+            }
+            return [$v, $a];
+        });
+
+        return response()->json([
+            'message' => "Đã copy giá cho {$products->count()} product: {$variantCount} giá variant + {$accessoryCount} giá add-on",
+            'products' => $products->count(),
+            'variant_prices' => $variantCount,
+            'accessory_prices' => $accessoryCount,
+        ]);
+    }
+
+    /**
+     * Copy one product's variant + add-on prices from tier $from onto $to.
+     * Returns [variantCount, accessoryCount]. Caller wraps in a transaction.
+     */
+    private function copyProductTierPrices(Product $product, int $from, int $to): array
+    {
+        $variantCount = 0;
+        $variantIds = $product->variants()->pluck('id');
+        $sourceVariantPrices = ProductVariantPrice::whereIn('product_variant_id', $variantIds)
+            ->where('tier_id', $from)->get();
+        foreach ($sourceVariantPrices as $p) {
+            ProductVariantPrice::updateOrCreate(
+                ['product_variant_id' => $p->product_variant_id, 'tier_id' => $to, 'key' => $p->key],
+                ['price' => $p->price, 'partner_price' => $p->partner_price]
+            );
+            $variantCount++;
+        }
+
+        $accessoryCount = 0;
+        $accessoryIds = $product->accessories()->pluck('id');
+        $sourceAccessoryPrices = AccessoryPrice::whereIn('accessory_id', $accessoryIds)
+            ->where('tier_id', $from)->get();
+        foreach ($sourceAccessoryPrices as $p) {
+            // New rows start at stock 0 like duplicate(); an existing row
+            // keeps its stock — only pricing/labels are copied.
+            $row = AccessoryPrice::firstOrNew(
+                ['accessory_id' => $p->accessory_id, 'tier_id' => $to, 'style' => $p->style],
+                ['stock' => 0]
+            );
+            $row->fill([
+                'accessory_code' => $p->accessory_code,
+                'price'          => $p->price,
+                'partner_price'  => $p->partner_price,
+                'purchase_url'   => $p->purchase_url,
+                'image_des'      => $p->image_des,
+            ])->save();
+            $accessoryCount++;
+        }
+
+        return [$variantCount, $accessoryCount];
     }
 
     public function importPrices(Request $request)
