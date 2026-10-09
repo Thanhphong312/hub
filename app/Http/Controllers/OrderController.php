@@ -2627,12 +2627,27 @@ class OrderController extends Controller
 
         $unpaid = Order::where('user_id', $targetUserId)
             ->whereColumn('paid_cost', '<', 'total_cost')
-            ->get(['id', 'total_cost', 'paid_cost']);
+            ->get(['id', 'status', 'total_cost', 'paid_cost']);
 
         $count = $unpaid->count();
         $totalUnpaid = (float) $unpaid->sum(fn ($o) => max(0, $o->total_cost - $o->paid_cost));
         $wallet = (float) $payer->wallet;
         $short = max(0, $totalUnpaid - $wallet);
+
+        // Unpaid split by order status, so a seller can see how much of the
+        // amount due sits on shipped / cancelled orders.
+        $unpaidByStatus = $unpaid->groupBy('status')->map(fn ($g, $status) => [
+            'status' => (int) $status,
+            'count'  => $g->count(),
+            'amount' => round((float) $g->sum(fn ($o) => max(0, $o->total_cost - $o->paid_cost)), 2),
+        ])->sortBy('status')->values();
+
+        // Fully paid orders, for the paid vs unpaid comparison.
+        $paid = Order::where('user_id', $targetUserId)
+            ->where('total_cost', '>', 0)
+            ->whereColumn('paid_cost', '>=', 'total_cost')
+            ->selectRaw('count(*) as c, coalesce(sum(paid_cost), 0) as s')
+            ->first();
 
         return response()->json([
             'user_id' => $targetUserId,
@@ -2640,6 +2655,10 @@ class OrderController extends Controller
             'user_email' => $payer->email,
             'count' => $count,
             'total_unpaid' => $totalUnpaid,
+            'unpaid_partial' => round((float) $unpaid->sum('paid_cost'), 2),
+            'unpaid_by_status' => $unpaidByStatus,
+            'paid_count' => (int) $paid->c,
+            'paid_total' => round((float) $paid->s, 2),
             'wallet' => $wallet,
             'short' => $short,
         ]);
