@@ -360,6 +360,7 @@ class ConversionController extends Controller
                         'accessory_summary' => $accessorySummary,
                         'line_id'           => $product->line_id ?? null,
                         'convert_layout'    => \App\Http\Controllers\SettingController::convertLayoutFor($product->order_type ?? null),
+                        'variant_size'      => $item->productVariant?->size,
                         'addon_code'        => $this->itemAddonCode($item),
                         // Same card count as pending(), so a re-render at a new
                         // size keeps the purple background.

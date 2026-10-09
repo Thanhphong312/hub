@@ -294,6 +294,9 @@ class SettingController extends Controller
         // Sticker Sheet: 11×17 canvas, design scaled to 8×11 flush top-centre,
         // barcode in the blank area below; ganged one 11×17 page per _qr.
         ['key' => 'sticker_sheet', 'label' => 'Sticker Sheet (canvas 11×17, design 8×11 sát trên, barcode bên dưới)'],
+        // Kindle Insert: design trimmed + scaled to the variant's W × L inches,
+        // a 0.8" band added below L for the barcode.
+        ['key' => 'kindle_insert', 'label' => 'Kindle Insert (scale theo size W×L của variant, thêm khúc barcode dưới L)'],
     ];
 
     /** Resolve the convert layout for an order_type label (default when unset). */
