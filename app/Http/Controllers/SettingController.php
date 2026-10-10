@@ -297,6 +297,9 @@ class SettingController extends Controller
         // Kindle Insert: design trimmed + scaled to the variant's W × L inches,
         // a 0.8" band added below L for the barcode.
         ['key' => 'kindle_insert', 'label' => 'Kindle Insert (scale theo size W×L của variant, thêm khúc barcode dưới L)'],
+        // Native + band (e.g. Die Cut Sticker): design kept at its own size,
+        // a 0.8" band added below for the barcode.
+        ['key' => 'native_band', 'label' => 'Giữ nguyên design + thêm khúc barcode bên dưới (vd Die Cut Sticker)'],
     ];
 
     /** Resolve the convert layout for an order_type label (default when unset). */

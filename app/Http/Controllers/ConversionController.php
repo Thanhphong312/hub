@@ -29,6 +29,21 @@ class ConversionController extends Controller
         return in_array($norm, self::KEEP_NATIVE_SIZES, true);
     }
 
+    /**
+     * Convert layout of an item: the order type's layout (Settings → Convert
+     * layouts); when that is the plain default, a keep-native variant size
+     * (e.g. 5x5 greeting card) switches to 'native'.
+     */
+    private static function itemConvertLayout($item): string
+    {
+        $layout = \App\Http\Controllers\SettingController::convertLayoutFor(
+            $item->productVariant?->product?->order_type
+        );
+        return $layout === 'default' && self::isKeepNativeSize($item->productVariant?->size)
+            ? 'native'
+            : $layout;
+    }
+
     /** Regex matching every produced _qr meta key, e.g. front_qr, front_qr_1, back_qr_3. */
     private const QR_KEY_REGEX_SQL = '_qr(_[0-9]+)?$';
 
@@ -173,11 +188,9 @@ class ConversionController extends Controller
                         // this instead of matching product names. A keep-native
                         // variant size (e.g. 5x5) overrides to 'native' so the
                         // design is converted at its own size (no 10×7 stretch).
-                        'convert_layout' => self::isKeepNativeSize($item->productVariant?->size)
-                            ? 'native'
-                            : \App\Http\Controllers\SettingController::convertLayoutFor(
-                                $item->productVariant?->product?->order_type
-                            ),
+                        // A layout set on the order type wins; a keep-native
+                        // size only overrides the plain default.
+                        'convert_layout' => self::itemConvertLayout($item),
                         // Full add-on code of this item (for the card-skin info block).
                         'addon_code' => $this->itemAddonCode($item),
                         // How many card skins the parent ORDER produces (Σ
