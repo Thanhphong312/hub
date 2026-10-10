@@ -183,6 +183,10 @@ class ConversionController extends Controller
                         // Variant size (e.g. "5x5") — surfaced so the gang flow can
                         // bucket keep-native sizes separately.
                         'variant_size' => $item->productVariant?->size,
+                        // Variant Length / Width (inches) — printed under the
+                        // barcode for Sticker Sheet / Kindle Insert.
+                        'variant_length' => $item->productVariant?->length,
+                        'variant_width' => $item->productVariant?->width,
                         // Convert layout resolved from the product's order_type
                         // (Settings → Convert layouts). The composer switches on
                         // this instead of matching product names. A keep-native
@@ -374,6 +378,8 @@ class ConversionController extends Controller
                         'line_id'           => $product->line_id ?? null,
                         'convert_layout'    => \App\Http\Controllers\SettingController::convertLayoutFor($product->order_type ?? null),
                         'variant_size'      => $item->productVariant?->size,
+                        'variant_length'    => $item->productVariant?->length,
+                        'variant_width'     => $item->productVariant?->width,
                         'addon_code'        => $this->itemAddonCode($item),
                         // Same card count as pending(), so a re-render at a new
                         // size keeps the purple background.
