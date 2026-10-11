@@ -725,6 +725,74 @@ class ProductController extends Controller
         ]);
     }
 
+    // Readable price list for one tier: one row per variant with every fee
+    // as a column, then the add-on prices. product_ids[] limits it to the
+    // picked products; empty means all products.
+    public function exportTierPriceList(Request $request)
+    {
+        $request->validate([
+            'tier_id' => 'required|exists:tiers,id',
+            'product_ids' => 'nullable|array',
+            'product_ids.*' => 'integer|exists:products,id',
+        ]);
+        $tier = Tier::findOrFail($request->tier_id);
+        $keys = ProductVariantPrice::KEYS;
+
+        $productQuery = Product::with(['variants' => fn($q) => $q->orderBy('id'), 'accessories' => fn($q) => $q->orderBy('id')]);
+        if ($request->filled('product_ids')) {
+            $productQuery->whereIn('id', $request->product_ids);
+        }
+        $products = $productQuery->orderBy('name')->get();
+
+        $variantIds = $products->flatMap(fn($p) => $p->variants->pluck('id'));
+        $prices = ProductVariantPrice::whereIn('product_variant_id', $variantIds)
+            ->where('tier_id', $tier->id)->get()
+            ->keyBy(fn($p) => $p->product_variant_id . '-' . $p->key);
+        $accessoryIds = $products->flatMap(fn($p) => $p->accessories->pluck('id'));
+        $accessoryPrices = AccessoryPrice::whereIn('accessory_id', $accessoryIds)
+            ->where('tier_id', $tier->id)->orderBy('id')->get()->groupBy('accessory_id');
+
+        $callback = function () use ($products, $tier, $keys, $prices, $accessoryPrices) {
+            $file = fopen('php://output', 'w');
+            fwrite($file, "\xEF\xBB\xBF"); // UTF-8 BOM so Excel reads accents
+            fputcsv($file, ['Price list', $tier->name, 'Exported ' . now()->format('Y-m-d')]);
+            fputcsv($file, []);
+            fputcsv($file, array_merge(['Product', 'SKU', 'Color', 'Size'], $keys));
+            foreach ($products as $product) {
+                foreach ($product->variants as $v) {
+                    $row = [$product->name, $v->sku ?? '', $v->color ?? '', $v->size ?? ''];
+                    foreach ($keys as $key) {
+                        $row[] = $prices[$v->id . '-' . $key]->price ?? '';
+                    }
+                    fputcsv($file, $row);
+                }
+            }
+
+            $addonRows = [];
+            foreach ($products as $product) {
+                foreach ($product->accessories as $a) {
+                    foreach ($accessoryPrices[$a->id] ?? [] as $ap) {
+                        $addonRows[] = [$product->name, $a->name, $ap->style ?? '', $ap->accessory_code ?? '', $ap->price];
+                    }
+                }
+            }
+            if ($addonRows) {
+                fputcsv($file, []);
+                fputcsv($file, ['Product', 'Add-on', 'Style', 'Code', 'Price']);
+                foreach ($addonRows as $row) {
+                    fputcsv($file, $row);
+                }
+            }
+            fclose($file);
+        };
+
+        $slug = preg_replace('/[^A-Za-z0-9_-]+/', '_', $tier->name);
+        return response()->stream($callback, 200, [
+            'Content-Type' => 'text/csv; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="price_list_' . $slug . '.csv"',
+        ]);
+    }
+
     // Export price CSV template with all variant x tier x key rows (price empty)
     public function exportPriceTemplate(Request $request)
     {

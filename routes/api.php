@@ -227,6 +227,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/product-prices/import-csv', [ProductController::class, 'importPricesCsv']);
         Route::get('/product-prices/export-template', [ProductController::class, 'exportPriceTemplate']);
         Route::get('/product-prices/export', [ProductController::class, 'exportPrices']);
+        Route::get('/product-prices/export-tier', [ProductController::class, 'exportTierPriceList']);
 
         // Accessories
         Route::post('/products/{product}/accessories', [ProductController::class, 'storeAccessory']);
