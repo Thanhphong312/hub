@@ -2572,6 +2572,9 @@ class OrderController extends Controller
         if ($order->paid_cost >= $order->total_cost) {
             return response()->json(['message' => 'Order already paid'], 400);
         }
+        if (! $order->isPayable()) {
+            return response()->json(['message' => 'On hold and cancelled orders are not paid'], 400);
+        }
 
         // Round to cents — float math on decimal columns can produce
         // values like 54.400000000000006 from summing line prices, which
@@ -2626,7 +2629,7 @@ class OrderController extends Controller
         }
 
         $unpaid = Order::where('user_id', $targetUserId)
-            ->whereColumn('paid_cost', '<', 'total_cost')
+            ->payableUnpaid()
             ->get(['id', 'status', 'total_cost', 'paid_cost']);
 
         $count = $unpaid->count();
@@ -2641,6 +2644,18 @@ class OrderController extends Controller
             'count'  => $g->count(),
             'amount' => round((float) $g->sum(fn ($o) => max(0, $o->total_cost - $o->paid_cost)), 2),
         ])->sortBy('status')->values();
+
+        // Still owing but never charged (on hold / cancelled), so the Pay All
+        // preview can say what it leaves out.
+        $excluded = Order::where('user_id', $targetUserId)
+            ->whereColumn('paid_cost', '<', 'total_cost')
+            ->whereIn('status', Order::UNPAYABLE_STATUSES)
+            ->get(['status', 'total_cost', 'paid_cost'])
+            ->groupBy('status')->map(fn ($g, $status) => [
+                'status' => (int) $status,
+                'count'  => $g->count(),
+                'amount' => round((float) $g->sum(fn ($o) => max(0, $o->total_cost - $o->paid_cost)), 2),
+            ])->sortBy('status')->values();
 
         // Fully paid orders, for the paid vs unpaid comparison.
         $paid = Order::where('user_id', $targetUserId)
@@ -2657,6 +2672,7 @@ class OrderController extends Controller
             'total_unpaid' => $totalUnpaid,
             'unpaid_partial' => round((float) $unpaid->sum('paid_cost'), 2),
             'unpaid_by_status' => $unpaidByStatus,
+            'excluded_by_status' => $excluded,
             'paid_count' => (int) $paid->c,
             'paid_total' => round((float) $paid->s, 2),
             'wallet' => $wallet,
@@ -2690,7 +2706,7 @@ class OrderController extends Controller
 
         while (true) {
             $q = Order::where('user_id', $user->id)
-                ->whereColumn('paid_cost', '<', 'total_cost');
+                ->payableUnpaid();
             if ($cutoff) {
                 $q->where('created_at', '<=', $cutoff);
             }
@@ -2775,7 +2791,7 @@ class OrderController extends Controller
             ->get(['id', 'name', 'email', 'wallet', 'tier_id', 'auto_pay_delay_hours'])
             ->map(function ($u) {
                 $unpaid = Order::where('user_id', $u->id)
-                    ->whereColumn('paid_cost', '<', 'total_cost')
+                    ->payableUnpaid()
                     ->orderBy('created_at', 'asc');
                 $count = (clone $unpaid)->count();
                 $first = (clone $unpaid)->first(['id', 'system_id', 'total_cost', 'paid_cost', 'created_at']);
@@ -2843,7 +2859,7 @@ class OrderController extends Controller
 
         while (true) {
             $order = Order::where('user_id', $user->id)
-                ->whereColumn('paid_cost', '<', 'total_cost')
+                ->payableUnpaid()
                 ->orderBy('created_at', 'asc')
                 ->orderBy('id', 'asc')
                 ->first();
@@ -2906,7 +2922,7 @@ class OrderController extends Controller
             : ((int) ($request->user_id ?? $user->id));
 
         $orders = Order::where('user_id', $targetUserId)
-            ->whereColumn('paid_cost', '<', 'total_cost')
+            ->payableUnpaid()
             ->get();
 
         $totalToPay = round((float) $orders->sum(fn ($o) => max(0, (float) $o->total_cost - (float) $o->paid_cost)), 2);
@@ -3004,12 +3020,13 @@ class OrderController extends Controller
         // Group unpaid orders by owner. Each owner is charged from THEIR OWN
         // wallet, so the same caller (e.g. admin) can pay across multiple
         // sellers in one request without ever touching the admin's wallet.
+        // On hold and cancelled orders are never charged, even when picked.
         $unpaidByOwner = $orders
-            ->filter(fn ($o) => $o->paid_cost < $o->total_cost)
+            ->filter(fn ($o) => $o->paid_cost < $o->total_cost && $o->isPayable())
             ->groupBy('user_id');
 
         if ($unpaidByOwner->isEmpty()) {
-            return response()->json(['message' => 'All orders already paid'], 400);
+            return response()->json(['message' => 'No payable orders selected (already paid, on hold or cancelled)'], 400);
         }
 
         $owners = User::whereIn('id', $unpaidByOwner->keys())->get()->keyBy('id');

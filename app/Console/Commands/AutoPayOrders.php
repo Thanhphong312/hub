@@ -72,7 +72,7 @@ class AutoPayOrders extends Command
         // if pay() side-effects mutate the user's wallet we want a fresh read.
         while (true) {
             $order = Order::where('user_id', $user->id)
-                ->whereColumn('paid_cost', '<', 'total_cost')
+                ->payableUnpaid()
                 ->orderBy('created_at', 'asc')
                 ->orderBy('id', 'asc')
                 ->first();

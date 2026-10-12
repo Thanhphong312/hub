@@ -141,6 +141,11 @@ class Order extends Model
         8 => 'resend',
     ];
 
+    // Never charged to the seller's wallet: on hold waits for the seller,
+    // cancelled is not produced. Leaving the status puts the order back in
+    // the unpaid queue.
+    const UNPAYABLE_STATUSES = [self::STATUS_ONHOLD, self::STATUS_CANCELLED];
+
     // ------------------------------------------------------------------
     // Order channel (orders.source). FPT orders live in the same tables as
     // the normal ones and share pricing, wallet, convert and tracking; they
@@ -169,6 +174,18 @@ class Order extends Model
     {
         if (strtolower(trim((string) $value)) === 'all') return $query;
         return $query->where('source', self::normalizeSource($value));
+    }
+
+    /** Orders still owing money that the wallet may be charged for. */
+    public function scopePayableUnpaid($query)
+    {
+        return $query->whereColumn('paid_cost', '<', 'total_cost')
+            ->whereNotIn('status', self::UNPAYABLE_STATUSES);
+    }
+
+    public function isPayable(): bool
+    {
+        return ! in_array((int) $this->status, self::UNPAYABLE_STATUSES, true);
     }
 
     /**
